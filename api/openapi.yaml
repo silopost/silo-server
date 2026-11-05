@@ -411,6 +411,7 @@ components:
             - junk
             - archive
             - all
+            - snoozed
             - user
           type: string
         specialUse:
@@ -446,7 +447,7 @@ components:
             - f_3
           type: string
         role:
-          description: Manual role; wins over SPECIAL-USE and names. One folder per role.
+          description: "Manual role; wins over SPECIAL-USE and names. One folder per role. snoozed: the folder of snoozed mail (Silo creates Snoozed on the first snooze when no folder has the role)."
           enum:
             - sent
             - drafts
@@ -454,6 +455,7 @@ components:
             - junk
             - archive
             - all
+            - snoozed
             - user
           type: string
         syncMode:

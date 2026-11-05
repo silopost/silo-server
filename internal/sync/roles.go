@@ -15,11 +15,16 @@ const (
 	RoleJunk    = "junk"
 	RoleArchive = "archive"
 	RoleAll     = "all"
+	RoleSnoozed = "snoozed" // created by Silo on the first snooze (plan 3.10)
 	RoleUser    = "user"
 )
 
 // MappableRoles are the roles a user may assign manually (folder_mapping keys).
-var MappableRoles = []string{RoleSent, RoleDrafts, RoleTrash, RoleJunk, RoleArchive, RoleAll}
+var MappableRoles = []string{RoleSent, RoleDrafts, RoleTrash, RoleJunk, RoleArchive, RoleAll, RoleSnoozed}
+
+// DefaultSnoozedName is the folder Silo creates for snoozed mail when the
+// account has none and folder_mapping["snoozed"] names no other.
+const DefaultSnoozedName = "Snoozed"
 
 // specialUseRole maps RFC 6154 attributes to roles. \Flagged and \Important
 // are virtual views of flags and are skipped by discovery.
@@ -55,6 +60,7 @@ var roleNames = []struct {
 		"Ongewenste e-mail", "Спам", "[Gmail]/Spam", "[Google Mail]/Spam"}},
 	{RoleArchive, []string{"Archive", "Archives", "Archiwum", "Archiv", "Archivio", "Archivo", "Archief", "Архив"}},
 	{RoleAll, []string{"[Gmail]/All Mail", "[Gmail]/Wszystkie", "[Google Mail]/All Mail", "All Mail"}},
+	{RoleSnoozed, []string{DefaultSnoozedName}},
 }
 
 // listEntry is one selectable folder from LIST.
@@ -159,7 +165,7 @@ func backfillOrder(role string) int {
 		return 0
 	case RoleSent:
 		return 1
-	case RoleArchive:
+	case RoleArchive, RoleSnoozed:
 		return 2
 	case RoleUser, RoleAll:
 		return 3

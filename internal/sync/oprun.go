@@ -579,8 +579,9 @@ func applyFlags(flags, add, remove []string) []string {
 	return out
 }
 
-// moveTarget resolves the target folder; a missing Archive is created on the
-// server (plan 3.4 step 4, "create_folder") and recorded with its role.
+// moveTarget resolves the target folder; a missing Archive or Snoozed folder is
+// created on the server (plan 3.4 step 4, "create_folder"; plan 3.10) and
+// recorded with its role.
 func (s *session) moveTarget(ctx context.Context, c *conn, folders map[int64]*opFolder, p mail.OpPayload) (*opFolder, error) {
 	if p.ToFolderID != 0 {
 		if f := folders[p.ToFolderID]; f != nil {
@@ -593,13 +594,21 @@ func (s *session) moveTarget(ctx context.Context, c *conn, folders map[int64]*op
 			return folders[id], nil
 		}
 	}
-	if p.ToRole != RoleArchive {
-		return nil, fmt.Errorf("%w: the account has no %s folder", errOpPermanent, p.ToRole)
+	switch p.ToRole {
+	case RoleArchive:
+		return s.createRoleFolder(ctx, c, folders, RoleArchive, "Archive")
+	case RoleSnoozed:
+		// folder_mapping may name the folder (created under that name).
+		name := strings.TrimSpace(s.acc.mapping[RoleSnoozed])
+		if name == "" {
+			name = DefaultSnoozedName
+		}
+		return s.createRoleFolder(ctx, c, folders, RoleSnoozed, name)
 	}
-	return s.createRoleFolder(ctx, c, folders, RoleArchive, "Archive")
+	return nil, fmt.Errorf("%w: the account has no %s folder", errOpPermanent, p.ToRole)
 }
 
-// createRoleFolder creates a missing special folder (Archive, Drafts) as base
+// createRoleFolder creates a missing special folder (Archive, Drafts, Snoozed) as base
 // or INBOX<delim>base and records it with its role.
 func (s *session) createRoleFolder(ctx context.Context, c *conn, folders map[int64]*opFolder, role, base string) (*opFolder, error) {
 	names := []string{base}

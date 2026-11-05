@@ -28,7 +28,7 @@ type SyncProgress struct {
 type Folder struct {
 	ID         string     `json:"id" example:"f_3"`
 	Name       string     `json:"name" example:"INBOX"`
-	Role       string     `json:"role" enum:"inbox,sent,drafts,trash,junk,archive,all,user"`
+	Role       string     `json:"role" enum:"inbox,sent,drafts,trash,junk,archive,all,snoozed,user"`
 	SpecialUse *string    `json:"specialUse" doc:"RFC 6154 attribute reported by the server, e.g. \\Sent."`
 	Messages   int        `json:"messages"`
 	Unread     int        `json:"unread"`
@@ -70,7 +70,7 @@ type resyncInput struct {
 // FolderChange is one entry of PUT /accounts/{id}/folders.
 type FolderChange struct {
 	ID       string  `json:"id" example:"f_3"`
-	Role     *string `json:"role,omitempty" enum:"sent,drafts,trash,junk,archive,all,user" doc:"Manual role; wins over SPECIAL-USE and names. One folder per role."`
+	Role     *string `json:"role,omitempty" enum:"sent,drafts,trash,junk,archive,all,snoozed,user" doc:"Manual role; wins over SPECIAL-USE and names. One folder per role. snoozed: the folder of snoozed mail (Silo creates Snoozed on the first snooze when no folder has the role)."`
 	SyncMode *string `json:"syncMode,omitempty" enum:"sync,ignore" doc:"ignore removes the folder from the mirror."`
 }
 
