@@ -1,0 +1,42 @@
+name: Upgrade
+
+# Plan 7, phase 5: the previous release with data is upgraded to this tree
+# (old image -> seed -> new image); see scripts/upgrade-test.sh.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      previous_tag:
+        description: "Release to upgrade from (default: the last v* tag reachable from main)"
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: upgrade-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  upgrade:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+      # The default tag is looked up from main, also on pull requests.
+      - name: Fetch main
+        run: git fetch --no-tags origin main:main || true
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Upgrade test
+        env:
+          PREVIOUS_TAG: ${{ inputs.previous_tag }}
+        run: scripts/upgrade-test.sh
