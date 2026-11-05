@@ -10,6 +10,9 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
+// latestVersion is the number of the newest migration (000050_local_auth_totp; phase 4 has 000006..000009).
+const latestVersion = 50
+
 // appTables is every table created by the migrations (schema_migrations excluded).
 var appTables = []string{
 	"account_rebuilds", "accounts", "attachments", "blobs", "contacts", "drafts", "events", "filters",
@@ -70,7 +73,7 @@ func TestMigrateRoundTrip(t *testing.T) {
 	if got := extensions(t, pool); len(got) != 3 {
 		t.Fatalf("extensions after up = %v", got)
 	}
-	if v, dirty, err := MigrateVersion(ctx, url); err != nil || v != 9 || dirty {
+	if v, dirty, err := MigrateVersion(ctx, url); err != nil || v != latestVersion || dirty {
 		t.Fatalf("after up: version=%d dirty=%v err=%v", v, dirty, err)
 	}
 
@@ -120,7 +123,7 @@ func TestMigrateConcurrent(t *testing.T) {
 			t.Errorf("runner %d: %v", i, err)
 		}
 	}
-	if v, dirty, err := MigrateVersion(ctx, url); err != nil || v != 9 || dirty {
+	if v, dirty, err := MigrateVersion(ctx, url); err != nil || v != latestVersion || dirty {
 		t.Fatalf("version=%d dirty=%v err=%v", v, dirty, err)
 	}
 }

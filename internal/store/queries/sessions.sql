@@ -5,7 +5,9 @@ RETURNING *;
 
 -- name: GetSessionByTokenHash :one
 -- tenancy: exempt the session is how the user is identified in the first place
-SELECT * FROM sessions WHERE token_hash = $1;
+-- Sessions of a disabled user (users.disabled_at) do not authenticate.
+SELECT * FROM sessions WHERE token_hash = $1
+  AND NOT EXISTS (SELECT 1 FROM users u WHERE u.id = sessions.user_id AND u.disabled_at IS NOT NULL);
 
 -- name: TouchSession :exec
 -- Throttled: a session seen within the last minute is not rewritten.
@@ -22,3 +24,11 @@ DELETE FROM sessions WHERE id = $1 AND user_id = $2;
 -- name: DeleteExpiredSessions :exec
 -- tenancy: exempt housekeeping across all users
 DELETE FROM sessions WHERE expires_at <= now();
+
+-- name: DeleteUserSessions :execrows
+-- All sessions of a user (password reset, account disabled).
+DELETE FROM sessions WHERE user_id = $1;
+
+-- name: DeleteOtherUserSessions :execrows
+-- All sessions of a user but one (own password change).
+DELETE FROM sessions WHERE user_id = $1 AND id <> $2;

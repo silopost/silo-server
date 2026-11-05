@@ -11,8 +11,45 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const clearTOTP = `-- name: ClearTOTP :exec
+UPDATE users SET totp_secret_enc = NULL, totp_enabled_at = NULL, totp_last_step = 0, totp_backup_codes = '{}'
+WHERE id = $1
+`
+
+func (q *Queries) ClearTOTP(ctx context.Context, id int64) error {
+	_, err := q.db.Exec(ctx, clearTOTP, id)
+	return err
+}
+
+const deleteUser = `-- name: DeleteUser :execrows
+DELETE FROM users WHERE id = $1
+`
+
+func (q *Queries) DeleteUser(ctx context.Context, id int64) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteUser, id)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const enableTOTP = `-- name: EnableTOTP :exec
+UPDATE users SET totp_enabled_at = now(), totp_last_step = $2, totp_backup_codes = $3 WHERE id = $1
+`
+
+type EnableTOTPParams struct {
+	ID              int64
+	TotpLastStep    int64
+	TotpBackupCodes []string
+}
+
+func (q *Queries) EnableTOTP(ctx context.Context, arg EnableTOTPParams) error {
+	_, err := q.db.Exec(ctx, enableTOTP, arg.ID, arg.TotpLastStep, arg.TotpBackupCodes)
+	return err
+}
+
 const getUserByEmail = `-- name: GetUserByEmail :one
-SELECT id, email, display_name, password_hash, is_admin, settings, created_at FROM users WHERE email = $1
+SELECT id, email, display_name, password_hash, is_admin, settings, created_at, totp_secret_enc, totp_enabled_at, totp_last_step, totp_backup_codes, disabled_at, password_changed_at FROM users WHERE email = $1
 `
 
 func (q *Queries) GetUserByEmail(ctx context.Context, email string) (User, error) {
@@ -26,12 +63,18 @@ func (q *Queries) GetUserByEmail(ctx context.Context, email string) (User, error
 		&i.IsAdmin,
 		&i.Settings,
 		&i.CreatedAt,
+		&i.TotpSecretEnc,
+		&i.TotpEnabledAt,
+		&i.TotpLastStep,
+		&i.TotpBackupCodes,
+		&i.DisabledAt,
+		&i.PasswordChangedAt,
 	)
 	return i, err
 }
 
 const getUserByID = `-- name: GetUserByID :one
-SELECT id, email, display_name, password_hash, is_admin, settings, created_at FROM users WHERE id = $1
+SELECT id, email, display_name, password_hash, is_admin, settings, created_at, totp_secret_enc, totp_enabled_at, totp_last_step, totp_backup_codes, disabled_at, password_changed_at FROM users WHERE id = $1
 `
 
 func (q *Queries) GetUserByID(ctx context.Context, id int64) (User, error) {
@@ -45,6 +88,12 @@ func (q *Queries) GetUserByID(ctx context.Context, id int64) (User, error) {
 		&i.IsAdmin,
 		&i.Settings,
 		&i.CreatedAt,
+		&i.TotpSecretEnc,
+		&i.TotpEnabledAt,
+		&i.TotpLastStep,
+		&i.TotpBackupCodes,
+		&i.DisabledAt,
+		&i.PasswordChangedAt,
 	)
 	return i, err
 }
@@ -52,7 +101,7 @@ func (q *Queries) GetUserByID(ctx context.Context, id int64) (User, error) {
 const insertUser = `-- name: InsertUser :one
 INSERT INTO users (email, display_name, password_hash, is_admin)
 VALUES ($1, $2, $3, $4)
-RETURNING id, email, display_name, password_hash, is_admin, settings, created_at
+RETURNING id, email, display_name, password_hash, is_admin, settings, created_at, totp_secret_enc, totp_enabled_at, totp_last_step, totp_backup_codes, disabled_at, password_changed_at
 `
 
 type InsertUserParams struct {
@@ -78,6 +127,217 @@ func (q *Queries) InsertUser(ctx context.Context, arg InsertUserParams) (User, e
 		&i.IsAdmin,
 		&i.Settings,
 		&i.CreatedAt,
+		&i.TotpSecretEnc,
+		&i.TotpEnabledAt,
+		&i.TotpLastStep,
+		&i.TotpBackupCodes,
+		&i.DisabledAt,
+		&i.PasswordChangedAt,
+	)
+	return i, err
+}
+
+const listUserTOTPSecrets = `-- name: ListUserTOTPSecrets :many
+SELECT id FROM users WHERE totp_secret_enc IS NOT NULL ORDER BY id
+`
+
+// Key rotation: every sealed TOTP secret.
+func (q *Queries) ListUserTOTPSecrets(ctx context.Context) ([]int64, error) {
+	rows, err := q.db.Query(ctx, listUserTOTPSecrets)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []int64{}
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		items = append(items, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listUsers = `-- name: ListUsers :many
+SELECT id, email, display_name, password_hash, is_admin, settings, created_at, totp_secret_enc, totp_enabled_at, totp_last_step, totp_backup_codes, disabled_at, password_changed_at FROM users ORDER BY id
+`
+
+func (q *Queries) ListUsers(ctx context.Context) ([]User, error) {
+	rows, err := q.db.Query(ctx, listUsers)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []User{}
+	for rows.Next() {
+		var i User
+		if err := rows.Scan(
+			&i.ID,
+			&i.Email,
+			&i.DisplayName,
+			&i.PasswordHash,
+			&i.IsAdmin,
+			&i.Settings,
+			&i.CreatedAt,
+			&i.TotpSecretEnc,
+			&i.TotpEnabledAt,
+			&i.TotpLastStep,
+			&i.TotpBackupCodes,
+			&i.DisabledAt,
+			&i.PasswordChangedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const lockUser = `-- name: LockUser :one
+SELECT id, email, display_name, password_hash, is_admin, settings, created_at, totp_secret_enc, totp_enabled_at, totp_last_step, totp_backup_codes, disabled_at, password_changed_at FROM users WHERE id = $1 FOR UPDATE
+`
+
+func (q *Queries) LockUser(ctx context.Context, id int64) (User, error) {
+	row := q.db.QueryRow(ctx, lockUser, id)
+	var i User
+	err := row.Scan(
+		&i.ID,
+		&i.Email,
+		&i.DisplayName,
+		&i.PasswordHash,
+		&i.IsAdmin,
+		&i.Settings,
+		&i.CreatedAt,
+		&i.TotpSecretEnc,
+		&i.TotpEnabledAt,
+		&i.TotpLastStep,
+		&i.TotpBackupCodes,
+		&i.DisabledAt,
+		&i.PasswordChangedAt,
+	)
+	return i, err
+}
+
+const lockUserTOTPSecret = `-- name: LockUserTOTPSecret :one
+SELECT totp_secret_enc FROM users WHERE id = $1 FOR UPDATE
+`
+
+func (q *Queries) LockUserTOTPSecret(ctx context.Context, id int64) ([]byte, error) {
+	row := q.db.QueryRow(ctx, lockUserTOTPSecret, id)
+	var totp_secret_enc []byte
+	err := row.Scan(&totp_secret_enc)
+	return totp_secret_enc, err
+}
+
+const setTOTPBackupCodes = `-- name: SetTOTPBackupCodes :exec
+UPDATE users SET totp_backup_codes = $2 WHERE id = $1
+`
+
+type SetTOTPBackupCodesParams struct {
+	ID              int64
+	TotpBackupCodes []string
+}
+
+func (q *Queries) SetTOTPBackupCodes(ctx context.Context, arg SetTOTPBackupCodesParams) error {
+	_, err := q.db.Exec(ctx, setTOTPBackupCodes, arg.ID, arg.TotpBackupCodes)
+	return err
+}
+
+const setTOTPLastStep = `-- name: SetTOTPLastStep :exec
+UPDATE users SET totp_last_step = $2 WHERE id = $1
+`
+
+type SetTOTPLastStepParams struct {
+	ID           int64
+	TotpLastStep int64
+}
+
+func (q *Queries) SetTOTPLastStep(ctx context.Context, arg SetTOTPLastStepParams) error {
+	_, err := q.db.Exec(ctx, setTOTPLastStep, arg.ID, arg.TotpLastStep)
+	return err
+}
+
+const setTOTPSecret = `-- name: SetTOTPSecret :exec
+UPDATE users SET totp_secret_enc = $2, totp_enabled_at = NULL, totp_last_step = 0, totp_backup_codes = '{}'
+WHERE id = $1
+`
+
+type SetTOTPSecretParams struct {
+	ID            int64
+	TotpSecretEnc []byte
+}
+
+// Starts (or restarts) TOTP setup: the new secret is not enforced until enabled.
+func (q *Queries) SetTOTPSecret(ctx context.Context, arg SetTOTPSecretParams) error {
+	_, err := q.db.Exec(ctx, setTOTPSecret, arg.ID, arg.TotpSecretEnc)
+	return err
+}
+
+const setUserPassword = `-- name: SetUserPassword :exec
+UPDATE users SET password_hash = $2, password_changed_at = now() WHERE id = $1
+`
+
+type SetUserPasswordParams struct {
+	ID           int64
+	PasswordHash pgtype.Text
+}
+
+// Silo password of mode local (also stamps the change).
+func (q *Queries) SetUserPassword(ctx context.Context, arg SetUserPasswordParams) error {
+	_, err := q.db.Exec(ctx, setUserPassword, arg.ID, arg.PasswordHash)
+	return err
+}
+
+const updateUserAdmin = `-- name: UpdateUserAdmin :one
+UPDATE users SET
+  display_name = COALESCE($1, display_name),
+  is_admin     = COALESCE($2, is_admin),
+  disabled_at  = CASE
+                   WHEN $3::bool IS NULL THEN disabled_at
+                   WHEN $3::bool THEN COALESCE(disabled_at, now())
+                   ELSE NULL
+                 END
+WHERE id = $4
+RETURNING id, email, display_name, password_hash, is_admin, settings, created_at, totp_secret_enc, totp_enabled_at, totp_last_step, totp_backup_codes, disabled_at, password_changed_at
+`
+
+type UpdateUserAdminParams struct {
+	DisplayName pgtype.Text
+	IsAdmin     pgtype.Bool
+	Disabled    pgtype.Bool
+	ID          int64
+}
+
+// Admin panel: nil arguments keep the column.
+func (q *Queries) UpdateUserAdmin(ctx context.Context, arg UpdateUserAdminParams) (User, error) {
+	row := q.db.QueryRow(ctx, updateUserAdmin,
+		arg.DisplayName,
+		arg.IsAdmin,
+		arg.Disabled,
+		arg.ID,
+	)
+	var i User
+	err := row.Scan(
+		&i.ID,
+		&i.Email,
+		&i.DisplayName,
+		&i.PasswordHash,
+		&i.IsAdmin,
+		&i.Settings,
+		&i.CreatedAt,
+		&i.TotpSecretEnc,
+		&i.TotpEnabledAt,
+		&i.TotpLastStep,
+		&i.TotpBackupCodes,
+		&i.DisabledAt,
+		&i.PasswordChangedAt,
 	)
 	return i, err
 }
@@ -94,4 +354,37 @@ type UpdateUserPasswordHashParams struct {
 func (q *Queries) UpdateUserPasswordHash(ctx context.Context, arg UpdateUserPasswordHashParams) error {
 	_, err := q.db.Exec(ctx, updateUserPasswordHash, arg.ID, arg.PasswordHash)
 	return err
+}
+
+const updateUserTOTPSecret = `-- name: UpdateUserTOTPSecret :exec
+UPDATE users SET totp_secret_enc = $2 WHERE id = $1
+`
+
+type UpdateUserTOTPSecretParams struct {
+	ID            int64
+	TotpSecretEnc []byte
+}
+
+func (q *Queries) UpdateUserTOTPSecret(ctx context.Context, arg UpdateUserTOTPSecretParams) error {
+	_, err := q.db.Exec(ctx, updateUserTOTPSecret, arg.ID, arg.TotpSecretEnc)
+	return err
+}
+
+const useTOTPBackupCode = `-- name: UseTOTPBackupCode :execrows
+UPDATE users SET totp_backup_codes = array_remove(totp_backup_codes, $1::text)
+WHERE id = $2 AND $1::text = ANY (totp_backup_codes)
+`
+
+type UseTOTPBackupCodeParams struct {
+	CodeHash string
+	ID       int64
+}
+
+// Consumes one backup code (by hash); 0 rows when it is not (or no longer) valid.
+func (q *Queries) UseTOTPBackupCode(ctx context.Context, arg UseTOTPBackupCodeParams) (int64, error) {
+	result, err := q.db.Exec(ctx, useTOTPBackupCode, arg.CodeHash, arg.ID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }

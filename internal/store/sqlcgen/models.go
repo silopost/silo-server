@@ -366,11 +366,17 @@ type Thumbnail struct {
 }
 
 type User struct {
-	ID           int64
-	Email        string
-	DisplayName  string
-	PasswordHash pgtype.Text
-	IsAdmin      bool
-	Settings     []byte
-	CreatedAt    pgtype.Timestamptz
+	ID                int64
+	Email             string
+	DisplayName       string
+	PasswordHash      pgtype.Text
+	IsAdmin           bool
+	Settings          []byte
+	CreatedAt         pgtype.Timestamptz
+	TotpSecretEnc     []byte
+	TotpEnabledAt     pgtype.Timestamptz
+	TotpLastStep      int64
+	TotpBackupCodes   []string
+	DisabledAt        pgtype.Timestamptz
+	PasswordChangedAt pgtype.Timestamptz
 }
