@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strings"
 	"time"
 
 	"github.com/emersion/go-message"
@@ -141,14 +142,46 @@ type DraftMIME struct {
 	Raw         []byte
 	Version     int32
 	SiloDraftID string
+	// MessageID is the Message-ID (without <>).
+	MessageID   string
+	From        Address
+	To, Cc, Bcc []Address
+}
+
+// Recipients returns To, Cc and Bcc without duplicates: RCPT TO of a send.
+func (d *DraftMIME) Recipients() []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, l := range [][]Address{d.To, d.Cc, d.Bcc} {
+		for _, a := range l {
+			if e := strings.ToLower(a.Email); e != "" && !seen[e] {
+				seen[e] = true
+				out = append(out, e)
+			}
+		}
+	}
+	return out
 }
 
 // BuildDraftMIME builds the message of a local draft (plan 3.8/3.9):
 // multipart/alternative text+html, wrapped in multipart/mixed with the
 // attachments pinned to the draft; From the account, the draft's Message-ID,
 // In-Reply-To/References of a reply, X-Silo-Draft-Id. Bcc stays in the
-// draft; sending removes it. ErrNoDraft when the message has no drafts row.
+// draft; BuildSendMIME removes it. ErrNoDraft when the message has no drafts row.
 func BuildDraftMIME(ctx context.Context, db DB, store blob.BlobStore, messageID int64) (*DraftMIME, error) {
+	return buildDraftMIME(ctx, db, store, messageID, time.Time{})
+}
+
+// BuildSendMIME builds the message that is sent (plan 3.9 step 1): the draft
+// as BuildDraftMIME has it, dated date, without the Bcc header and without
+// X-Silo-Draft-Id (Bcc recipients are only in the envelope: Recipients).
+func BuildSendMIME(ctx context.Context, db DB, store blob.BlobStore, messageID int64, date time.Time) (*DraftMIME, error) {
+	return buildDraftMIME(ctx, db, store, messageID, date)
+}
+
+// buildDraftMIME builds a draft; a non-zero sendDate builds the sent form.
+func buildDraftMIME(ctx context.Context, db DB, store blob.BlobStore, messageID int64, sendDate time.Time) (*DraftMIME, error) {
+	sending := !sendDate.IsZero()
 	var (
 		out                DraftMIME
 		to, cc, bcc        []byte
@@ -198,20 +231,30 @@ WHERE message_id = $1 AND blob_sha256 IS NOT NULL ORDER BY id`, messageID)
 		return nil, err
 	}
 
+	out.MessageID, out.From = msgIDHdr, Address{Name: fromName, Email: fromAddr}
+	_ = json.Unmarshal(to, &out.To)
+	_ = json.Unmarshal(cc, &out.Cc)
+	_ = json.Unmarshal(bcc, &out.Bcc)
+
 	var h gomail.Header
-	h.SetDate(updated)
+	if sending {
+		h.SetDate(sendDate)
+	} else {
+		h.SetDate(updated)
+	}
 	h.SetAddressList("From", []*gomail.Address{{Name: fromName, Address: fromAddr}})
-	for key, raw := range map[string][]byte{"To": to, "Cc": cc, "Bcc": bcc} {
-		var l []Address
-		_ = json.Unmarshal(raw, &l)
-		if len(l) == 0 {
+	for _, f := range []struct {
+		key string
+		l   []Address
+	}{{"To", out.To}, {"Cc", out.Cc}, {"Bcc", out.Bcc}} {
+		if len(f.l) == 0 || f.key == "Bcc" && sending {
 			continue
 		}
-		list := make([]*gomail.Address, len(l))
-		for i, a := range l {
+		list := make([]*gomail.Address, len(f.l))
+		for i, a := range f.l {
 			list[i] = &gomail.Address{Name: a.Name, Address: a.Email}
 		}
-		h.SetAddressList(key, list)
+		h.SetAddressList(f.key, list)
 	}
 	h.SetSubject(subject)
 	h.SetMessageID(msgIDHdr)
@@ -221,7 +264,9 @@ WHERE message_id = $1 AND blob_sha256 IS NOT NULL ORDER BY id`, messageID)
 	if len(refs) > 0 {
 		h.SetMsgIDList("References", refs)
 	}
-	h.Set(HeaderSiloDraftID, out.SiloDraftID)
+	if !sending {
+		h.Set(HeaderSiloDraftID, out.SiloDraftID)
+	}
 	h.Set("MIME-Version", "1.0")
 
 	text := HTMLToText(html)
@@ -356,3 +401,14 @@ func headerBlock(raw []byte) []byte {
 	}
 	return raw
 }
+
+// Statuses of outbound (plan 3.9, 4.2). A message whose send is queued or
+// sending is SCHEDULED; a sent one is SENT; cancelled and failed sends are
+// drafts again.
+const (
+	OutboundQueued    = "queued"
+	OutboundSending   = "sending"
+	OutboundSent      = "sent"
+	OutboundFailed    = "failed"
+	OutboundCancelled = "cancelled"
+)

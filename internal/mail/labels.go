@@ -9,7 +9,8 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-// System label keys (plan 5.5). SCHEDULED is local (never derived here).
+// System label keys (plan 5.5). SCHEDULED is local: derived from outbound,
+// never from the server.
 const (
 	LabelInbox     = "INBOX"
 	LabelSent      = "SENT"
@@ -117,7 +118,8 @@ type loc struct {
 type msgState struct {
 	id, accountID, userID int64
 	isUnread              bool
-	isDraft               bool // a local draft (drafts row): DRAFT whether or not it is on the server
+	isDraft               bool   // a local draft (drafts row): DRAFT whether or not it is on the server
+	outbound              string // outbound.status of a message sent from Silo ("" if none)
 	locs                  []loc
 }
 
@@ -143,6 +145,7 @@ type desired struct {
 func loadStates(ctx context.Context, db DB, ids []int64) ([]*msgState, error) {
 	rows, err := db.Query(ctx, `
 SELECT m.id, m.account_id, m.user_id, m.is_unread, EXISTS (SELECT 1 FROM drafts d WHERE d.message_id = m.id),
+       COALESCE((SELECT o.status FROM outbound o WHERE o.message_id = m.id), ''),
        l.folder_id, f.role, f.label_id, l.flags
 FROM messages m
 LEFT JOIN message_locations l ON l.message_id = m.id
@@ -158,16 +161,17 @@ ORDER BY m.id, l.folder_id, l.uid`, ids)
 	for rows.Next() {
 		var id, acc, user int64
 		var unread, draft bool
+		var outbound string
 		var folderID *int64
 		var role *string
 		var labelID *int64
 		var flags []string
-		if err := rows.Scan(&id, &acc, &user, &unread, &draft, &folderID, &role, &labelID, &flags); err != nil {
+		if err := rows.Scan(&id, &acc, &user, &unread, &draft, &outbound, &folderID, &role, &labelID, &flags); err != nil {
 			return nil, err
 		}
 		st := byID[id]
 		if st == nil {
-			st = &msgState{id: id, accountID: acc, userID: user, isUnread: unread, isDraft: draft}
+			st = &msgState{id: id, accountID: acc, userID: user, isUnread: unread, isDraft: draft, outbound: outbound}
 			byID[id] = st
 			out = append(out, st)
 		}
@@ -289,13 +293,27 @@ func (idx *labelIndex) compute(st *msgState, keywordLabel func(kw string) (int64
 			d.labels[id] = true
 		}
 	}
-	if st.isDraft {
+	switch {
+	case st.outbound == OutboundQueued || st.outbound == OutboundSending:
+		// Sent from Silo and waiting for the undo window or the schedule
+		// (plan 3.9): SCHEDULED only, whatever is on the server (the old
+		// copy in Drafts goes once the message is sent).
+		add(LabelScheduled)
+		d.isUnread = false
+		return d
+	case st.isDraft:
 		// A draft written in Silo lives locally before (and while) its copy
-		// is in the server's Drafts folder (plan 3.8).
+		// is in the server's Drafts folder (plan 3.8); a cancelled or failed
+		// send is a draft again.
 		add(LabelDraft)
 		d.isUnread = false
 	}
 	if len(visible) == 0 {
+		if st.outbound == OutboundSent {
+			// Sent, its copy not (yet) seen in the server's Sent folder.
+			add(LabelSent)
+			d.isUnread = false
+		}
 		return d
 	}
 	d.isUnread = false
@@ -356,13 +374,12 @@ FROM labels WHERE account_id = ANY($1)`, accountIDs)
 }
 
 // isManaged reports whether a message_labels row is owned by the derivation:
-// system labels (except SCHEDULED), folder labels, and user labels that mirror
-// an IMAP keyword. Plain local user labels are never touched.
+// system labels (SCHEDULED included: it follows outbound), folder labels, and
+// user labels that mirror an IMAP keyword. Plain local user labels are never
+// touched.
 func (m labelMeta) isManaged() bool {
 	switch m.typ {
-	case "system":
-		return m.key != LabelScheduled
-	case "folder":
+	case "system", "folder":
 		return true
 	default:
 		return m.keyword && m.mirrored

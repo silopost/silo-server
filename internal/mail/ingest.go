@@ -226,6 +226,14 @@ WHERE l.folder_id = $1 AND l.uid = ANY($2)`, folderID, uids)
 		if err != nil {
 			return nil, err
 		}
+		// A copy in Sent of a message sent by Silo (APPENDed by Silo, or
+		// saved by the server itself) belongs to the local message (plan 3.9);
+		// so does the old copy of its draft in Drafts until it is removed.
+		if draftMsg == 0 && !ph.SyntheticID && (folder.role == "sent" || folder.role == "drafts" && ph.SiloDraftID != "") {
+			if draftMsg, err = sentMessage(ctx, db, accountID, ph.MessageID); err != nil {
+				return nil, err
+			}
+		}
 
 		if e, ok := existing[m.UID]; ok {
 			if e.dedupeKey == dedupe || draftMsg != 0 && e.messageID == draftMsg {
@@ -420,6 +428,23 @@ func draftMessage(ctx context.Context, db DB, accountID int64, id string) (int64
 	}
 	if err != nil {
 		return 0, fmt.Errorf("mail: match draft: %w", err)
+	}
+	return msgID, nil
+}
+
+// sentMessage returns the local message sent by Silo with this Message-ID
+// (0 if none).
+func sentMessage(ctx context.Context, db DB, accountID int64, msgIDHdr string) (int64, error) {
+	var msgID int64
+	err := db.QueryRow(ctx, `
+SELECT m.id FROM messages m JOIN outbound o ON o.message_id = m.id
+WHERE m.account_id = $1 AND m.message_id_hdr = $2 AND m.body_state = 'local' AND o.status = 'sent'
+ORDER BY m.id LIMIT 1`, accountID, msgIDHdr).Scan(&msgID)
+	if err == pgx.ErrNoRows {
+		return 0, nil
+	}
+	if err != nil {
+		return 0, fmt.Errorf("mail: match sent message: %w", err)
 	}
 	return msgID, nil
 }

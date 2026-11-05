@@ -132,11 +132,14 @@ const insertAccount = `-- name: InsertAccount :one
 INSERT INTO accounts (
   user_id, email, display_name, provider,
   imap_host, imap_port, imap_tls, smtp_host, smtp_port, smtp_tls,
-  username, auth_type, secret_enc, position
+  username, auth_type, secret_enc, position, sent_append
 ) VALUES (
   $1, $2, $3, $4,
   $5, $6, $7, $8, $9, $10,
-  $11, $12, $13, $14
+  $11, $12, $13, $14,
+  -- plan 3.9: generic servers need Silo to save sent mail in Sent; Gmail
+  -- and Office 365 save it themselves.
+  $4::text = 'generic'
 )
 RETURNING id, user_id, email, display_name, provider, imap_host, imap_port, imap_tls, smtp_host, smtp_port, smtp_tls, username, auth_type, secret_enc, folder_mapping, capabilities, keywords_supported, keyword_prefix, sent_append, sync_state, sync_error, last_sync_at, initial_sync_done_at, filters_since, position, created_at
 `

@@ -2,8 +2,10 @@ package sync
 
 import (
 	"context"
+	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"slices"
 
 	"github.com/emersion/go-imap/v2"
@@ -15,18 +17,100 @@ import (
 // draftFlags are the flags of a draft saved in the Drafts folder (plan 3.8).
 var draftFlags = []string{`\Draft`, `\Seen`}
 
+// sentFlags are the flags of a sent message saved in the Sent folder (plan 3.9).
+var sentFlags = []string{`\Seen`}
+
 // draftsFolder returns the Drafts folder, creating it when the account has
 // none and create is set (nil without one).
 func (s *session) draftsFolder(ctx context.Context, c *conn, folders map[int64]*opFolder, create bool) (*opFolder, error) {
+	return s.roleFolder(ctx, c, folders, RoleDrafts, "Drafts", create)
+}
+
+// roleFolder returns the folder of a role (Drafts, Sent), creating it as base
+// when the account has none and create is set (nil without one).
+func (s *session) roleFolder(ctx context.Context, c *conn, folders map[int64]*opFolder, role, base string, create bool) (*opFolder, error) {
 	for _, id := range sortedKeys(folders) {
-		if folders[id].role == RoleDrafts {
+		if folders[id].role == role {
 			return folders[id], nil
 		}
 	}
 	if !create {
 		return nil, nil
 	}
-	return s.createRoleFolder(ctx, c, folders, RoleDrafts, "Drafts")
+	return s.createRoleFolder(ctx, c, folders, role, base)
+}
+
+// appendRaw APPENDs a message to folder f and returns its UID when the
+// server reports it (APPENDUID, UIDPLUS), else 0.
+func appendRaw(ctx context.Context, c *conn, f *opFolder, raw []byte, flags []string) (uint32, error) {
+	var data *imap.AppendData
+	err := c.await(ctx, 0, func() error {
+		cmd := c.imap().Append(f.name, int64(len(raw)), &imap.AppendOptions{Flags: toFlags(flags)})
+		if _, err := cmd.Write(raw); err != nil {
+			_ = cmd.Close()
+			return err
+		}
+		if err := cmd.Close(); err != nil {
+			return err
+		}
+		var err error
+		data, err = cmd.Wait()
+		return err
+	})
+	if err != nil || data == nil {
+		return 0, err
+	}
+	return uint32(data.UID), nil
+}
+
+// appendSent saves a message sent by Silo in the Sent folder (plan 3.9 step
+// 5: job append with toRole sent, enqueued only when accounts.sent_append):
+// APPEND of the sent bytes (messages.raw_blob_sha256) with (\Seen); the copy
+// is recorded as a location of the message right away when the server reports
+// its UID, otherwise the sync attaches it by Message-ID. A message without a
+// stored body (send cancelled meanwhile) is skipped.
+func (s *session) appendSent(ctx context.Context, c *conn, folders map[int64]*opFolder, msgIDs []int64) (func(tx pgx.Tx) error, int64, error) {
+	if len(msgIDs) != 1 {
+		return nil, 0, fmt.Errorf("%w: append to Sent takes one message", errOpPermanent)
+	}
+	msgID := msgIDs[0]
+	var sha []byte
+	err := s.d.Pool.QueryRow(ctx, `
+SELECT m.raw_blob_sha256 FROM messages m JOIN outbound o ON o.message_id = m.id
+WHERE m.id = $1 AND o.status = 'sent' AND m.raw_blob_sha256 IS NOT NULL`, msgID).Scan(&sha)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, 0, nil
+	}
+	if err != nil {
+		return nil, 0, err
+	}
+	rc, err := s.d.Blobs.Open(ctx, hex.EncodeToString(sha))
+	if err != nil {
+		return nil, 0, fmt.Errorf("%w: open sent message: %v", errOpPermanent, err)
+	}
+	raw, err := io.ReadAll(rc)
+	_ = rc.Close()
+	if err != nil {
+		return nil, 0, err
+	}
+	f, err := s.roleFolder(ctx, c, folders, RoleSent, "Sent", true)
+	if err != nil {
+		return nil, 0, err
+	}
+	uid, err := appendRaw(ctx, c, f, raw, sentFlags)
+	if err != nil {
+		return nil, 0, err
+	}
+	return func(tx pgx.Tx) error {
+		if uid == 0 || f.id <= 0 {
+			return nil
+		}
+		_, err := tx.Exec(context.Background(), `
+INSERT INTO message_locations (folder_id, uid, message_id, account_id, user_id, flags)
+SELECT $1, $2, m.id, m.account_id, m.user_id, $4 FROM messages m WHERE m.id = $3
+ON CONFLICT (folder_id, uid) DO NOTHING`, f.id, int64(uid), msgID, sentFlags)
+		return err
+	}, f.id, nil
 }
 
 // draftCopies returns the UIDs in folder f (selected) of the copies of a draft:
@@ -92,20 +176,7 @@ func (s *session) appendDraft(ctx context.Context, c *conn, folders map[int64]*o
 	if err != nil {
 		return nil, 0, err
 	}
-	var data *imap.AppendData
-	err = c.await(ctx, 0, func() error {
-		cmd := c.imap().Append(f.name, int64(len(d.Raw)), &imap.AppendOptions{Flags: toFlags(draftFlags)})
-		if _, err := cmd.Write(d.Raw); err != nil {
-			_ = cmd.Close()
-			return err
-		}
-		if err := cmd.Close(); err != nil {
-			return err
-		}
-		var err error
-		data, err = cmd.Wait()
-		return err
-	})
+	newUID, err := appendRaw(ctx, c, f, d.Raw, draftFlags)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -120,10 +191,7 @@ func (s *session) appendDraft(ctx context.Context, c *conn, folders map[int64]*o
 	if err != nil {
 		return nil, 0, err
 	}
-	var newUID uint32
-	if data != nil && data.UID != 0 {
-		newUID = uint32(data.UID)
-	} else if len(copies) > 0 {
+	if newUID == 0 && len(copies) > 0 {
 		newUID = copies[len(copies)-1] // UIDs grow: the copy just appended is the last
 	}
 	old := slices.DeleteFunc(copies, func(u uint32) bool { return u == newUID })

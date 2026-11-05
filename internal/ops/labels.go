@@ -434,3 +434,10 @@ func (s *Service) ListLabels(ctx context.Context, userID, accountID int64) ([]La
 	}
 	return out, rows.Err()
 }
+
+// EnqueueFlags adds a flags operation (no undo window) on messages of one
+// account inside tx, e.g. \Answered on the original of a sent reply (plan
+// 3.9 step 5). The caller refreshes the messages (RefreshMessages).
+func EnqueueFlags(ctx context.Context, tx pgx.Tx, accountID, userID int64, add []string, msgs []int64) error {
+	return (&Service{}).flagsJob(ctx, tx, accountID, userID, mail.OpPayload{Op: mail.OpFlags, Add: add}, msgs)
+}

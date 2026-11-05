@@ -338,7 +338,13 @@ ORDER BY l.message_id, l.folder_id`, msgIDs)
 			fin = append(fin, g)
 		}
 	case mail.OpAppend:
-		f, folderID, err := s.appendDraft(ctx, c, folders, p, msgIDs)
+		doAppend := s.appendDraft
+		if p.ToRole == RoleSent {
+			doAppend = func(ctx context.Context, c *conn, folders map[int64]*opFolder, _ mail.OpPayload, msgIDs []int64) (func(tx pgx.Tx) error, int64, error) {
+				return s.appendSent(ctx, c, folders, msgIDs)
+			}
+		}
+		f, folderID, err := doAppend(ctx, c, folders, p, msgIDs)
 		if err != nil {
 			return err
 		}
