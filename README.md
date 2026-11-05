@@ -134,10 +134,32 @@ accept `50MB` style values, rates `5MB/s`, durations `5m`. Worth knowing:
   `UNREAD`), `POST /labels` (user label with an IMAP keyword, or a folder: `CREATE`
   queued as an `imap_op` job), `PATCH`/`DELETE /labels/{id}` (a rename moves the
   keyword on the server, a folder is deleted only when empty), `GET /threads`
-  (keyset pagination, `labelId`, plain full-text `q`), `GET /threads/{id}`,
+  (keyset pagination, `labelId`, search `q`), `GET /threads/{id}`,
   `GET /messages/{id}/html` (sanitised, immutable, CSP), `/messages/{id}/raw` and
   `GET /attachments/{id}`. A body that is still `headers`/`deferred` is downloaded
   on demand (up to 10 s, then `503 content_not_available` + `Retry-After`).
+- Search (`internal/search`, plan 3.12): `GET /threads?q=` takes the Gmail syntax, parsed on
+  the server: words (prefix match, case and accents ignored: `lodz` finds `Łódź`),
+  `"phrases"`, `OR`/`|`, `AND` or juxtaposition, `-`, `( )`, `{a b}` (= `a OR b`), and
+  `from: to: cc: bcc: subject: label: in: is: has: filename: list: deliveredto:
+  rfc822msgid: before: after: older: newer: older_than: newer_than: larger: smaller:`
+  (values may be `"phrases"` or groups: `subject:(a b)`). An unknown key or a bad value
+  (`before:2024/13/40`) is a plain word; dates are `YYYY/MM/DD` or `YYYY-MM-DD` at
+  midnight in `users.settings.timezone` (UTC without it), ages `Nd`/`Nm`/`Ny`, sizes bytes
+  or `100K`/`5M`/`1G`. Spam and Trash are left out unless the query names `in:spam`,
+  `in:trash` or `in:anywhere`; `labelId` narrows the search like `in:`. Results are
+  threads newest first, at most 2000 (`resultSizeEstimate`); a search over 3 s answers an
+  empty page with `approximate: true`; `indexing.done` (with `q` only) is the share of
+  messages whose body is downloaded (`has:attachment` and headers work before that).
+  `422 invalid_query`: a closing bracket without its opening one, or more than 64 terms /
+  16 nested brackets (unclosed brackets and quotes are accepted, as in Gmail). The first
+  page of a search saves the query (as typed) in the account's history (50 kept);
+  `GET /search/suggest?q=` returns `{kind, text, label}` suggestions (history, contacts,
+  labels, operators; `text` is the whole query to put in the box) and
+  `DELETE /search/history[?query=]` forgets one or all. `search_tsv` is built by the
+  application tokenizer (letters/digits runs, folded; e-mail addresses split into words);
+  migration `000006` marks rows for a background re-index at start-up. The in-memory
+  `search.Matcher` (filters) evaluates the same AST; a property test checks it against SQL.
 - Events: `GET /events` is a Server-Sent Events stream (24 h replay with
   `Last-Event-ID`, `: ping` every 25 s, `resync` when the id is too old), and
   `GET /events/poll?after=` the polling fallback. Rows of the `events` table are
@@ -147,6 +169,8 @@ accept `50MB` style values, rates `5MB/s`, durations `5m`. Worth knowing:
 - Benchmark (nightly workflow): `SILO_BENCH_INBOX=true go test ./internal/mailview
   -run TestInboxListBenchmark -v` loads 100k threads / 300k messages and checks
   p95 < 50 ms and the `thread_labels_list` plan of the inbox query.
+  `SILO_BENCH_SEARCH=true go test ./internal/mailview -run TestSearchBenchmark -v` loads
+  1M messages (`SILO_BENCH_MESSAGES`) and checks search p95 < 500 ms for one word and `from:`.
 - Sessions: the `silo_session` cookie is `Secure` when `SILO_PUBLIC_URL` is `https://`
   (plain `http://` is for local development only). Mutating requests need the
   `X-Silo-CSRF` header and an `Origin` equal to `SILO_PUBLIC_URL` or the served host.
