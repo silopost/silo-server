@@ -74,6 +74,11 @@ accept `50MB` style values, rates `5MB/s`, durations `5m`. Worth knowing:
   backfill per account. Messages above `SILO_MIRROR_MAX_MESSAGE_BYTES` (default
   `50MB`) keep headers only (`deferred`); `SILO_MIRROR_QUOTA_PER_ACCOUNT` (default
   `0` = no limit) stops the body backfill of an account at that many mirrored bytes.
+- Write-back (`internal/ops`): label changes (`POST /threads/modify`, `/messages/modify`,
+  `/threads/trash`, `/untrash`, `/delete`) are applied locally at once and queued as
+  `imap_op` jobs run by the account's worker. Folder moves wait `SILO_UNDO_WINDOW`
+  (default `10s`), flags go at once; queued changes are coalesced, and jobs wait
+  (up to 7 days) while the account is offline.
 - Sessions: the `silo_session` cookie is `Secure` when `SILO_PUBLIC_URL` is `https://`
   (plain `http://` is for local development only). Mutating requests need the
   `X-Silo-CSRF` header and an `Origin` equal to `SILO_PUBLIC_URL` or the served host.

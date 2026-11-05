@@ -19,6 +19,7 @@ import (
 	"github.com/silopost/silo-server/internal/config"
 	siloHTTP "github.com/silopost/silo-server/internal/http"
 	"github.com/silopost/silo-server/internal/http/api"
+	"github.com/silopost/silo-server/internal/ops"
 	"github.com/silopost/silo-server/internal/secrets"
 	"github.com/silopost/silo-server/internal/store"
 	silosync "github.com/silopost/silo-server/internal/sync"
@@ -157,6 +158,7 @@ func serve(ctx context.Context, args []string) error {
 				Auth:               authSvc,
 				Accounts:           accountSvc,
 				Sync:               silosync.NewService(pool),
+				Ops:                ops.NewService(pool, cfg.UndoWindow),
 				PublicURL:          cfg.PublicURL,
 				Logger:             logger,
 			},
