@@ -201,6 +201,7 @@ type Message struct {
 	OrphanedAt      pgtype.Timestamptz
 	SearchTsv       interface{}
 	CreatedAt       pgtype.Timestamptz
+	SearchVer       int16
 }
 
 type MessageLabel struct {

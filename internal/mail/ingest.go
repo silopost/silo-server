@@ -543,22 +543,6 @@ VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
 	return msgID, threadID, nil
 }
 
-// refreshSearch rebuilds search_tsv of the messages from their current
-// columns (plan 6: subject A, people and attachment names B, body C).
-func refreshSearch(ctx context.Context, db DB, msgIDs []int64) error {
-	_, err := db.Exec(ctx, `
-UPDATE messages m SET search_tsv =
-  setweight(to_tsvector('simple', unaccent(m.subject)), 'A') ||
-  setweight(to_tsvector('simple', unaccent(m.from_text || ' ' || m.recipients_text || ' ' ||
-      COALESCE((SELECT string_agg(a.filename, ' ') FROM attachments a WHERE a.message_id = m.id), ''))), 'B') ||
-  setweight(to_tsvector('simple', unaccent(m.body_text)), 'C')
-WHERE m.id = ANY($1)`, msgIDs)
-	if err != nil {
-		return fmt.Errorf("mail: refresh search_tsv: %w", err)
-	}
-	return nil
-}
-
 // upsertContacts counts new messages: received_count for the sender of mail
 // from others, sent_count for the recipients of mail from the account itself.
 func upsertContacts(ctx context.Context, db DB, acc accountInfo, folder folderInfo, msgs map[int64]*ParsedHeader) error {

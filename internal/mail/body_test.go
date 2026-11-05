@@ -122,7 +122,7 @@ func TestIngestBodyAndPurge(t *testing.T) {
 	if n := e.count(`SELECT count(*) FROM blobs WHERE ref_count > 1`); n != 0 {
 		t.Fatalf("re-running IngestBody leaked references (%d blobs)", n)
 	}
-	if n := e.count(`SELECT count(*) FROM messages WHERE id = $1 AND search_tsv @@ plainto_tsquery('simple', unaccent('zalaczniku')) AND search_tsv @@ plainto_tsquery('simple', 'faktura.pdf')`, mid); n != 1 {
+	if n := e.count(`SELECT count(*) FROM messages WHERE id = $1 AND search_tsv @@ 'zalaczniku'::tsquery AND search_tsv @@ 'faktura <-> pdf'::tsquery AND search_ver = 1`, mid); n != 1 {
 		t.Fatal("search_tsv does not contain body and attachment name")
 	}
 	var body, snippet string

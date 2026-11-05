@@ -22,6 +22,7 @@ import (
 	"github.com/silopost/silo-server/internal/events"
 	siloHTTP "github.com/silopost/silo-server/internal/http"
 	"github.com/silopost/silo-server/internal/http/api"
+	"github.com/silopost/silo-server/internal/mail"
 	"github.com/silopost/silo-server/internal/mailview"
 	"github.com/silopost/silo-server/internal/ops"
 	"github.com/silopost/silo-server/internal/secrets"
@@ -166,6 +167,12 @@ func serve(ctx context.Context, args []string) error {
 	syncDone := make(chan struct{})
 	go func() { defer close(syncDone); _ = syncMgr.Run(workerCtx) }()
 	go draftSvc.RunGC(workerCtx, time.Hour)
+	// Rows indexed by an older search tokenizer (plan 3.12) are re-indexed once.
+	go func() {
+		if err := mail.ReindexSearch(workerCtx, pool, logger); err != nil && workerCtx.Err() == nil {
+			logger.Error("search reindex failed", "err", err)
+		}
+	}()
 	// Shutdown: account workers close their IMAP connections and finish the
 	// current transaction, then the job loops return.
 	defer func() { stopWorker(); <-syncDone; <-workerDone; <-hubDone }()
