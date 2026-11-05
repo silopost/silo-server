@@ -22,7 +22,11 @@ jobs:
           go-version-file: go.mod
       - run: go build ./...
       - run: go vet ./...
+      # Integration tests start Postgres via testcontainers; Docker is present on
+      # ubuntu-latest and they must run (not skip) here.
       - run: go test -race ./...
+        env:
+          SILO_REQUIRE_DOCKER: "true"
 
   generated:
     runs-on: ubuntu-latest
