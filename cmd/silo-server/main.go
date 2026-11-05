@@ -13,10 +13,13 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/silopost/silo-server/internal/accounts"
+	"github.com/silopost/silo-server/internal/auth"
 	"github.com/silopost/silo-server/internal/blob"
 	"github.com/silopost/silo-server/internal/config"
 	siloHTTP "github.com/silopost/silo-server/internal/http"
 	"github.com/silopost/silo-server/internal/http/api"
+	"github.com/silopost/silo-server/internal/secrets"
 	"github.com/silopost/silo-server/internal/store"
 	"github.com/silopost/silo-server/internal/version"
 	"github.com/silopost/silo-server/internal/worker"
@@ -101,8 +104,27 @@ func serve(ctx context.Context, args []string) error {
 		return err
 	}
 
+	current, previous, err := cfg.SecretKeys()
+	if err != nil {
+		return err
+	}
+	ring, err := secrets.NewKeyring(current, previous)
+	if err != nil {
+		return err
+	}
+	authSvc := auth.New(auth.Options{Pool: pool, Keys: ring, Config: cfg, Logger: logger})
+	accountSvc := accounts.New(accounts.Options{Pool: pool, Keys: ring, Config: cfg, Logger: logger})
+
 	// Job handlers are registered by the features that enqueue them.
 	jobs := worker.New(worker.Options{Pool: pool, Logger: logger, Concurrency: cfg.WorkerConcurrency})
+	// The account sync engine is not built yet: acknowledge the start requests
+	// so they do not pile up as dead jobs. The engine replaces these handlers.
+	for _, kind := range []string{auth.JobAccountInitialSync, auth.JobAccountReconnect} {
+		jobs.Register(kind, func(ctx context.Context, j worker.Job) error {
+			logger.DebugContext(ctx, "account start requested; sync engine not available yet", "kind", j.Kind)
+			return nil
+		})
+	}
 	workerCtx, stopWorker := context.WithCancel(ctx)
 	workerDone := make(chan struct{})
 	go func() { defer close(workerDone); _ = jobs.Run(workerCtx) }()
@@ -118,6 +140,10 @@ func serve(ctx context.Context, args []string) error {
 				ServerVersion:      version.Version,
 				AuthMode:           cfg.AuthMode,
 				AllowCustomServers: cfg.AllowCustomServers,
+				Auth:               authSvc,
+				Accounts:           accountSvc,
+				PublicURL:          cfg.PublicURL,
+				Logger:             logger,
 			},
 		}),
 		ReadHeaderTimeout: 10 * time.Second,

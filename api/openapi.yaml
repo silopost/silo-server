@@ -1,5 +1,189 @@
 components:
   schemas:
+    Account:
+      additionalProperties: false
+      properties:
+        displayName:
+          type: string
+        email:
+          type: string
+        error:
+          type:
+            - string
+            - "null"
+        id:
+          examples:
+            - acc_1
+          type: string
+        imapHost:
+          type: string
+        imapPort:
+          format: int64
+          type: integer
+        imapTls:
+          enum:
+            - implicit
+            - starttls
+            - none
+          type: string
+        lastSyncAt:
+          format: date-time
+          type:
+            - string
+            - "null"
+        provider:
+          enum:
+            - generic
+            - gmail
+            - microsoft
+          type: string
+        sentAppend:
+          description: Whether Silo copies sent messages to the Sent folder itself (servers that do not).
+          type: boolean
+        smtpHost:
+          type: string
+        smtpPort:
+          format: int64
+          type: integer
+        smtpTls:
+          enum:
+            - implicit
+            - starttls
+            - none
+          type: string
+        state:
+          description: Sync state; backoff means the mail server is unreachable.
+          enum:
+            - connecting
+            - discovering
+            - initial_sync
+            - live
+            - backoff
+            - auth_failed
+            - disabled
+          type: string
+        username:
+          type: string
+      required:
+        - id
+        - email
+        - displayName
+        - provider
+        - username
+        - imapHost
+        - imapPort
+        - imapTls
+        - smtpHost
+        - smtpPort
+        - smtpTls
+        - sentAppend
+        - state
+        - error
+        - lastSyncAt
+      type: object
+    AccountsOutputBody:
+      additionalProperties: false
+      properties:
+        accounts:
+          items:
+            $ref: "#/components/schemas/Account"
+          type:
+            - array
+            - "null"
+      required:
+        - accounts
+      type: object
+    ConnectionParams:
+      additionalProperties: false
+      properties:
+        email:
+          description: Sender address.
+          maxLength: 254
+          type: string
+        imapHost:
+          description: Defaults to the default server of the instance.
+          type: string
+        imapPort:
+          format: int64
+          maximum: 65535
+          minimum: 1
+          type: integer
+        imapTls:
+          enum:
+            - implicit
+            - starttls
+            - none
+          type: string
+        password:
+          maxLength: 1024
+          minLength: 1
+          type: string
+        smtpHost:
+          type: string
+        smtpPort:
+          format: int64
+          maximum: 65535
+          minimum: 1
+          type: integer
+        smtpTls:
+          enum:
+            - implicit
+            - starttls
+            - none
+          type: string
+        username:
+          description: Login name; defaults to email.
+          type: string
+      required:
+        - password
+      type: object
+    CreateAccount:
+      additionalProperties: false
+      properties:
+        displayName:
+          maxLength: 200
+          type: string
+        email:
+          description: Sender address.
+          maxLength: 254
+          type: string
+        imapHost:
+          description: Defaults to the default server of the instance.
+          type: string
+        imapPort:
+          format: int64
+          maximum: 65535
+          minimum: 1
+          type: integer
+        imapTls:
+          enum:
+            - implicit
+            - starttls
+            - none
+          type: string
+        password:
+          maxLength: 1024
+          minLength: 1
+          type: string
+        smtpHost:
+          type: string
+        smtpPort:
+          format: int64
+          maximum: 65535
+          minimum: 1
+          type: integer
+        smtpTls:
+          enum:
+            - implicit
+            - starttls
+            - none
+          type: string
+        username:
+          description: Login name; defaults to email.
+          type: string
+      required:
+        - password
+      type: object
     ErrorDetail:
       additionalProperties: false
       properties:
@@ -12,45 +196,21 @@ components:
         value:
           description: The value at the given location
       type: object
-    ErrorModel:
+    LoginInputBody:
       additionalProperties: false
       properties:
-        detail:
-          description: A human-readable explanation specific to this occurrence of the problem.
-          examples:
-            - Property foo is required but is missing.
+        email:
+          description: Mailbox address (or local part, per SILO_DEFAULT_LOGIN_FORMAT).
+          maxLength: 254
+          minLength: 1
           type: string
-        errors:
-          description: Optional list of individual error details
-          items:
-            $ref: "#/components/schemas/ErrorDetail"
-          type:
-            - array
-            - "null"
-        instance:
-          description: A URI reference that identifies the specific occurrence of the problem.
-          examples:
-            - https://example.com/error-log/abc123
-          format: uri
+        password:
+          maxLength: 1024
+          minLength: 1
           type: string
-        status:
-          description: HTTP status code
-          examples:
-            - 400
-          format: int64
-          type: integer
-        title:
-          description: A short, human-readable summary of the problem type. This value should not change between occurrences of the error.
-          examples:
-            - Bad Request
-          type: string
-        type:
-          default: about:blank
-          description: A URI reference to human-readable documentation for the error.
-          examples:
-            - https://example.com/errors/example
-          format: uri
-          type: string
+      required:
+        - email
+        - password
       type: object
     Meta:
       additionalProperties: false
@@ -86,12 +246,588 @@ components:
         - authMode
         - allowCustomServers
       type: object
+    PatchAccount:
+      additionalProperties: false
+      properties:
+        displayName:
+          maxLength: 200
+          type: string
+        imapPort:
+          format: int64
+          maximum: 65535
+          minimum: 1
+          type: integer
+        imapTls:
+          enum:
+            - implicit
+            - starttls
+            - none
+          type: string
+        password:
+          maxLength: 1024
+          minLength: 1
+          type: string
+        sentAppend:
+          type: boolean
+        smtpPort:
+          format: int64
+          maximum: 65535
+          minimum: 1
+          type: integer
+        smtpTls:
+          enum:
+            - implicit
+            - starttls
+            - none
+          type: string
+      type: object
+    Problem:
+      additionalProperties: false
+      properties:
+        code:
+          description: Stable machine-readable error code.
+          type: string
+        detail:
+          description: Explanation specific to this occurrence.
+          type: string
+        errors:
+          description: Individual validation errors.
+          items:
+            $ref: "#/components/schemas/ErrorDetail"
+          type:
+            - array
+            - "null"
+        status:
+          description: HTTP status code.
+          format: int64
+          type: integer
+        test:
+          $ref: "#/components/schemas/TestResult"
+          description: Per-step result, present for account_test_failed.
+        title:
+          description: Short summary of the HTTP status.
+          type: string
+        type:
+          description: URI identifying the error type.
+          format: uri
+          type: string
+      type: object
+    ProtocolResult:
+      additionalProperties: false
+      properties:
+        ok:
+          type: boolean
+        steps:
+          items:
+            $ref: "#/components/schemas/Step"
+          type:
+            - array
+            - "null"
+      required:
+        - ok
+        - steps
+      type: object
+    SessionBody:
+      additionalProperties: false
+      properties:
+        accounts:
+          items:
+            $ref: "#/components/schemas/Account"
+          type:
+            - array
+            - "null"
+        csrfToken:
+          description: Send as X-Silo-CSRF on every mutating request.
+          type: string
+        settings:
+          $ref: "#/components/schemas/Settings"
+        user:
+          $ref: "#/components/schemas/User"
+      required:
+        - user
+        - csrfToken
+        - settings
+        - accounts
+      type: object
+    SessionInfo:
+      additionalProperties: false
+      properties:
+        createdAt:
+          format: date-time
+          type: string
+        current:
+          description: Whether this is the session making the request.
+          type: boolean
+        expiresAt:
+          format: date-time
+          type: string
+        id:
+          examples:
+            - s_3k
+          type: string
+        ip:
+          type:
+            - string
+            - "null"
+        lastSeenAt:
+          format: date-time
+          type: string
+        userAgent:
+          type: string
+      required:
+        - id
+        - createdAt
+        - lastSeenAt
+        - expiresAt
+        - userAgent
+        - ip
+        - current
+      type: object
+    SessionsOutputBody:
+      additionalProperties: false
+      properties:
+        sessions:
+          items:
+            $ref: "#/components/schemas/SessionInfo"
+          type:
+            - array
+            - "null"
+      required:
+        - sessions
+      type: object
+    Settings:
+      additionalProperties: false
+      properties:
+        activeAccountId:
+          description: Account shown by default; the first account when unset.
+          type:
+            - string
+            - "null"
+        conversationView:
+          type: boolean
+        density:
+          enum:
+            - default
+            - comfortable
+            - compact
+          type: string
+        keyboardShortcutsEnabled:
+          type: boolean
+        signature:
+          type: string
+        timezone:
+          description: IANA time zone name.
+          examples:
+            - Europe/Warsaw
+          type: string
+        undoSendSeconds:
+          description: Delay before a sent message leaves, in seconds.
+          format: int64
+          type: integer
+      required:
+        - density
+        - undoSendSeconds
+        - signature
+        - timezone
+        - keyboardShortcutsEnabled
+        - conversationView
+        - activeAccountId
+      type: object
+    Step:
+      additionalProperties: false
+      properties:
+        detail:
+          description: Server capabilities or the reason the stage failed.
+          type: string
+        ms:
+          description: Duration of the stage in milliseconds.
+          format: int64
+          type: integer
+        ok:
+          type: boolean
+        step:
+          description: "Stage name: connect, tls, starttls, ehlo, login, auth, capability, list."
+          type: string
+      required:
+        - step
+        - ok
+        - ms
+      type: object
+    SyncStatus:
+      additionalProperties: false
+      properties:
+        capabilities:
+          items:
+            type: string
+          type:
+            - array
+            - "null"
+        email:
+          type: string
+        error:
+          type:
+            - string
+            - "null"
+        id:
+          examples:
+            - acc_1
+          type: string
+        keywordsSupported:
+          type: boolean
+        lastSyncAt:
+          format: date-time
+          type:
+            - string
+            - "null"
+        state:
+          enum:
+            - connecting
+            - discovering
+            - initial_sync
+            - live
+            - backoff
+            - auth_failed
+            - disabled
+          type: string
+      required:
+        - id
+        - email
+        - state
+        - lastSyncAt
+        - error
+        - capabilities
+        - keywordsSupported
+      type: object
+    TestResult:
+      additionalProperties: false
+      properties:
+        imap:
+          $ref: "#/components/schemas/ProtocolResult"
+        smtp:
+          $ref: "#/components/schemas/ProtocolResult"
+      required:
+        - imap
+        - smtp
+      type: object
+    User:
+      additionalProperties: false
+      properties:
+        displayName:
+          type: string
+        email:
+          type: string
+        id:
+          examples:
+            - u_1
+          type: string
+        isAdmin:
+          type: boolean
+      required:
+        - id
+        - email
+        - displayName
+        - isAdmin
+      type: object
+  securitySchemes:
+    cookieAuth:
+      description: Session cookie set by POST /session.
+      in: cookie
+      name: silo_session
+      type: apiKey
+    csrfHeader:
+      description: csrfToken of the session; required on mutating requests.
+      in: header
+      name: X-Silo-CSRF
+      type: apiKey
 info:
   description: REST API of silo-server, the SiloPost backend.
   title: SiloPost API
   version: "1"
 openapi: 3.1.0
 paths:
+  /accounts:
+    get:
+      operationId: listAccounts
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AccountsOutputBody"
+          description: OK
+        "401":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Unauthorized
+        "500":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Internal Server Error
+      security:
+        - cookieAuth: []
+      summary: List the accounts of the user with their sync state
+      tags:
+        - accounts
+    post:
+      description: Runs the connection test first; a failure answers 422 account_test_failed with the steps in `test`.
+      operationId: createAccount
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateAccount"
+        required: true
+      responses:
+        "201":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Account"
+          description: Created
+        "401":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Unauthorized
+        "403":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Forbidden
+        "409":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Conflict
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Unprocessable Entity
+        "500":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Internal Server Error
+      security:
+        - cookieAuth: []
+          csrfHeader: []
+      summary: Add an account
+      tags:
+        - accounts
+  /accounts/test:
+    post:
+      description: "Runs IMAP (connect, tls, login, capability, list) and SMTP (connect, ehlo, starttls, auth) checks and reports each step; nothing is sent or stored. The response is 200 even when a step fails: inspect `ok` per protocol."
+      operationId: testAccount
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ConnectionParams"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TestResult"
+          description: OK
+        "401":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Unauthorized
+        "403":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Forbidden
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Unprocessable Entity
+        "500":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Internal Server Error
+      security:
+        - cookieAuth: []
+          csrfHeader: []
+      summary: Test a connection without saving
+      tags:
+        - accounts
+  /accounts/{id}:
+    delete:
+      description: Deletes the account and everything cached for it. The mail server is not touched.
+      operationId: deleteAccount
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            examples:
+              - acc_1
+            type: string
+      responses:
+        "204":
+          description: No Content
+        "401":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Unauthorized
+        "403":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Forbidden
+        "404":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Not Found
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Unprocessable Entity
+        "500":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Internal Server Error
+      security:
+        - cookieAuth: []
+          csrfHeader: []
+      summary: Remove an account from Silo
+      tags:
+        - accounts
+    patch:
+      operationId: updateAccount
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            examples:
+              - acc_1
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PatchAccount"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Account"
+          description: OK
+        "401":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Unauthorized
+        "403":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Forbidden
+        "404":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Not Found
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Unprocessable Entity
+        "500":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Internal Server Error
+      security:
+        - cookieAuth: []
+          csrfHeader: []
+      summary: Change account settings
+      tags:
+        - accounts
+  /accounts/{id}/sync-status:
+    get:
+      operationId: getSyncStatus
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            examples:
+              - acc_1
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SyncStatus"
+          description: OK
+        "401":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Unauthorized
+        "404":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Not Found
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Unprocessable Entity
+        "500":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Internal Server Error
+      security:
+        - cookieAuth: []
+      summary: Get the sync state of an account
+      tags:
+        - accounts
   /meta:
     get:
       description: "Public endpoint: versions and instance settings needed before signing in."
@@ -107,10 +843,210 @@ paths:
           content:
             application/problem+json:
               schema:
-                $ref: "#/components/schemas/ErrorModel"
+                $ref: "#/components/schemas/Problem"
           description: Error
       summary: Get server metadata
       tags:
         - meta
+  /session:
+    delete:
+      operationId: logout
+      responses:
+        "204":
+          description: No Content
+          headers:
+            Set-Cookie:
+              schema:
+                type: string
+        "401":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Unauthorized
+        "403":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Forbidden
+        "500":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Internal Server Error
+      security:
+        - cookieAuth: []
+          csrfHeader: []
+      summary: Sign out
+      tags:
+        - session
+    get:
+      operationId: getSession
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SessionBody"
+          description: OK
+        "401":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Unauthorized
+        "500":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Internal Server Error
+      security:
+        - cookieAuth: []
+      summary: Get the current session
+      tags:
+        - session
+    post:
+      description: In imap mode the credentials are verified with LOGIN on the default mail server. A new user and first account are created on first success. When the mail server is unreachable, a known user with the right password is let in and the account reports state `backoff`. Every failure answers 401 invalid_credentials after a constant minimum time.
+      operationId: login
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LoginInputBody"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SessionBody"
+          description: OK
+          headers:
+            Set-Cookie:
+              schema:
+                type: string
+        "401":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Unauthorized
+        "403":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Forbidden
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Unprocessable Entity
+        "429":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Too Many Requests
+        "500":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Internal Server Error
+        "502":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Bad Gateway
+      summary: Sign in
+      tags:
+        - session
+  /sessions:
+    get:
+      operationId: listSessions
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SessionsOutputBody"
+          description: OK
+        "401":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Unauthorized
+        "500":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Internal Server Error
+      security:
+        - cookieAuth: []
+      summary: List the sessions of the user
+      tags:
+        - session
+  /sessions/{id}:
+    delete:
+      operationId: revokeSession
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            examples:
+              - s_3k
+            type: string
+      responses:
+        "204":
+          description: No Content
+          headers:
+            Set-Cookie:
+              schema:
+                type: string
+        "401":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Unauthorized
+        "403":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Forbidden
+        "404":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Not Found
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Unprocessable Entity
+        "500":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Internal Server Error
+      security:
+        - cookieAuth: []
+          csrfHeader: []
+      summary: Revoke a session
+      tags:
+        - session
 servers:
   - url: /api/v1

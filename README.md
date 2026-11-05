@@ -64,6 +64,12 @@ accept `50MB` style values, rates `5MB/s`, durations `5m`. Worth knowing:
 - Background jobs: `serve` runs a Postgres-backed job queue; `SILO_WORKER_CONCURRENCY`
   (default 4) sets the size of the general worker pool. Jobs are woken by
   `LISTEN/NOTIFY` with a 5 s polling fallback.
+- Sessions: the `silo_session` cookie is `Secure` when `SILO_PUBLIC_URL` is `https://`
+  (plain `http://` is for local development only). Mutating requests need the
+  `X-Silo-CSRF` header and an `Origin` equal to `SILO_PUBLIC_URL` or the served host.
+  Sign-in rate limits and the constant answer time are built in (per IP and per login).
+- Custom mail servers (`SILO_ALLOW_CUSTOM_SERVERS=true`) must resolve to public
+  addresses unless listed in `SILO_CUSTOM_SERVER_ALLOWLIST` (host names, IPs or CIDRs).
 - Logging: `SILO_LOG_FORMAT` (`json`/`text`), `SILO_LOG_LEVEL`; listen address: `SILO_HTTP_ADDR`.
 
 ## Development
