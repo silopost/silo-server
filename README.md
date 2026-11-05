@@ -20,11 +20,17 @@ silo-server serve [--migrate=false]   # HTTP server; applies migrations first by
 silo-server migrate up                # apply pending migrations
 silo-server migrate down --yes        # revert everything (drops all data)
 silo-server migrate version           # current schema version
+silo-server rotate-secrets           # re-encrypt account secrets after a key change
 silo-server version
 ```
 
 `migrate` needs only `SILO_DATABASE_URL`. Migrations run under a Postgres
 advisory lock, so several instances can start at once.
+
+`rotate-secrets` rotates the key protecting stored mailbox passwords: set
+`SILO_SECRET_KEY` to the new key and `SILO_SECRET_KEY_PREVIOUS` to the old one,
+run the command (it needs both plus `SILO_DATABASE_URL`, is safe to repeat and
+reports how many accounts were re-encrypted), then drop the previous key.
 
 ## Run
 

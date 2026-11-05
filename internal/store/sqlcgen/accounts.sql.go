@@ -143,6 +143,31 @@ func (q *Queries) InsertAccount(ctx context.Context, arg InsertAccountParams) (A
 	return i, err
 }
 
+const listAccountIDs = `-- name: ListAccountIDs :many
+SELECT id FROM accounts ORDER BY id
+`
+
+// tenancy: exempt key rotation touches every tenant
+func (q *Queries) ListAccountIDs(ctx context.Context) ([]int64, error) {
+	rows, err := q.db.Query(ctx, listAccountIDs)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []int64{}
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		items = append(items, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listAccountsByUser = `-- name: ListAccountsByUser :many
 SELECT id, user_id, email, display_name, provider, imap_host, imap_port, imap_tls, smtp_host, smtp_port, smtp_tls, username, auth_type, secret_enc, folder_mapping, capabilities, keywords_supported, keyword_prefix, sent_append, sync_state, sync_error, last_sync_at, initial_sync_done_at, filters_since, position, created_at FROM accounts
 WHERE user_id = $1
@@ -194,4 +219,31 @@ func (q *Queries) ListAccountsByUser(ctx context.Context, userID int64) ([]Accou
 		return nil, err
 	}
 	return items, nil
+}
+
+const lockAccountSecret = `-- name: LockAccountSecret :one
+SELECT secret_enc FROM accounts WHERE id = $1 FOR UPDATE
+`
+
+// tenancy: exempt key rotation touches every tenant
+func (q *Queries) LockAccountSecret(ctx context.Context, id int64) ([]byte, error) {
+	row := q.db.QueryRow(ctx, lockAccountSecret, id)
+	var secret_enc []byte
+	err := row.Scan(&secret_enc)
+	return secret_enc, err
+}
+
+const updateAccountSecret = `-- name: UpdateAccountSecret :exec
+UPDATE accounts SET secret_enc = $2 WHERE id = $1
+`
+
+type UpdateAccountSecretParams struct {
+	ID        int64
+	SecretEnc []byte
+}
+
+// tenancy: exempt key rotation touches every tenant
+func (q *Queries) UpdateAccountSecret(ctx context.Context, arg UpdateAccountSecretParams) error {
+	_, err := q.db.Exec(ctx, updateAccountSecret, arg.ID, arg.SecretEnc)
+	return err
 }

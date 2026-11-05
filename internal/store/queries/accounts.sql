@@ -21,3 +21,15 @@ INSERT INTO accounts (
   $11, $12, $13, $14
 )
 RETURNING *;
+
+-- name: ListAccountIDs :many
+-- tenancy: exempt key rotation touches every tenant
+SELECT id FROM accounts ORDER BY id;
+
+-- name: LockAccountSecret :one
+-- tenancy: exempt key rotation touches every tenant
+SELECT secret_enc FROM accounts WHERE id = $1 FOR UPDATE;
+
+-- name: UpdateAccountSecret :exec
+-- tenancy: exempt key rotation touches every tenant
+UPDATE accounts SET secret_enc = $2 WHERE id = $1;

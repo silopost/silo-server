@@ -25,8 +25,9 @@ const shutdownTimeout = 15 * time.Second
 // commands maps subcommand names to their implementations. New subcommands
 // (migrate, user add, ...) are registered here.
 var commands = map[string]func(ctx context.Context, args []string) error{
-	"serve":   serve,
-	"migrate": migrateCmd,
+	"serve":          serve,
+	"migrate":        migrateCmd,
+	"rotate-secrets": rotateSecretsCmd,
 }
 
 func main() {
@@ -59,7 +60,7 @@ func main() {
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "usage: silo-server <command>\n\ncommands:\n  serve    run the HTTP server (--migrate=false skips migrations)\n  migrate  up, down --yes or version: manage the database schema\n  version  print the version")
+	fmt.Fprintln(os.Stderr, "usage: silo-server <command>\n\ncommands:\n  serve    run the HTTP server (--migrate=false skips migrations)\n  migrate  up, down --yes or version: manage the database schema\n  rotate-secrets  re-encrypt account secrets after a key change\n  version  print the version")
 }
 
 func serve(ctx context.Context, args []string) error {
