@@ -79,6 +79,21 @@ accept `50MB` style values, rates `5MB/s`, durations `5m`. Worth knowing:
   `imap_op` jobs run by the account's worker. Folder moves wait `SILO_UNDO_WINDOW`
   (default `10s`), flags go at once; queued changes are coalesced, and jobs wait
   (up to 7 days) while the account is offline.
+- Reading the mailbox (`internal/mailview`): `GET /labels` (counters, pseudo label
+  `UNREAD`), `POST /labels` (user label with an IMAP keyword, or a folder: `CREATE`
+  queued as an `imap_op` job), `PATCH`/`DELETE /labels/{id}` (a rename moves the
+  keyword on the server, a folder is deleted only when empty), `GET /threads`
+  (keyset pagination, `labelId`, plain full-text `q`), `GET /threads/{id}`,
+  `GET /messages/{id}/html` (sanitised, immutable, CSP), `/messages/{id}/raw` and
+  `GET /attachments/{id}`. A body that is still `headers`/`deferred` is downloaded
+  on demand (up to 10 s, then `503 content_not_available` + `Retry-After`).
+- Events: `GET /events` is a Server-Sent Events stream (24 h replay with
+  `Last-Event-ID`, `: ping` every 25 s, `resync` when the id is too old), and
+  `GET /events/poll?after=` the polling fallback. Rows of the `events` table are
+  announced by `NOTIFY silo_events` at commit; `X-Silo-Client` is echoed as `origin`.
+- Benchmark (nightly workflow): `SILO_BENCH_INBOX=true go test ./internal/mailview
+  -run TestInboxListBenchmark -v` loads 100k threads / 300k messages and checks
+  p95 < 50 ms and the `thread_labels_list` plan of the inbox query.
 - Sessions: the `silo_session` cookie is `Secure` when `SILO_PUBLIC_URL` is `https://`
   (plain `http://` is for local development only). Mutating requests need the
   `X-Silo-CSRF` header and an `Origin` equal to `SILO_PUBLIC_URL` or the served host.

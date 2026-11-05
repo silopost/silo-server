@@ -17,8 +17,10 @@ import (
 	"github.com/silopost/silo-server/internal/auth"
 	"github.com/silopost/silo-server/internal/blob"
 	"github.com/silopost/silo-server/internal/config"
+	"github.com/silopost/silo-server/internal/events"
 	siloHTTP "github.com/silopost/silo-server/internal/http"
 	"github.com/silopost/silo-server/internal/http/api"
+	"github.com/silopost/silo-server/internal/mailview"
 	"github.com/silopost/silo-server/internal/ops"
 	"github.com/silopost/silo-server/internal/secrets"
 	"github.com/silopost/silo-server/internal/store"
@@ -139,11 +141,14 @@ func serve(ctx context.Context, args []string) error {
 	workerCtx, stopWorker := context.WithCancel(ctx)
 	workerDone := make(chan struct{})
 	go func() { defer close(workerDone); _ = jobs.Run(workerCtx) }()
+	hub := events.New(events.Options{Pool: pool, Logger: logger})
+	hubDone := make(chan struct{})
+	go func() { defer close(hubDone); _ = hub.Run(workerCtx) }()
 	syncDone := make(chan struct{})
 	go func() { defer close(syncDone); _ = syncMgr.Run(workerCtx) }()
 	// Shutdown: account workers close their IMAP connections and finish the
 	// current transaction, then the job loops return.
-	defer func() { stopWorker(); <-syncDone; <-workerDone }()
+	defer func() { stopWorker(); <-syncDone; <-workerDone; <-hubDone }()
 
 	srv := &http.Server{
 		Addr: cfg.HTTPAddr,
@@ -159,6 +164,8 @@ func serve(ctx context.Context, args []string) error {
 				Accounts:           accountSvc,
 				Sync:               silosync.NewService(pool),
 				Ops:                ops.NewService(pool, cfg.UndoWindow),
+				View:               mailview.New(pool, blobs, syncMgr),
+				Events:             hub,
 				PublicURL:          cfg.PublicURL,
 				Logger:             logger,
 			},

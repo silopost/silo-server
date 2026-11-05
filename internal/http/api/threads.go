@@ -118,6 +118,10 @@ func opsError(err error) error {
 		return nil
 	case errors.Is(err, ops.ErrNotFound):
 		return errNotFound()
+	case errors.Is(err, ops.ErrExists):
+		return problem(http.StatusConflict, CodeLabelExists, "A label or folder with this name already exists.")
+	case errors.Is(err, ops.ErrNotEmpty):
+		return problem(http.StatusConflict, CodeFolderNotEmpty, "Only an empty folder can be deleted.")
 	case errors.Is(err, ops.ErrNotModifiable), errors.Is(err, ops.ErrInvalid):
 		return problem(http.StatusBadRequest, CodeValidation, strings.TrimPrefix(strings.TrimPrefix(err.Error(), "ops: invalid request: "), "ops: "))
 	}

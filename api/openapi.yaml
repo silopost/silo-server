@@ -93,6 +93,17 @@ components:
       required:
         - accounts
       type: object
+    Address:
+      additionalProperties: false
+      properties:
+        email:
+          type: string
+        name:
+          type: string
+      required:
+        - email
+        - name
+      type: object
     ConnectionParams:
       additionalProperties: false
       properties:
@@ -183,6 +194,34 @@ components:
           type: string
       required:
         - password
+      type: object
+    CreateLabelBody:
+      additionalProperties: false
+      properties:
+        accountId:
+          description: Account; the active account when omitted.
+          type: string
+        colorBg:
+          maxLength: 32
+          type: string
+        colorText:
+          maxLength: 32
+          type: string
+        name:
+          maxLength: 200
+          minLength: 1
+          type: string
+        parentId:
+          type: string
+        type:
+          description: "user: a label (IMAP keyword); folder: a server folder (CREATE)."
+          enum:
+            - user
+            - folder
+          type: string
+      required:
+        - name
+        - type
       type: object
     ErrorDetail:
       additionalProperties: false
@@ -311,6 +350,93 @@ components:
       required:
         - ids
       type: object
+    Label:
+      additionalProperties: false
+      properties:
+        accountId:
+          examples:
+            - acc_1
+          type: string
+        colorBg:
+          type:
+            - string
+            - "null"
+        colorText:
+          type:
+            - string
+            - "null"
+        folderId:
+          description: "Folder labels: the f_ id of the server folder."
+          type:
+            - string
+            - "null"
+        id:
+          description: The key (INBOX, STARRED, ..., UNREAD) for system labels, l_ id otherwise.
+          examples:
+            - l_7
+          type: string
+        keywordState:
+          description: "User labels only: mirrored when the label is an IMAP keyword on the server, local_only when the server keeps no keywords."
+          enum:
+            - mirrored
+            - local_only
+          type:
+            - string
+            - "null"
+        name:
+          type: string
+        parentId:
+          type:
+            - string
+            - "null"
+        position:
+          format: int64
+          type: integer
+        showInList:
+          enum:
+            - show
+            - hide
+            - show_if_unread
+          type: string
+        threadsTotal:
+          format: int64
+          type: integer
+        threadsUnread:
+          format: int64
+          type: integer
+        type:
+          enum:
+            - system
+            - folder
+            - user
+          type: string
+      required:
+        - id
+        - accountId
+        - name
+        - type
+        - keywordState
+        - colorBg
+        - colorText
+        - showInList
+        - parentId
+        - folderId
+        - position
+        - threadsTotal
+        - threadsUnread
+      type: object
+    LabelsOutputBody:
+      additionalProperties: false
+      properties:
+        labels:
+          items:
+            $ref: "#/components/schemas/Label"
+          type:
+            - array
+            - "null"
+      required:
+        - labels
+      type: object
     LoginInputBody:
       additionalProperties: false
       properties:
@@ -326,6 +452,137 @@ components:
       required:
         - email
         - password
+      type: object
+    Message:
+      additionalProperties: false
+      properties:
+        attachments:
+          items:
+            $ref: "#/components/schemas/MessageAttachment"
+          type:
+            - array
+            - "null"
+        bcc:
+          items:
+            $ref: "#/components/schemas/Address"
+          type:
+            - array
+            - "null"
+        bodyState:
+          description: "headers: only the headers are in the mirror; GET /messages/{id}/html downloads the body."
+          enum:
+            - headers
+            - full
+            - deferred
+            - local
+          type: string
+        bodyText:
+          type: string
+        cc:
+          items:
+            $ref: "#/components/schemas/Address"
+          type:
+            - array
+            - "null"
+        date:
+          format: date-time
+          type: string
+        folder:
+          $ref: "#/components/schemas/MessageFolder"
+        from:
+          $ref: "#/components/schemas/Address"
+        hasHtml:
+          description: A text/html part exists; known once the body is downloaded.
+          type: boolean
+        id:
+          examples:
+            - m_1x9
+          type: string
+        labelIds:
+          items:
+            type: string
+          type:
+            - array
+            - "null"
+        listUnsubscribe:
+          type:
+            - string
+            - "null"
+        pendingSync:
+          type: boolean
+        replyTo:
+          $ref: "#/components/schemas/Address"
+        snippet:
+          type: string
+        subject:
+          type: string
+        to:
+          items:
+            $ref: "#/components/schemas/Address"
+          type:
+            - array
+            - "null"
+      required:
+        - id
+        - from
+        - to
+        - cc
+        - bcc
+        - replyTo
+        - date
+        - subject
+        - snippet
+        - labelIds
+        - folder
+        - bodyState
+        - hasHtml
+        - bodyText
+        - attachments
+        - listUnsubscribe
+        - pendingSync
+      type: object
+    MessageAttachment:
+      additionalProperties: false
+      properties:
+        contentType:
+          type: string
+        downloaded:
+          description: "false: the bytes are fetched from the mail server on first download."
+          type: boolean
+        filename:
+          type: string
+        id:
+          examples:
+            - a_44
+          type: string
+        inline:
+          type: boolean
+        size:
+          format: int64
+          type: integer
+      required:
+        - id
+        - filename
+        - contentType
+        - size
+        - inline
+        - downloaded
+      type: object
+    MessageFolder:
+      additionalProperties: false
+      properties:
+        id:
+          examples:
+            - f_3
+          type: string
+        name:
+          type: string
+        role:
+          type: string
+      required:
+        - id
+        - name
+        - role
       type: object
     Meta:
       additionalProperties: false
@@ -463,6 +720,40 @@ components:
             - starttls
             - none
           type: string
+      type: object
+    PollResult:
+      additionalProperties: false
+      properties:
+        events:
+          description: After a resync event, discard cached data and refetch.
+          items:
+            $ref: "#/components/schemas/PolledEvent"
+          type:
+            - array
+            - "null"
+        nextAfter:
+          description: Pass as after in the next poll.
+          format: int64
+          type: integer
+      required:
+        - events
+        - nextAfter
+      type: object
+    PolledEvent:
+      additionalProperties: false
+      properties:
+        data:
+          additionalProperties: {}
+          type: object
+        id:
+          format: int64
+          type: integer
+        type:
+          type: string
+      required:
+        - id
+        - type
+        - data
       type: object
     Problem:
       additionalProperties: false
@@ -849,6 +1140,81 @@ components:
         - participants
         - snoozedUntil
         - pendingSync
+      type: object
+    ThreadDetail:
+      additionalProperties: false
+      properties:
+        accountId:
+          type: string
+        id:
+          examples:
+            - t_8f3k2
+          type: string
+        labelIds:
+          items:
+            type: string
+          type:
+            - array
+            - "null"
+        messages:
+          items:
+            $ref: "#/components/schemas/Message"
+          type:
+            - array
+            - "null"
+        subject:
+          type: string
+      required:
+        - id
+        - accountId
+        - subject
+        - labelIds
+        - messages
+      type: object
+    ThreadList:
+      additionalProperties: false
+      properties:
+        nextCursor:
+          description: Opaque; pass it as cursor for the next page. null on the last page.
+          type:
+            - string
+            - "null"
+        resultSizeEstimate:
+          description: Threads in the view (exact for a label, an estimate otherwise).
+          format: int64
+          type: integer
+        threads:
+          items:
+            $ref: "#/components/schemas/Thread"
+          type:
+            - array
+            - "null"
+      required:
+        - threads
+        - nextCursor
+        - resultSizeEstimate
+      type: object
+    UpdateLabelBody:
+      additionalProperties: false
+      properties:
+        colorBg:
+          description: Empty string clears the colour.
+          maxLength: 32
+          type: string
+        colorText:
+          maxLength: 32
+          type: string
+        name:
+          description: User labels only.
+          maxLength: 200
+          minLength: 1
+          type: string
+        showInList:
+          enum:
+            - show
+            - hide
+            - show_if_unread
+          type: string
       type: object
     User:
       additionalProperties: false
@@ -1340,6 +1706,444 @@ paths:
       summary: Get the sync state of an account
       tags:
         - accounts
+  /attachments/{id}:
+    get:
+      description: A download; with inline=1 images are shown in the browser. An attachment that was not downloaded yet is fetched from the mail server together with its message (same wait and 503 as /messages/{id}/html).
+      operationId: getAttachment
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+        - description: Show in the browser (images only) instead of downloading.
+          explode: false
+          in: query
+          name: inline
+          schema:
+            description: Show in the browser (images only) instead of downloading.
+            type: boolean
+      responses:
+        "200":
+          content:
+            application/octet-stream:
+              schema:
+                contentMediaType: application/octet-stream
+                format: binary
+                type: string
+          description: The attachment, with its own content type
+        "401":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Unauthorized
+        "404":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Not Found
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Unprocessable Entity
+        "500":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Internal Server Error
+        "503":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Service Unavailable
+      security:
+        - cookieAuth: []
+      summary: Attachment bytes
+      tags:
+        - messages
+  /events:
+    get:
+      description: "Pushes changes of the mailbox as they are committed. After a reconnect with Last-Event-ID the missed events (24 h retained) are replayed first; an id older than the retention yields a resync event. A ': ping' comment is sent every 25 s. A client that cannot keep up is disconnected and replays on reconnect."
+      operationId: streamEvents
+      parameters:
+        - description: "Set by EventSource on reconnect: replays the events after it."
+          in: header
+          name: Last-Event-ID
+          schema:
+            description: "Set by EventSource on reconnect: replays the events after it."
+            type: string
+        - description: Same as the Last-Event-ID header, for clients that cannot set headers.
+          explode: false
+          in: query
+          name: lastEventId
+          schema:
+            description: Same as the Last-Event-ID header, for clients that cannot set headers.
+            type: string
+      responses:
+        "200":
+          content:
+            text/event-stream:
+              schema:
+                type: string
+          description: "A Server-Sent Events stream. Each event has id (sequence number), event (type) and data (JSON); types: message.new, thread.updated, thread.deleted, thread.merged, label.counts, label.changed, operation.failed, account.status, account.sync_progress, account.error, resync. Events caused by a request that carried X-Silo-Client have origin set to that id."
+        "401":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Unauthorized
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Unprocessable Entity
+        "500":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Internal Server Error
+      security:
+        - cookieAuth: []
+      summary: Server-Sent Events stream
+      tags:
+        - events
+  /events/poll:
+    get:
+      description: The same events as the stream, for clients whose EventSource keeps failing. An after older than the 24 h retention answers a single resync event.
+      operationId: pollEvents
+      parameters:
+        - description: Sequence number of the last event received; 0 starts from the oldest retained event.
+          explode: false
+          in: query
+          name: after
+          schema:
+            description: Sequence number of the last event received; 0 starts from the oldest retained event.
+            format: int64
+            minimum: 0
+            type: integer
+        - explode: false
+          in: query
+          name: limit
+          schema:
+            default: 200
+            format: int64
+            maximum: 500
+            minimum: 1
+            type: integer
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PollResult"
+          description: OK
+        "400":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Bad Request
+        "401":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Unauthorized
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Unprocessable Entity
+        "500":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Internal Server Error
+      security:
+        - cookieAuth: []
+      summary: Events after a sequence number (fallback for /events)
+      tags:
+        - events
+  /labels:
+    get:
+      description: System labels (plus the pseudo label UNREAD), folder labels and user labels, with threadsTotal and threadsUnread (threads with unread mail).
+      operationId: listLabels
+      parameters:
+        - description: Account; the active account when omitted.
+          explode: false
+          in: query
+          name: accountId
+          schema:
+            description: Account; the active account when omitted.
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LabelsOutputBody"
+          description: OK
+        "401":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Unauthorized
+        "404":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Not Found
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Unprocessable Entity
+        "500":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Internal Server Error
+      security:
+        - cookieAuth: []
+      summary: List the labels of an account with thread counters
+      tags:
+        - labels
+    post:
+      description: type user creates a label locally and assigns its IMAP keyword; type folder creates the folder on the mail server (CREATE, queued) and its folder label at once.
+      operationId: createLabel
+      parameters:
+        - in: header
+          name: X-Silo-Client
+          schema:
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateLabelBody"
+        required: true
+      responses:
+        "201":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Label"
+          description: Created
+        "400":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Bad Request
+        "401":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Unauthorized
+        "403":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Forbidden
+        "404":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Not Found
+        "409":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Conflict
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Unprocessable Entity
+        "500":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Internal Server Error
+      security:
+        - cookieAuth: []
+          csrfHeader: []
+      summary: Create a label or a folder
+      tags:
+        - labels
+  /labels/{id}:
+    delete:
+      description: A user label is removed and its keyword taken off the messages (queued). A folder must be empty; it is deleted on the mail server (queued) and disappears from the labels after the next discovery. System labels answer 400.
+      operationId: deleteLabel
+      parameters:
+        - in: header
+          name: X-Silo-Client
+          schema:
+            type: string
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+        - description: Needed for system label keys; the active account when omitted.
+          explode: false
+          in: query
+          name: accountId
+          schema:
+            description: Needed for system label keys; the active account when omitted.
+            type: string
+      responses:
+        "204":
+          description: No Content
+        "400":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Bad Request
+        "401":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Unauthorized
+        "403":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Forbidden
+        "404":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Not Found
+        "409":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Conflict
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Unprocessable Entity
+        "500":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Internal Server Error
+      security:
+        - cookieAuth: []
+          csrfHeader: []
+      summary: Delete a label or an empty folder
+      tags:
+        - labels
+    patch:
+      description: Renaming a user label gives it a new IMAP keyword and moves its messages to it on the server (queued). System labels and folders cannot be renamed (400).
+      operationId: updateLabel
+      parameters:
+        - in: header
+          name: X-Silo-Client
+          schema:
+            type: string
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+        - description: Needed for system label keys; the active account when omitted.
+          explode: false
+          in: query
+          name: accountId
+          schema:
+            description: Needed for system label keys; the active account when omitted.
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateLabelBody"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Label"
+          description: OK
+        "400":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Bad Request
+        "401":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Unauthorized
+        "403":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Forbidden
+        "404":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Not Found
+        "409":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Conflict
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Unprocessable Entity
+        "500":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Internal Server Error
+      security:
+        - cookieAuth: []
+          csrfHeader: []
+      summary: Rename, recolour or hide a label
+      tags:
+        - labels
   /messages/modify:
     post:
       description: "Changes labels in the Gmail model: the change is visible at once (pendingSync: true) and written back to the mail server by a queued operation. Folder changes (INBOX, TRASH, SPAM, folder labels) wait for the undo window; flags (UNREAD, STARRED, IMPORTANT, user labels as keywords) are sent at once. SENT, DRAFT, SNOOZED, SCHEDULED and ARCHIVE cannot be changed directly (400)."
@@ -1406,6 +2210,114 @@ paths:
       summary: Add or remove labels on single messages
       tags:
         - threads
+  /messages/{id}/html:
+    get:
+      description: "The text/html part with scripts, event handlers, active URLs, forms, frames and @import removed; cid: images point to /attachments/{id}?inline=1; remote images are left in. A message that has only text is returned as a preformatted block. When the body is not in the mirror yet (bodyState headers or deferred) it is downloaded from the mail server first, waiting up to 10 s; then 503 content_not_available with Retry-After. The response is immutable and cacheable. It carries a Content-Security-Policy."
+      operationId: getMessageHtml
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          content:
+            text/html:
+              schema:
+                contentMediaType: application/octet-stream
+                format: binary
+                type: string
+          description: HTML document fragment
+        "401":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Unauthorized
+        "404":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Not Found
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Unprocessable Entity
+        "500":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Internal Server Error
+        "503":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Service Unavailable
+      security:
+        - cookieAuth: []
+      summary: Sanitised HTML of a message
+      tags:
+        - messages
+  /messages/{id}/raw:
+    get:
+      description: The message exactly as the mail server delivered it (message/rfc822), downloaded first when it is not in the mirror yet.
+      operationId: getMessageRaw
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          content:
+            message/rfc822:
+              schema:
+                contentMediaType: application/octet-stream
+                format: binary
+                type: string
+          description: RFC 822 message
+        "401":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Unauthorized
+        "404":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Not Found
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Unprocessable Entity
+        "500":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Internal Server Error
+        "503":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Service Unavailable
+      security:
+        - cookieAuth: []
+      summary: Original message (.eml)
+      tags:
+        - messages
   /meta:
     get:
       description: "Public endpoint: versions and instance settings needed before signing in."
@@ -1626,6 +2538,89 @@ paths:
       summary: Revoke a session
       tags:
         - session
+  /threads:
+    get:
+      description: "Keyset pagination: the cost does not depend on the page number. Threads entirely in Trash or Spam are left out of the all-mail view. q is a plain full-text query over subject, sender, recipients, attachment names and downloaded body text."
+      operationId: listThreads
+      parameters:
+        - description: Account; the account of labelId, or the active account, when omitted.
+          explode: false
+          in: query
+          name: accountId
+          schema:
+            description: Account; the account of labelId, or the active account, when omitted.
+            type: string
+        - description: "System key (INBOX, ...) or l_ id. Omitted: all mail except threads entirely in Trash or Spam."
+          explode: false
+          in: query
+          name: labelId
+          schema:
+            description: "System key (INBOX, ...) or l_ id. Omitted: all mail except threads entirely in Trash or Spam."
+            type: string
+        - description: Full-text query (plain words; no operators yet).
+          explode: false
+          in: query
+          name: q
+          schema:
+            description: Full-text query (plain words; no operators yet).
+            maxLength: 500
+            type: string
+        - explode: false
+          in: query
+          name: cursor
+          schema:
+            type: string
+        - explode: false
+          in: query
+          name: limit
+          schema:
+            default: 50
+            format: int64
+            maximum: 100
+            minimum: 1
+            type: integer
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ThreadList"
+          description: OK
+        "400":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Bad Request
+        "401":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Unauthorized
+        "404":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Not Found
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Unprocessable Entity
+        "500":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Internal Server Error
+      security:
+        - cookieAuth: []
+      summary: List threads of a label (or all mail), newest first
+      tags:
+        - threads
   /threads/delete:
     post:
       description: Only the messages in Trash or Spam are deleted (\Deleted + UID EXPUNGE on the server); threads without such messages answer 400.
@@ -1882,6 +2877,52 @@ paths:
         - cookieAuth: []
           csrfHeader: []
       summary: Restore threads from the trash
+      tags:
+        - threads
+  /threads/{id}:
+    get:
+      description: Messages in date order with the text of the body when it is downloaded. Opening a thread does not mark it as read; the client sends modify removeLabelIds [UNREAD].
+      operationId: getThread
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ThreadDetail"
+          description: OK
+        "401":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Unauthorized
+        "404":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Not Found
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Unprocessable Entity
+        "500":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Internal Server Error
+      security:
+        - cookieAuth: []
+      summary: Get a thread with its messages
       tags:
         - threads
 servers:

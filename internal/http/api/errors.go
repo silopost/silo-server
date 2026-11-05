@@ -10,6 +10,7 @@ import (
 	"github.com/danielgtaylor/huma/v2"
 
 	"github.com/silopost/silo-server/internal/accounts"
+	"github.com/silopost/silo-server/internal/mailview"
 )
 
 // Stable machine-readable error codes (plan 5.3). The frontend branches on these.
@@ -29,6 +30,9 @@ const (
 	CodeAccountLimit       = "account_limit_reached"
 	CodeAccountExists      = "account_exists"
 	CodeNotImplemented     = "not_implemented"
+	CodeLabelExists        = "label_exists"
+	CodeFolderNotEmpty     = "folder_not_empty"
+	CodeContentUnavailable = "content_not_available"
 	CodeInternal           = "internal_error"
 )
 
@@ -154,6 +158,29 @@ func accountError(err error) error {
 		return problem(http.StatusConflict, CodeAccountExists, "This account already exists.")
 	case errors.Is(err, accounts.ErrInvalid):
 		return problem(http.StatusUnprocessableEntity, CodeValidation, strings.TrimPrefix(err.Error(), "accounts: invalid parameters: "))
+	}
+	return errInternal(err)
+}
+
+// errContentUnavailable is the 503 of a body that is not in the mirror and
+// could not be downloaded in time (plan 5.3); the client may retry.
+func errContentUnavailable() error {
+	p := problem(http.StatusServiceUnavailable, CodeContentUnavailable, "The message content is not available yet; try again shortly.")
+	p.header = http.Header{"Retry-After": {"5"}}
+	return p
+}
+
+// viewError maps a mailview error to a problem.
+func viewError(err error) error {
+	switch {
+	case err == nil:
+		return nil
+	case errors.Is(err, mailview.ErrNotFound):
+		return errNotFound()
+	case errors.Is(err, mailview.ErrInvalid):
+		return problem(http.StatusBadRequest, CodeValidation, strings.TrimPrefix(err.Error(), "mailview: invalid request: "))
+	case errors.Is(err, mailview.ErrContentNotAvailable):
+		return errContentUnavailable()
 	}
 	return errInternal(err)
 }

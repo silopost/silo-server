@@ -5,6 +5,7 @@ package api
 import (
 	"log/slog"
 	"net/url"
+	"time"
 
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/danielgtaylor/huma/v2/adapters/humachi"
@@ -12,6 +13,8 @@ import (
 
 	"github.com/silopost/silo-server/internal/accounts"
 	"github.com/silopost/silo-server/internal/auth"
+	"github.com/silopost/silo-server/internal/events"
+	"github.com/silopost/silo-server/internal/mailview"
 	"github.com/silopost/silo-server/internal/ops"
 	silosync "github.com/silopost/silo-server/internal/sync"
 )
@@ -39,6 +42,12 @@ type Options struct {
 	Sync *silosync.Service
 	// Ops backs the thread and message modify endpoints.
 	Ops *ops.Service
+	// View backs the thread list, thread detail and message content endpoints.
+	View *mailview.View
+	// Events backs GET /events and /events/poll.
+	Events *events.Hub
+	// SSEHeartbeat is the interval of the ": ping" comment on /events (25 s when 0).
+	SSEHeartbeat time.Duration
 	// PublicURL (SILO_PUBLIC_URL) is the origin browsers use; it feeds the Origin
 	// check and decides the Secure flag of the session cookie (https only).
 	PublicURL string
@@ -51,13 +60,19 @@ type deps struct {
 	accts        *accounts.Service
 	sync         *silosync.Service
 	ops          *ops.Service
+	view         *mailview.View
+	events       *events.Hub
+	heartbeat    time.Duration
 	log          *slog.Logger
 	publicOrigin string
 	cookieSecure bool
 }
 
 func newDeps(o Options) *deps {
-	d := &deps{auth: o.Auth, accts: o.Accounts, sync: o.Sync, ops: o.Ops, log: o.Logger}
+	d := &deps{auth: o.Auth, accts: o.Accounts, sync: o.Sync, ops: o.Ops, view: o.View, events: o.Events, heartbeat: o.SSEHeartbeat, log: o.Logger}
+	if d.heartbeat <= 0 {
+		d.heartbeat = 25 * time.Second
+	}
 	if d.log == nil {
 		d.log = slog.Default()
 	}
@@ -95,6 +110,10 @@ func Mount(root chi.Router, o Options) huma.API {
 		d.registerAccounts(a)
 		d.registerSync(a)
 		d.registerThreads(a)
+		d.registerLabels(a)
+		d.registerThreadViews(a)
+		d.registerContent(a)
+		d.registerEvents(a)
 	})
 	return a
 }
