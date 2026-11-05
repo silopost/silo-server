@@ -35,6 +35,9 @@ const (
 	CodeFolderNotEmpty     = "folder_not_empty"
 	CodeContentUnavailable = "content_not_available"
 	CodeInvalidQuery       = "invalid_query"
+	CodeInvalidSnooze      = "invalid_snooze"
+	CodeNotInInbox         = "not_in_inbox"
+	CodeNotSnoozed         = "not_snoozed"
 	CodeInternal           = "internal_error"
 )
 

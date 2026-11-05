@@ -181,15 +181,25 @@ func overlay(st *msgState, ops []pendingOp, byID map[int64]folderMeta, byRole ma
 			} else {
 				target = folderMeta{id: -1, role: op.ToRole} // created when the job runs (Archive)
 			}
-			folders := make([]int64, len(st.locs))
-			roles := make([]string, len(st.locs))
+			// Copies flagged \Deleted are gone (ADR 0006) and are never moved:
+			// the executor does not see them either. Without UIDPLUS a folder
+			// may hold such a copy next to the live one.
+			var live []int
 			for i, l := range st.locs {
-				folders[i], roles[i] = l.folderID, l.role
+				if !hasFlag(l.flags, `\Deleted`) {
+					live = append(live, i)
+				}
 			}
-			i, ok := MoveSource(folders, roles, op.expect, target.id, target.role)
+			folders := make([]int64, len(live))
+			roles := make([]string, len(live))
+			for j, i := range live {
+				folders[j], roles[j] = st.locs[i].folderID, st.locs[i].role
+			}
+			j, ok := MoveSource(folders, roles, op.expect, target.id, target.role)
 			if !ok {
 				continue
 			}
+			i := live[j]
 			st.locs[i] = loc{folderID: target.id, role: target.role, labelID: target.labelID,
 				flags: applyFlagOps(st.locs[i].flags, op.Add, op.Remove)}
 		case OpExpunge:

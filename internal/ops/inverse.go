@@ -35,6 +35,11 @@ type invItem struct {
 	Remove       []string `json:"remove,omitempty"`
 	LabelAdd     []int64  `json:"labelAdd,omitempty"`
 	LabelRemove  []int64  `json:"labelRemove,omitempty"`
+	// SnoozeThread undoes a snooze of the thread (plan 3.10): its snoozes row
+	// is deleted, or gets back the wake time SnoozePrev of the snooze it
+	// replaced. The item has no move: the moves are items of their own.
+	SnoozeThread int64      `json:"snoozeThread,omitempty"`
+	SnoozePrev   *time.Time `json:"snoozePrev,omitempty"`
 }
 
 // changedFlags returns the flags of the list that the operation really
@@ -101,6 +106,13 @@ func (b *builder) applyInverse(ctx context.Context, tx pgx.Tx, items []invItem) 
 		if m == nil {
 			continue
 		}
+		if it.SnoozeThread != 0 {
+			if err := restoreSnooze(ctx, tx, b.userID, it); err != nil {
+				return err
+			}
+			b.local = append(b.local, m.id)
+			continue
+		}
 		for _, l := range it.LabelAdd {
 			labelMsgs[[2]int64{l, 1}] = append(labelMsgs[[2]int64{l, 1}], m)
 		}
@@ -126,7 +138,9 @@ func (b *builder) applyInverse(ctx context.Context, tx pgx.Tx, items []invItem) 
 			if back == 0 && len(m.locs) > 0 {
 				back = m.locs[0].folderID
 			}
-			if back != 0 {
+			// An undone snooze is not redone by undoing the undo: the
+			// messages would go back to Snoozed without a wake time.
+			if back != 0 && it.ExpectRole != roleSnoozed {
 				b.inv = append(b.inv, invItem{MessageID: m.id, MoveTo: back, ExpectFolder: it.MoveTo, Add: it.Remove, Remove: it.Add})
 			}
 		case len(it.Add)+len(it.Remove) > 0 && len(m.locs) > 0:
@@ -261,7 +275,12 @@ ON CONFLICT DO NOTHING`, it.MessageID, l, userID); err != nil {
 				return nil, err
 			}
 		}
-		if len(it.LabelAdd)+len(it.LabelRemove) > 0 {
+		if it.SnoozeThread != 0 {
+			if err := restoreSnooze(ctx, tx, userID, it); err != nil {
+				return nil, err
+			}
+		}
+		if len(it.LabelAdd)+len(it.LabelRemove) > 0 || it.SnoozeThread != 0 {
 			msgs = append(msgs, it.MessageID)
 		}
 	}

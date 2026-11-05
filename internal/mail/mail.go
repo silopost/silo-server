@@ -18,8 +18,9 @@
 // the events table in the same transaction as the change; the SSE hub that
 // publishes them after commit is a separate component.
 //
-// Step 6 of 3.5.7 (waking a snoozed thread) and step 7 (filters) are not
-// implemented yet; IngestBatch marks the place for them.
+// Step 6 of 3.5.7 (waking a snoozed thread) queues snooze_wake (run by the ops
+// package); step 7 (filters) is not implemented yet; IngestBatch marks the
+// place for it.
 package mail
 
 import (

@@ -111,6 +111,12 @@ type builder struct {
 	local      []int64   // messages whose user labels changed locally
 	inv        []invItem // how to undo the changes once the jobs ran
 	final      bool      // the operation cannot be undone (permanent delete)
+	// record keeps the operation (and its undo window) even when no job was
+	// queued: a local change such as a new snooze time is undoable too.
+	record bool
+	// noUndo: the change is not an undoable operation (waking a snoozed
+	// thread); no operations row is written and OperationID stays empty.
+	noUndo bool
 }
 
 func (b *builder) add(p mail.OpPayload, msgID, from int64, delay time.Duration) {
@@ -159,7 +165,7 @@ func (s *Service) run(ctx context.Context, userID int64, threadIDs, msgIDs []int
 			byAccount[m.accountID] = append(byAccount[m.accountID], m)
 		}
 		slices.Sort(accounts)
-		sentAny, folderOp, final := false, false, false
+		sentAny, folderOp, final, record, noUndo := false, false, false, false, false
 		var inv []invItem
 		for _, acc := range accounts {
 			if err := mail.LockAccount(ctx, tx, acc); err != nil {
@@ -173,6 +179,7 @@ func (s *Service) run(ctx context.Context, userID int64, threadIDs, msgIDs []int
 				return err
 			}
 			inv, final = append(inv, b.inv...), final || b.final
+			record, noUndo = record || b.record, noUndo || b.noUndo
 			touched := slices.Clone(b.local)
 			keys := make([]string, 0, len(b.ops))
 			for k := range b.ops {
@@ -200,9 +207,9 @@ func (s *Service) run(ctx context.Context, userID int64, threadIDs, msgIDs []int
 			}
 			res.ThreadIDs = append(res.ThreadIDs, threads...)
 		}
-		if sentAny {
+		if (sentAny || record) && !noUndo {
 			res.OperationID = group
-			if folderOp {
+			if folderOp || record {
 				until := time.Now().Add(s.undoWindow)
 				res.UndoUntil = &until
 			}
@@ -226,11 +233,14 @@ func uniq(ids []int64) []int64 {
 	return slices.Compact(out)
 }
 
+// loadMessages loads the messages with their locations. A copy flagged
+// \Deleted is already gone for Silo (ADR 0006: without UIDPLUS a move leaves
+// the source copy flagged), as in the label derivation and the executor.
 func loadMessages(ctx context.Context, tx pgx.Tx, userID int64, threadIDs, msgIDs []int64) ([]*msgInfo, error) {
 	q := `
 SELECT m.id, m.account_id, m.thread_id, m.restore_folder_id, l.folder_id, f.role, l.flags
 FROM messages m
-LEFT JOIN message_locations l ON l.message_id = m.id AND NOT l.stale
+LEFT JOIN message_locations l ON l.message_id = m.id AND NOT l.stale AND NOT ('\Deleted' = ANY(l.flags))
 LEFT JOIN mailbox_folders f ON f.id = l.folder_id
 WHERE m.user_id = $1 AND m.orphaned_at IS NULL AND `
 	var arg []int64

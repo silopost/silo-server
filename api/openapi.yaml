@@ -1279,6 +1279,81 @@ components:
         - conversationView
         - activeAccountId
       type: object
+    SnoozeBody:
+      additionalProperties: false
+      properties:
+        until:
+          description: Wake time (RFC 3339), typically the until of a preset from GET /snooze/presets; at least 30 seconds and at most a year ahead, else 422 invalid_snooze.
+          format: date-time
+          type: string
+      required:
+        - until
+      type: object
+    SnoozePreset:
+      additionalProperties: false
+      properties:
+        key:
+          description: Stable key; clients may translate the label by it.
+          enum:
+            - later_today
+            - tomorrow
+            - this_weekend
+            - next_week
+          type: string
+        label:
+          description: English label.
+          examples:
+            - Tomorrow
+          type: string
+        until:
+          description: The wake time to send to POST /threads/{id}/snooze.
+          format: date-time
+          type: string
+      required:
+        - key
+        - label
+        - until
+      type: object
+    SnoozePresets:
+      additionalProperties: false
+      properties:
+        presets:
+          items:
+            $ref: "#/components/schemas/SnoozePreset"
+          type:
+            - array
+            - "null"
+        timezone:
+          description: The time zone the presets were computed in (settings.timezone, UTC when unset).
+          examples:
+            - Europe/Warsaw
+          type: string
+      required:
+        - timezone
+        - presets
+      type: object
+    SnoozeResult:
+      additionalProperties: false
+      properties:
+        operationId:
+          description: Id of the operation for POST /operations/{id}/undo; null for unsnooze, which is not undoable (snooze again instead).
+          type:
+            - string
+            - "null"
+        thread:
+          $ref: "#/components/schemas/Thread"
+          description: "The thread after the change (list shape): SNOOZED instead of INBOX and snoozedUntil set, or back in INBOX."
+        undoUntil:
+          description: "End of the undo window: until then nothing reached the mail server; null for unsnooze."
+          format: date-time
+          type:
+            - string
+            - "null"
+      required:
+        - thread
+        - operationId
+        - undoUntil
+      type: object
     Step:
       additionalProperties: false
       properties:
@@ -3660,6 +3735,55 @@ paths:
       summary: Revoke a session
       tags:
         - session
+  /snooze/presets:
+    get:
+      description: "Gmail's suggestions computed by the server in the user's time zone (settings.timezone, UTC when unset), so that clients do no date arithmetic: later_today (18:00, only when more than an hour away), tomorrow (08:00), this_weekend (Saturday 08:00, not on Saturday or Sunday) and next_week (Monday 08:00), in this order; a preset at the same time as an earlier one is left out (this_weekend on Friday, next_week on Sunday)."
+      operationId: snoozePresets
+      parameters:
+        - description: Compute the presets at this time (RFC 3339) instead of the server's clock; for tests and previews.
+          explode: false
+          in: query
+          name: now
+          schema:
+            description: Compute the presets at this time (RFC 3339) instead of the server's clock; for tests and previews.
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SnoozePresets"
+          description: OK
+        "400":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Bad Request
+        "401":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Unauthorized
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Unprocessable Entity
+        "500":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Internal Server Error
+      security:
+        - cookieAuth: []
+        - bearerAuth: []
+      summary: Suggested snooze times
+      tags:
+        - threads
   /threads:
     get:
       description: "Keyset pagination: the cost does not depend on the page number. Threads entirely in Trash or Spam are left out of the all-mail view. With q: the threads with a message matching the query (plan 3.12; messages in Spam and Trash only with in:spam, in:trash or in:anywhere), newest first, at most 2000; labelId narrows them like in:. Words match prefixes of words in the subject, people, attachment names and the downloaded body (see indexing); has:attachment works before bodies are downloaded. A search that runs over 3 s answers an empty page with approximate: true. 422 invalid_query: a closing bracket without its opening one, or over 64 terms or 16 nested brackets (unclosed brackets and quotes are accepted)."
@@ -4051,6 +4175,153 @@ paths:
         - cookieAuth: []
         - bearerAuth: []
       summary: Get a thread with its messages
+      tags:
+        - threads
+  /threads/{id}/snooze:
+    delete:
+      description: "The same as the wake-up at the snooze time: the messages go back to INBOX at once (no undo window), without $SiloSnoozed, the newest unread, and the thread moves to the top of the list. Not undoable (operationId null). A thread that is not snoozed is 409 not_snoozed."
+      operationId: unsnoozeThread
+      parameters:
+        - description: t_ id of the thread.
+          in: path
+          name: id
+          required: true
+          schema:
+            description: t_ id of the thread.
+            type: string
+        - description: Client id, echoed as origin in the events it causes.
+          in: header
+          name: X-Silo-Client
+          schema:
+            description: Client id, echoed as origin in the events it causes.
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SnoozeResult"
+          description: OK
+        "401":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Unauthorized
+        "403":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Forbidden
+        "404":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Not Found
+        "409":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Conflict
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Unprocessable Entity
+        "500":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Internal Server Error
+      security:
+        - cookieAuth: []
+          csrfHeader: []
+        - bearerAuth: []
+      summary: Wake a snoozed thread now
+      tags:
+        - threads
+    post:
+      description: The messages of the thread that are in INBOX turn SNOOZED at once (pendingSync) and move to the Snoozed folder of the mail server after the undo window (folder role snoozed; Silo creates the folder, named by the snoozed folder mapping or Snoozed, on the first snooze), with the keyword $SiloSnoozed when the server keeps keywords, so other clients do not show them in their inbox either. At until (precision 30 s, Silo must be running) they go back to INBOX, the newest unread, and the thread moves to the top of the list; a new message in the thread wakes it at once. Snoozing a snoozed thread again only changes its time. The answer can be undone with POST /operations/{id}/undo. A thread without mail in INBOX is 409 not_in_inbox (snooze is an inbox action, as in Gmail); until less than 30 seconds or more than a year ahead is 422 invalid_snooze. SNOOZED cannot be added with modify.
+      operationId: snoozeThread
+      parameters:
+        - description: t_ id of the thread.
+          in: path
+          name: id
+          required: true
+          schema:
+            description: t_ id of the thread.
+            type: string
+        - description: Client id, echoed as origin in the events it causes.
+          in: header
+          name: X-Silo-Client
+          schema:
+            description: Client id, echoed as origin in the events it causes.
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SnoozeBody"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SnoozeResult"
+          description: OK
+        "400":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Bad Request
+        "401":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Unauthorized
+        "403":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Forbidden
+        "404":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Not Found
+        "409":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Conflict
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Unprocessable Entity
+        "500":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Internal Server Error
+      security:
+        - cookieAuth: []
+          csrfHeader: []
+        - bearerAuth: []
+      summary: Snooze a thread until a time
       tags:
         - threads
   /uploads:

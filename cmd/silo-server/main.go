@@ -154,6 +154,8 @@ func serve(ctx context.Context, args []string) error {
 		},
 	})
 	opsSvc := ops.NewService(pool, cfg.UndoWindow)
+	// Snoozed threads are woken by snooze_wake, queued every 30 s (plan 3.10).
+	opsSvc.RegisterJobs(jobs)
 	draftSvc.RegisterJobs(jobs, func(ctx context.Context, now time.Time) error {
 		_, err := opsSvc.PurgeOperations(ctx, now)
 		return err
@@ -167,6 +169,7 @@ func serve(ctx context.Context, args []string) error {
 	syncDone := make(chan struct{})
 	go func() { defer close(syncDone); _ = syncMgr.Run(workerCtx) }()
 	go draftSvc.RunGC(workerCtx, time.Hour)
+	go opsSvc.RunSnoozeWake(workerCtx, ops.SnoozeTick, func(err error) { logger.Warn("enqueue snooze_wake", "error", err) })
 	// Rows indexed by an older search tokenizer (plan 3.12) are re-indexed once.
 	go func() {
 		if err := mail.ReindexSearch(workerCtx, pool, logger); err != nil && workerCtx.Err() == nil {

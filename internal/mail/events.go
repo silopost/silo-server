@@ -58,14 +58,15 @@ ORDER BY t.n`, b.userID, b.types, b.payloads)
 }
 
 type threadUpdatedPayload struct {
-	ThreadID      int64     `json:"threadId"`
-	AccountID     int64     `json:"accountId"`
-	LabelIDs      []int64   `json:"labelIds"`
-	UnreadCount   int       `json:"unreadCount"`
-	MessageCount  int       `json:"messageCount"`
-	LastMessageAt time.Time `json:"lastMessageAt"`
-	Snippet       string    `json:"snippet"`
-	PendingSync   bool      `json:"pendingSync"`
+	ThreadID      int64      `json:"threadId"`
+	AccountID     int64      `json:"accountId"`
+	LabelIDs      []int64    `json:"labelIds"`
+	UnreadCount   int        `json:"unreadCount"`
+	MessageCount  int        `json:"messageCount"`
+	LastMessageAt time.Time  `json:"lastMessageAt"`
+	Snippet       string     `json:"snippet"`
+	PendingSync   bool       `json:"pendingSync"`
+	SnoozedUntil  *time.Time `json:"snoozedUntil"`
 }
 
 type labelCount struct {
@@ -80,7 +81,7 @@ type labelCount struct {
 func (b *eventBuf) emitThreadEvents(ctx context.Context, db DB, accountID int64, threadIDs, labelIDs []int64) error {
 	if len(threadIDs) > 0 {
 		rows, err := db.Query(ctx, `
-SELECT t.id, t.unread_count, t.message_count, t.last_message_at, t.snippet, t.pending_ops > 0,
+SELECT t.id, t.unread_count, t.message_count, t.last_message_at, t.snippet, t.pending_ops > 0, t.snoozed_until,
        COALESCE((SELECT array_agg(tl.label_id ORDER BY tl.label_id) FROM thread_labels tl
                  WHERE tl.thread_id = t.id AND NOT tl.hidden), '{}')
 FROM threads t WHERE t.id = ANY($1) ORDER BY t.id`, threadIDs)
@@ -90,7 +91,7 @@ FROM threads t WHERE t.id = ANY($1) ORDER BY t.id`, threadIDs)
 		found := map[int64]bool{}
 		for rows.Next() {
 			p := threadUpdatedPayload{AccountID: accountID}
-			if err := rows.Scan(&p.ThreadID, &p.UnreadCount, &p.MessageCount, &p.LastMessageAt, &p.Snippet, &p.PendingSync, &p.LabelIDs); err != nil {
+			if err := rows.Scan(&p.ThreadID, &p.UnreadCount, &p.MessageCount, &p.LastMessageAt, &p.Snippet, &p.PendingSync, &p.SnoozedUntil, &p.LabelIDs); err != nil {
 				rows.Close()
 				return err
 			}

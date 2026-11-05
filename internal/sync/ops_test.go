@@ -31,6 +31,8 @@ type opsEnv struct {
 	stop  func()
 	other *imapclient.Client
 	mgr   *silosync.Manager
+	// extra registers more job handlers (e.g. drafts send) on restart.
+	extra func(*worker.Worker)
 }
 
 func newOpsEnv(t *testing.T, p imaptest.Profile, window time.Duration, specs ...spec) *opsEnv {
@@ -56,6 +58,10 @@ func (e *opsEnv) start() {
 		Backoff: func(int) time.Duration { return 200 * time.Millisecond }})
 	m := silosync.NewManager(*e.a.deps)
 	m.RegisterJobs(jobs)
+	e.svc.RegisterJobs(jobs) // snooze_wake
+	if e.extra != nil {
+		e.extra(jobs)
+	}
 	jd, md := make(chan struct{}), make(chan struct{})
 	go func() { defer close(jd); _ = jobs.Run(ctx) }()
 	go func() { defer close(md); _ = m.Run(ctx) }()

@@ -161,9 +161,10 @@ func joinAddrs(lists ...[]Address) string {
 //     thread.merged events.
 //
 // It is idempotent: ingesting the same batch again changes nothing but the
-// flags and modseq of existing locations. Step 6 (waking snoozed threads) and
-// step 7 (filters) of 3.5.7 are not implemented yet and belong between the
-// label derivation and the thread recompute below.
+// flags and modseq of existing locations. Step 6 (a new message wakes a
+// snoozed thread) is snoozeIngest; step 7 (filters) of 3.5.7 is not
+// implemented yet and belongs between the label derivation and the thread
+// recompute below.
 func IngestBatch(ctx context.Context, db DB, accountID, folderID int64, msgs []FetchedMessage) (*IngestResult, error) {
 	res := &IngestResult{}
 	if len(msgs) == 0 {
@@ -318,6 +319,9 @@ ON CONFLICT (folder_id, uid) DO UPDATE SET
 	}
 	threads = uniqueSorted(threads)
 
+	if err := snoozeIngest(ctx, db, folder.role, newIDs, threads); err != nil {
+		return nil, err
+	}
 	if len(newIDs) > 0 {
 		if err := emitMessageNew(ctx, db, ev, accountID, newIDs, res); err != nil {
 			return nil, err
