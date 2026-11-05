@@ -223,27 +223,45 @@ func (q *Queries) AdminReenableUserAccounts(ctx context.Context, userID int64) (
 }
 
 const adminRetryJob = `-- name: AdminRetryJob :one
-UPDATE jobs SET status = 'pending', attempts = 0, run_at = now(), locked_until = NULL
-WHERE id = $1 AND status IN ('pending', 'dead')
-RETURNING id, kind, account_id, group_id, payload, run_at, locked_until, attempts, max_attempts, status, last_error, created_at
+WITH j AS (
+  UPDATE jobs SET status = 'pending', attempts = 0, run_at = now(), locked_until = NULL
+  WHERE jobs.id = $1 AND jobs.status IN ('pending', 'dead')
+    AND (jobs.locked_until IS NULL OR jobs.locked_until < now())
+  RETURNING id, kind, account_id, group_id, payload, run_at, locked_until, attempts, max_attempts, status, last_error, created_at
+)
+SELECT j.id, j.kind, j.account_id, a.user_id AS account_user_id, j.attempts, j.max_attempts, j.status,
+       j.last_error, j.run_at, j.created_at
+FROM j LEFT JOIN accounts a ON a.id = j.account_id
 `
 
+type AdminRetryJobRow struct {
+	ID            int64
+	Kind          string
+	AccountID     pgtype.Int8
+	AccountUserID pgtype.Int8
+	Attempts      int32
+	MaxAttempts   int32
+	Status        string
+	LastError     pgtype.Text
+	RunAt         pgtype.Timestamptz
+	CreatedAt     pgtype.Timestamptz
+}
+
 // A dead (or waiting) job runs again as soon as a worker is free.
-func (q *Queries) AdminRetryJob(ctx context.Context, id int64) (Job, error) {
+// tenancy: exempt admin panel retries jobs of every account
+func (q *Queries) AdminRetryJob(ctx context.Context, id int64) (AdminRetryJobRow, error) {
 	row := q.db.QueryRow(ctx, adminRetryJob, id)
-	var i Job
+	var i AdminRetryJobRow
 	err := row.Scan(
 		&i.ID,
 		&i.Kind,
 		&i.AccountID,
-		&i.GroupID,
-		&i.Payload,
-		&i.RunAt,
-		&i.LockedUntil,
+		&i.AccountUserID,
 		&i.Attempts,
 		&i.MaxAttempts,
 		&i.Status,
 		&i.LastError,
+		&i.RunAt,
 		&i.CreatedAt,
 	)
 	return i, err

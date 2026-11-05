@@ -12,6 +12,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"github.com/silopost/silo-server/internal/accounts"
+	"github.com/silopost/silo-server/internal/admin"
 	"github.com/silopost/silo-server/internal/auth"
 	"github.com/silopost/silo-server/internal/drafts"
 	"github.com/silopost/silo-server/internal/events"
@@ -55,6 +56,8 @@ type Options struct {
 	Filters *filters.Service
 	// Events backs GET /events and /events/poll.
 	Events *events.Hub
+	// Admin backs the /admin endpoints.
+	Admin *admin.Service
 	// SSEHeartbeat is the interval of the ": ping" comment on /events (25 s when 0).
 	SSEHeartbeat time.Duration
 	// PublicURL (SILO_PUBLIC_URL) is the origin browsers use; it feeds the Origin
@@ -73,6 +76,7 @@ type deps struct {
 	drafts       *drafts.Service
 	events       *events.Hub
 	filters      *filters.Service
+	admin        *admin.Service
 	heartbeat    time.Duration
 	log          *slog.Logger
 	publicOrigin string
@@ -80,7 +84,7 @@ type deps struct {
 }
 
 func newDeps(o Options) *deps {
-	d := &deps{auth: o.Auth, accts: o.Accounts, sync: o.Sync, ops: o.Ops, view: o.View, drafts: o.Drafts, events: o.Events, filters: o.Filters, heartbeat: o.SSEHeartbeat, log: o.Logger}
+	d := &deps{auth: o.Auth, accts: o.Accounts, sync: o.Sync, ops: o.Ops, view: o.View, drafts: o.Drafts, events: o.Events, filters: o.Filters, admin: o.Admin, heartbeat: o.SSEHeartbeat, log: o.Logger}
 	if d.heartbeat <= 0 {
 		d.heartbeat = 25 * time.Second
 	}
@@ -135,6 +139,7 @@ func Mount(root chi.Router, o Options) huma.API {
 		d.registerSettings(a)
 		d.registerEvents(a)
 		d.registerLocalAuth(a)
+		d.registerAdmin(a)
 	})
 	return a
 }

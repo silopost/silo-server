@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/silopost/silo-server/internal/accounts"
+	"github.com/silopost/silo-server/internal/admin"
 	"github.com/silopost/silo-server/internal/auth"
 	"github.com/silopost/silo-server/internal/blob"
 	"github.com/silopost/silo-server/internal/config"
@@ -206,6 +207,7 @@ func serve(ctx context.Context, args []string) error {
 				Drafts:             draftSvc,
 				Filters:            filterSvc,
 				Events:             hub,
+				Admin:              admin.New(pool, authSvc),
 				PublicURL:          cfg.PublicURL,
 				Logger:             logger,
 			},

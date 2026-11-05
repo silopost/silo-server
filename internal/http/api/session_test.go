@@ -17,6 +17,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/silopost/silo-server/internal/accounts"
+	"github.com/silopost/silo-server/internal/admin"
 	"github.com/silopost/silo-server/internal/auth"
 	"github.com/silopost/silo-server/internal/blob"
 	"github.com/silopost/silo-server/internal/config"
@@ -133,10 +134,12 @@ func (e *env) router(cfg config.Config, ao auth.Options) http.Handler {
 	ao.Pool, ao.Keys, ao.Config = e.pool, e.ring, cfg
 	opsSvc := ops.NewService(e.pool, 10*time.Second)
 	e.filters = filters.New(filters.Options{Pool: e.pool, Ops: opsSvc, Forward: e.drafts})
+	authSvc := auth.New(ao)
 	r := chi.NewRouter()
 	api.Mount(r, api.Options{
 		Filters:   e.filters,
-		Auth:      auth.New(ao),
+		Auth:      authSvc,
+		Admin:     admin.New(e.pool, authSvc),
 		Accounts:  accounts.New(accounts.Options{Pool: e.pool, Keys: e.ring, Config: cfg}),
 		Sync:      silosync.NewService(e.pool),
 		Ops:       opsSvc,

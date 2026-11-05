@@ -109,6 +109,312 @@ components:
         - email
         - name
       type: object
+    AdminAccount:
+      additionalProperties: false
+      properties:
+        createdAt:
+          format: date-time
+          type: string
+        deadOps:
+          description: Jobs of the account that failed for good (see GET /admin/jobs?status=dead).
+          format: int64
+          type: integer
+        displayName:
+          type: string
+        email:
+          type: string
+        error:
+          type:
+            - string
+            - "null"
+        id:
+          examples:
+            - acc_1
+          type: string
+        imapHost:
+          type: string
+        lastSyncAt:
+          format: date-time
+          type:
+            - string
+            - "null"
+        pendingOps:
+          description: Operations waiting for write-back to the mail server.
+          format: int64
+          type: integer
+        state:
+          enum:
+            - connecting
+            - discovering
+            - initial_sync
+            - live
+            - backoff
+            - auth_failed
+            - disabled
+          type: string
+        userEmail:
+          type: string
+        userId:
+          examples:
+            - u_1
+          type: string
+      required:
+        - id
+        - userId
+        - userEmail
+        - email
+        - displayName
+        - imapHost
+        - state
+        - error
+        - lastSyncAt
+        - pendingOps
+        - deadOps
+        - createdAt
+      type: object
+    AdminAccountsOutputBody:
+      additionalProperties: false
+      properties:
+        accounts:
+          items:
+            $ref: "#/components/schemas/AdminAccount"
+          type:
+            - array
+            - "null"
+      required:
+        - accounts
+      type: object
+    AdminCreateUserInputBody:
+      additionalProperties: false
+      properties:
+        displayName:
+          maxLength: 200
+          type: string
+        email:
+          format: email
+          maxLength: 254
+          minLength: 3
+          type: string
+        isAdmin:
+          type: boolean
+        password:
+          description: Silo password; generated and returned once as temporaryPassword when omitted.
+          maxLength: 1024
+          minLength: 10
+          type: string
+      required:
+        - email
+      type: object
+    AdminCreatedUser:
+      additionalProperties: false
+      properties:
+        accounts:
+          items:
+            $ref: "#/components/schemas/AdminUserAccount"
+          type:
+            - array
+            - "null"
+        createdAt:
+          format: date-time
+          type: string
+        disabled:
+          description: A disabled user cannot sign in; their sessions and account syncs are stopped.
+          type: boolean
+        displayName:
+          type: string
+        email:
+          type: string
+        id:
+          examples:
+            - u_1
+          type: string
+        isAdmin:
+          type: boolean
+        temporaryPassword:
+          description: Generated password when none was given; shown only this once.
+          type: string
+        totpEnabled:
+          type: boolean
+      required:
+        - id
+        - email
+        - displayName
+        - isAdmin
+        - disabled
+        - totpEnabled
+        - createdAt
+        - accounts
+      type: object
+    AdminJob:
+      additionalProperties: false
+      properties:
+        accountId:
+          description: Account the job belongs to; null for instance-wide jobs (sending, cleanup).
+          type:
+            - string
+            - "null"
+        attempts:
+          format: int64
+          type: integer
+        createdAt:
+          format: date-time
+          type: string
+        id:
+          examples:
+            - job_1
+          type: string
+        kind:
+          examples:
+            - imap_op
+          type: string
+        lastError:
+          type:
+            - string
+            - "null"
+        maxAttempts:
+          format: int64
+          type: integer
+        runAt:
+          format: date-time
+          type: string
+        status:
+          description: pending also covers a job being run (claimed by a worker).
+          enum:
+            - pending
+            - running
+            - done
+            - dead
+          type: string
+        userId:
+          description: Owner of the account; null for instance-wide jobs.
+          type:
+            - string
+            - "null"
+      required:
+        - id
+        - kind
+        - accountId
+        - userId
+        - status
+        - attempts
+        - maxAttempts
+        - lastError
+        - runAt
+        - createdAt
+      type: object
+    AdminJobsOutputBody:
+      additionalProperties: false
+      properties:
+        jobs:
+          items:
+            $ref: "#/components/schemas/AdminJob"
+          type:
+            - array
+            - "null"
+      required:
+        - jobs
+      type: object
+    AdminPatchUserInputBody:
+      additionalProperties: false
+      properties:
+        disabled:
+          description: true signs the user out everywhere and stops their account syncs; false restarts them.
+          type: boolean
+        displayName:
+          maxLength: 200
+          type: string
+        isAdmin:
+          type: boolean
+        password:
+          description: New Silo password (mode local); signs the user out everywhere.
+          maxLength: 1024
+          minLength: 10
+          type: string
+      type: object
+    AdminUser:
+      additionalProperties: false
+      properties:
+        accounts:
+          items:
+            $ref: "#/components/schemas/AdminUserAccount"
+          type:
+            - array
+            - "null"
+        createdAt:
+          format: date-time
+          type: string
+        disabled:
+          description: A disabled user cannot sign in; their sessions and account syncs are stopped.
+          type: boolean
+        displayName:
+          type: string
+        email:
+          type: string
+        id:
+          examples:
+            - u_1
+          type: string
+        isAdmin:
+          type: boolean
+        totpEnabled:
+          type: boolean
+      required:
+        - id
+        - email
+        - displayName
+        - isAdmin
+        - disabled
+        - totpEnabled
+        - createdAt
+        - accounts
+      type: object
+    AdminUserAccount:
+      additionalProperties: false
+      properties:
+        email:
+          type: string
+        error:
+          type:
+            - string
+            - "null"
+        id:
+          examples:
+            - acc_1
+          type: string
+        lastSyncAt:
+          format: date-time
+          type:
+            - string
+            - "null"
+        state:
+          enum:
+            - connecting
+            - discovering
+            - initial_sync
+            - live
+            - backoff
+            - auth_failed
+            - disabled
+          type: string
+      required:
+        - id
+        - email
+        - state
+        - lastSyncAt
+        - error
+      type: object
+    AdminUsersOutputBody:
+      additionalProperties: false
+      properties:
+        users:
+          items:
+            $ref: "#/components/schemas/AdminUser"
+          type:
+            - array
+            - "null"
+      required:
+        - users
+      type: object
     BackupCodesBody:
       additionalProperties: false
       properties:
@@ -2617,6 +2923,491 @@ paths:
       summary: Get the sync state of an account
       tags:
         - accounts
+  /admin/accounts:
+    get:
+      operationId: adminListAccounts
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AdminAccountsOutputBody"
+          description: OK
+        "401":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Unauthorized
+        "403":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Forbidden
+        "500":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Internal Server Error
+      security:
+        - cookieAuth: []
+        - bearerAuth: []
+      summary: List every mail account with its state
+      tags:
+        - admin
+  /admin/jobs:
+    get:
+      description: The newest 200 jobs matching the filters, without their payloads.
+      operationId: adminListJobs
+      parameters:
+        - description: Only jobs in this state; all when omitted.
+          explode: false
+          in: query
+          name: status
+          schema:
+            description: Only jobs in this state; all when omitted.
+            enum:
+              - pending
+              - dead
+            type: string
+        - description: Only jobs of this account.
+          explode: false
+          in: query
+          name: accountId
+          schema:
+            description: Only jobs of this account.
+            examples:
+              - acc_1
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AdminJobsOutputBody"
+          description: OK
+        "400":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Bad Request
+        "401":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Unauthorized
+        "403":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Forbidden
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Unprocessable Entity
+        "500":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Internal Server Error
+      security:
+        - cookieAuth: []
+        - bearerAuth: []
+      summary: List queued jobs
+      tags:
+        - admin
+  /admin/jobs/{id}:
+    delete:
+      description: Drops a job that is not running, e.g. a dead write-back operation (its local change is given up). 404 for running or unknown jobs.
+      operationId: adminDeleteJob
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            examples:
+              - job_1
+            type: string
+      responses:
+        "204":
+          description: No Content
+        "401":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Unauthorized
+        "403":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Forbidden
+        "404":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Not Found
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Unprocessable Entity
+        "500":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Internal Server Error
+      security:
+        - cookieAuth: []
+          csrfHeader: []
+        - bearerAuth: []
+      summary: Discard a job
+      tags:
+        - admin
+  /admin/jobs/{id}/retry:
+    post:
+      description: A dead (or waiting) job becomes pending, due now, with its attempt count reset. 404 for running or unknown jobs.
+      operationId: adminRetryJob
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            examples:
+              - job_1
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AdminJob"
+          description: OK
+        "401":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Unauthorized
+        "403":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Forbidden
+        "404":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Not Found
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Unprocessable Entity
+        "500":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Internal Server Error
+      security:
+        - cookieAuth: []
+          csrfHeader: []
+        - bearerAuth: []
+      summary: Run a job again
+      tags:
+        - admin
+  /admin/users:
+    get:
+      operationId: adminListUsers
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AdminUsersOutputBody"
+          description: OK
+        "401":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Unauthorized
+        "403":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Forbidden
+        "500":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Internal Server Error
+      security:
+        - cookieAuth: []
+        - bearerAuth: []
+      summary: List users with their accounts
+      tags:
+        - admin
+    post:
+      description: Mode local only (409 not_available in mode imap, where users appear on their first sign-in). No mail account is created; the user adds accounts after signing in. 409 user_exists for a taken email.
+      operationId: adminCreateUser
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AdminCreateUserInputBody"
+        required: true
+      responses:
+        "201":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AdminCreatedUser"
+          description: Created
+        "400":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Bad Request
+        "401":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Unauthorized
+        "403":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Forbidden
+        "409":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Conflict
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Unprocessable Entity
+        "500":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Internal Server Error
+      security:
+        - cookieAuth: []
+          csrfHeader: []
+        - bearerAuth: []
+      summary: Create a user
+      tags:
+        - admin
+  /admin/users/{id}:
+    delete:
+      description: Removes the user with their accounts and everything Silo cached for them; mail servers are not touched. Admins cannot delete themselves (409 admin_self_change).
+      operationId: adminDeleteUser
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            examples:
+              - u_1
+            type: string
+      responses:
+        "204":
+          description: No Content
+        "401":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Unauthorized
+        "403":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Forbidden
+        "404":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Not Found
+        "409":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Conflict
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Unprocessable Entity
+        "500":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Internal Server Error
+      security:
+        - cookieAuth: []
+          csrfHeader: []
+        - bearerAuth: []
+      summary: Delete a user
+      tags:
+        - admin
+    patch:
+      description: Disable or enable, grant or revoke admin rights, rename, set a new password (mode local; 409 not_available in mode imap). Admins cannot disable or demote themselves (409 admin_self_change).
+      operationId: adminUpdateUser
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            examples:
+              - u_1
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AdminPatchUserInputBody"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AdminUser"
+          description: OK
+        "400":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Bad Request
+        "401":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Unauthorized
+        "403":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Forbidden
+        "404":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Not Found
+        "409":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Conflict
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Unprocessable Entity
+        "500":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Internal Server Error
+      security:
+        - cookieAuth: []
+          csrfHeader: []
+        - bearerAuth: []
+      summary: Change a user
+      tags:
+        - admin
+  /admin/users/{id}/totp/reset:
+    post:
+      description: "For a lost device: the user signs in with the password alone and may set TOTP up again."
+      operationId: adminResetUserTotp
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            examples:
+              - u_1
+            type: string
+      responses:
+        "204":
+          description: No Content
+        "401":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Unauthorized
+        "403":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Forbidden
+        "404":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Not Found
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Unprocessable Entity
+        "500":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Internal Server Error
+      security:
+        - cookieAuth: []
+          csrfHeader: []
+        - bearerAuth: []
+      summary: Turn a user's TOTP off
+      tags:
+        - admin
   /attachments/{id}:
     get:
       description: A download (a_ id of a message attachment, or u_ id of an upload, e.g. a picture pasted into a draft); with inline=1 images are shown in the browser. An attachment that was not downloaded yet is fetched from the mail server together with its message (same wait and 503 as /messages/{id}/html).

@@ -26,9 +26,16 @@ LIMIT 200;
 
 -- name: AdminRetryJob :one
 -- A dead (or waiting) job runs again as soon as a worker is free.
-UPDATE jobs SET status = 'pending', attempts = 0, run_at = now(), locked_until = NULL
-WHERE id = $1 AND status IN ('pending', 'dead')
-RETURNING *;
+-- tenancy: exempt admin panel retries jobs of every account
+WITH j AS (
+  UPDATE jobs SET status = 'pending', attempts = 0, run_at = now(), locked_until = NULL
+  WHERE jobs.id = $1 AND jobs.status IN ('pending', 'dead')
+    AND (jobs.locked_until IS NULL OR jobs.locked_until < now())
+  RETURNING *
+)
+SELECT j.id, j.kind, j.account_id, a.user_id AS account_user_id, j.attempts, j.max_attempts, j.status,
+       j.last_error, j.run_at, j.created_at
+FROM j LEFT JOIN accounts a ON a.id = j.account_id;
 
 -- name: AdminDeleteJob :execrows
 DELETE FROM jobs WHERE id = $1 AND (status = 'dead' OR locked_until IS NULL OR locked_until < now());

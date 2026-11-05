@@ -274,6 +274,9 @@ func (s *Service) loginOnlineTx(ctx context.Context, addr, username, password, p
 		case err != nil:
 			return err
 		default:
+			if user.DisabledAt.Valid { // locked out by an admin
+				return ErrInvalidCredentials
+			}
 			if err := q.UpdateUserPasswordHash(ctx, sqlcgen.UpdateUserPasswordHashParams{ID: user.ID, PasswordHash: pgtype.Text{String: pwHash, Valid: true}}); err != nil {
 				return err
 			}
@@ -339,6 +342,9 @@ func (s *Service) loginOffline(ctx context.Context, addr, username, password str
 		}
 		if err != nil {
 			return err
+		}
+		if user.DisabledAt.Valid {
+			return ErrInvalidCredentials
 		}
 		if !user.PasswordHash.Valid || !s.hash.verify(password, user.PasswordHash.String) {
 			return ErrInvalidCredentials
