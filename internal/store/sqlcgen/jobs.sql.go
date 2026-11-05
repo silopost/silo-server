@@ -95,6 +95,23 @@ func (q *Queries) CompleteJob(ctx context.Context, id int64) error {
 	return err
 }
 
+const deferJob = `-- name: DeferJob :exec
+UPDATE jobs SET run_at = $2, locked_until = NULL, attempts = attempts - 1, last_error = $3 WHERE id = $1
+`
+
+type DeferJobParams struct {
+	ID        int64
+	RunAt     pgtype.Timestamptz
+	LastError pgtype.Text
+}
+
+// Reschedules a claimed job without counting the attempt (the handler asked
+// to wait, e.g. its account is offline).
+func (q *Queries) DeferJob(ctx context.Context, arg DeferJobParams) error {
+	_, err := q.db.Exec(ctx, deferJob, arg.ID, arg.RunAt, arg.LastError)
+	return err
+}
+
 const enqueueJob = `-- name: EnqueueJob :one
 INSERT INTO jobs (kind, account_id, group_id, payload, run_at)
 VALUES ($1, $2, $3, $4, COALESCE($5::timestamptz, now()))

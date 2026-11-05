@@ -13,7 +13,7 @@ import (
 var appTables = []string{
 	"accounts", "attachments", "blobs", "contacts", "drafts", "events", "filters",
 	"jobs", "labels", "mailbox_folders", "message_labels", "message_locations",
-	"message_references", "messages", "outbound", "search_history", "sessions",
+	"message_references", "messages", "op_messages", "outbound", "search_history", "sessions",
 	"snooze_items", "snoozes", "sync_cursors", "thread_labels", "threads", "users",
 }
 

@@ -227,6 +227,14 @@ type MessageReference struct {
 	Position        int16
 }
 
+type OpMessage struct {
+	JobID          int64
+	MessageID      int64
+	AccountID      int64
+	UserID         int64
+	ExpectFolderID pgtype.Int8
+}
+
 type Outbound struct {
 	ID                int64
 	UserID            int64

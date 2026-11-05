@@ -389,6 +389,22 @@ CREATE INDEX jobs_general ON jobs (run_at) WHERE status = 'pending' AND account_
 CREATE INDEX jobs_account ON jobs (account_id, run_at, id) WHERE status = 'pending';
 CREATE INDEX jobs_group   ON jobs (group_id);
 
+-- Messages of a pending imap_op job (plan 3.6). The job payload carries only the
+-- operation (op, target, flags); the messages live here so that coalescing is
+-- a row insert/delete and mail.DeriveSystemLabels can overlay the pending
+-- operations of a message with an index lookup instead of scanning job JSON.
+-- expect_folder_id is the folder the message was in when the operation was
+-- made (expectFrom). Rows go with their job (undo = DELETE jobs WHERE group_id).
+CREATE TABLE op_messages (
+  job_id           bigint NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
+  message_id       bigint NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+  account_id       bigint NOT NULL,
+  user_id          bigint NOT NULL,
+  expect_folder_id bigint NULL,
+  PRIMARY KEY (job_id, message_id)
+);
+CREATE INDEX op_messages_message ON op_messages (message_id);
+
 -- Wakes idle workers (LISTEN silo_jobs) as soon as a job is inserted; the
 -- payload is the account id or empty for general jobs.
 CREATE FUNCTION jobs_notify() RETURNS trigger LANGUAGE plpgsql AS $$

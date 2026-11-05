@@ -34,3 +34,8 @@ UPDATE jobs SET status = 'dead', locked_until = NULL, last_error = $2 WHERE id =
 -- name: ReleaseJob :exec
 -- Gives a claimed job back without counting the attempt (shutdown interrupted it).
 UPDATE jobs SET locked_until = NULL, attempts = attempts - 1 WHERE id = $1;
+
+-- name: DeferJob :exec
+-- Reschedules a claimed job without counting the attempt (the handler asked
+-- to wait, e.g. its account is offline).
+UPDATE jobs SET run_at = $2, locked_until = NULL, attempts = attempts - 1, last_error = $3 WHERE id = $1;
