@@ -15,17 +15,24 @@ import (
 
 // ThreadList is the answer of GET /threads (plan 5.2).
 type ThreadList struct {
-	Threads            []Thread `json:"threads"`
-	NextCursor         *string  `json:"nextCursor" doc:"Opaque; pass it as cursor for the next page. null on the last page."`
-	ResultSizeEstimate int      `json:"resultSizeEstimate" doc:"Threads in the view (exact for a label, an estimate otherwise)."`
+	Threads            []Thread  `json:"threads"`
+	NextCursor         *string   `json:"nextCursor" doc:"Opaque; pass it as cursor for the next page. null on the last page."`
+	ResultSizeEstimate int       `json:"resultSizeEstimate" doc:"Threads in the view (exact for a label; for a search the number of matching threads, at most 2000)."`
+	Approximate        bool      `json:"approximate,omitempty" doc:"Set (true) when a search hit its time limit (3 s): the page is empty and may be retried with a narrower query. Absent otherwise."`
+	Indexing           *Indexing `json:"indexing,omitempty" doc:"Present with q only: how much of the account's mail has its body indexed; results may miss words of bodies not downloaded yet."`
 }
 
 type listThreadsInput struct {
 	AccountID string `query:"accountId" doc:"Account; the account of labelId, or the active account, when omitted."`
 	LabelID   string `query:"labelId" doc:"System key (INBOX, ...) or l_ id. Omitted: all mail except threads entirely in Trash or Spam."`
-	Q         string `query:"q" maxLength:"500" doc:"Full-text query (plain words; no operators yet)."`
+	Q         string `query:"q" maxLength:"500" doc:"Search query in the Gmail syntax (from:, to:, subject:, label:, in:, is:, has:, before:, after:, older_than:, newer_than:, larger:, smaller:, filename:, list:, cc:, bcc:, deliveredto:, rfc822msgid:, OR, -, ( ), { }, \"phrases\"); parsed on the server. Saved in the search history of the account (first page only)."`
 	Cursor    string `query:"cursor"`
 	Limit     int    `query:"limit" minimum:"1" maximum:"100" default:"50"`
+}
+
+// Indexing is the progress of body indexing of a searched account.
+type Indexing struct {
+	Done float64 `json:"done" minimum:"0" maximum:"1" example:"0.62" doc:"Share of the account's messages whose body is downloaded and indexed; 1 when the backfill is over."`
 }
 
 type listThreadsOutput struct{ Body ThreadList }
@@ -134,9 +141,13 @@ func (d *deps) registerThreadViews(a huma.API) {
 		OperationID: "listThreads", Method: http.MethodGet, Path: "/threads", Tags: []string{"threads"},
 		Summary: "List threads of a label (or all mail), newest first",
 		Description: "Keyset pagination: the cost does not depend on the page number. Threads entirely in Trash or " +
-			"Spam are left out of the all-mail view. q is a plain full-text query over subject, sender, " +
-			"recipients, attachment names and downloaded body text.",
-		Errors: []int{http.StatusBadRequest, http.StatusUnauthorized, http.StatusNotFound},
+			"Spam are left out of the all-mail view. With q: the threads with a message matching the query (plan 3.12; " +
+			"messages in Spam and Trash only with in:spam, in:trash or in:anywhere), newest first, at most 2000; labelId " +
+			"narrows them like in:. Words match prefixes of words in the subject, people, attachment names and the " +
+			"downloaded body (see indexing); has:attachment works before bodies are downloaded. A search that runs over " +
+			"3 s answers an empty page with approximate: true. 422 invalid_query: a closing bracket without its " +
+			"opening one, or over 64 terms or 16 nested brackets (unclosed brackets and quotes are accepted).",
+		Errors: []int{http.StatusBadRequest, http.StatusUnauthorized, http.StatusNotFound, http.StatusUnprocessableEntity},
 	}), func(ctx context.Context, in *listThreadsInput) (*listThreadsOutput, error) {
 		userID := sessionFrom(ctx).UserID
 		p := mailview.ListParams{UserID: userID, Query: strings.TrimSpace(in.Q), Cursor: in.Cursor, Limit: in.Limit}
@@ -184,6 +195,10 @@ func (d *deps) registerThreadViews(a huma.API) {
 			out.Body.Threads = append(out.Body.Threads, threadOf(t))
 		}
 		out.Body.NextCursor, out.Body.ResultSizeEstimate = page.NextCursor, page.ResultSizeEstimate
+		out.Body.Approximate = page.Approximate
+		if page.IndexingDone != nil {
+			out.Body.Indexing = &Indexing{Done: *page.IndexingDone}
+		}
 		return out, nil
 	})
 

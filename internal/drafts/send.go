@@ -325,9 +325,7 @@ func (s *Service) backToDraft(ctx context.Context, tx pgx.Tx, accountID, userID,
 }
 
 // Contact is an autocomplete suggestion.
-type Contact struct {
-	Email, Name string
-}
+type Contact = mail.Contact
 
 // AutocompleteLimit is the number of suggestions (plan 5.1).
 const AutocompleteLimit = 8
@@ -337,27 +335,5 @@ const AutocompleteLimit = 8
 // first, then the most recent. Contacts are fed by ingest (From of received,
 // To/Cc of sent messages) and by sends from Silo.
 func (s *Service) Autocomplete(ctx context.Context, userID int64, q string) ([]Contact, error) {
-	q = strings.TrimSpace(q)
-	out := []Contact{}
-	if q == "" {
-		return out, nil
-	}
-	like := strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`).Replace(strings.ToLower(q)) + "%"
-	rows, err := s.o.Pool.Query(ctx, `
-SELECT email::text, name FROM contacts
-WHERE user_id = $1 AND (lower(email::text) LIKE $2 OR lower(name) LIKE $2 OR lower(name) LIKE '% ' || $2)
-ORDER BY sent_count DESC, last_interaction_at DESC NULLS LAST, received_count DESC, email
-LIMIT $3`, userID, like, AutocompleteLimit)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var c Contact
-		if err := rows.Scan(&c.Email, &c.Name); err != nil {
-			return nil, err
-		}
-		out = append(out, c)
-	}
-	return out, rows.Err()
+	return mail.SuggestContacts(ctx, s.o.Pool, userID, q, AutocompleteLimit)
 }

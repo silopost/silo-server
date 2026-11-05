@@ -491,6 +491,20 @@ components:
       required:
         - ids
       type: object
+    Indexing:
+      additionalProperties: false
+      properties:
+        done:
+          description: Share of the account's messages whose body is downloaded and indexed; 1 when the backfill is over.
+          examples:
+            - 0.62
+          format: double
+          maximum: 1
+          minimum: 0
+          type: number
+      required:
+        - done
+      type: object
     Label:
       additionalProperties: false
       properties:
@@ -1075,6 +1089,44 @@ components:
             - rebuild
           type: string
       type: object
+    SearchSuggestion:
+      additionalProperties: false
+      properties:
+        kind:
+          description: "history: a recent query; contact: from:/to:/cc:/bcc: an address; label: label:/in: a user or folder label; operator: an operator."
+          enum:
+            - history
+            - contact
+            - label
+            - operator
+          type: string
+        label:
+          description: What to show in the list.
+          examples:
+            - Jan Kowalski <jan@firma.pl>
+          type: string
+        text:
+          description: The whole query after accepting the suggestion (the last token replaced); put it in the search box as is.
+          examples:
+            - "from:jan@firma.pl "
+          type: string
+      required:
+        - kind
+        - text
+        - label
+      type: object
+    SearchSuggestions:
+      additionalProperties: false
+      properties:
+        suggestions:
+          items:
+            $ref: "#/components/schemas/SearchSuggestion"
+          type:
+            - array
+            - "null"
+      required:
+        - suggestions
+      type: object
     SendDraftBody:
       additionalProperties: false
       properties:
@@ -1475,13 +1527,19 @@ components:
     ThreadList:
       additionalProperties: false
       properties:
+        approximate:
+          description: "Set (true) when a search hit its time limit (3 s): the page is empty and may be retried with a narrower query. Absent otherwise."
+          type: boolean
+        indexing:
+          $ref: "#/components/schemas/Indexing"
+          description: "Present with q only: how much of the account's mail has its body indexed; results may miss words of bodies not downloaded yet."
         nextCursor:
           description: Opaque; pass it as cursor for the next page. null on the last page.
           type:
             - string
             - "null"
         resultSizeEstimate:
-          description: Threads in the view (exact for a label, an estimate otherwise).
+          description: Threads in the view (exact for a label; for a search the number of matching threads, at most 2000).
           format: int64
           type: integer
         threads:
@@ -3267,6 +3325,135 @@ paths:
       summary: Undo send
       tags:
         - drafts
+  /search/history:
+    delete:
+      description: "Removes one query (query=) or the whole search history of the account. Idempotent: 204 also when nothing matched."
+      operationId: deleteSearchHistory
+      parameters:
+        - description: Account; the active account when omitted.
+          explode: false
+          in: query
+          name: accountId
+          schema:
+            description: Account; the active account when omitted.
+            type: string
+        - description: "The query to forget (exact text, as in a history suggestion); omitted: the whole history of the account."
+          explode: false
+          in: query
+          name: query
+          schema:
+            description: "The query to forget (exact text, as in a history suggestion); omitted: the whole history of the account."
+            maxLength: 500
+            type: string
+      responses:
+        "204":
+          description: No Content
+        "400":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Bad Request
+        "401":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Unauthorized
+        "403":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Forbidden
+        "404":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Not Found
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Unprocessable Entity
+        "500":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Internal Server Error
+      security:
+        - cookieAuth: []
+          csrfHeader: []
+        - bearerAuth: []
+      summary: Forget searches
+      tags:
+        - search
+  /search/suggest:
+    get:
+      description: "Everything is computed on the server (plan 2.6): up to 5 recent queries of the account starting with q (the 5 most recent for an empty q), then for the last token of q up to 5 contacts (from:<email>, or the key typed: to:, cc:, bcc:), up to 5 user or folder labels (label:<name>, or in:<name>) and up to 5 operators the token is a prefix of (is:u -> is:unread). A query is saved in the history when it is searched (GET /threads?q=, first page); the 50 most recent are kept per account."
+      operationId: suggestSearch
+      parameters:
+        - description: Account; the active account when omitted.
+          explode: false
+          in: query
+          name: accountId
+          schema:
+            description: Account; the active account when omitted.
+            type: string
+        - description: The query as typed so far (may be empty).
+          explode: false
+          in: query
+          name: q
+          schema:
+            description: The query as typed so far (may be empty).
+            maxLength: 500
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SearchSuggestions"
+          description: OK
+        "400":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Bad Request
+        "401":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Unauthorized
+        "404":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Not Found
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Unprocessable Entity
+        "500":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Internal Server Error
+      security:
+        - cookieAuth: []
+        - bearerAuth: []
+      summary: Suggest completions for the search box
+      tags:
+        - search
   /session:
     delete:
       operationId: logout
@@ -3473,7 +3660,7 @@ paths:
         - session
   /threads:
     get:
-      description: "Keyset pagination: the cost does not depend on the page number. Threads entirely in Trash or Spam are left out of the all-mail view. q is a plain full-text query over subject, sender, recipients, attachment names and downloaded body text."
+      description: "Keyset pagination: the cost does not depend on the page number. Threads entirely in Trash or Spam are left out of the all-mail view. With q: the threads with a message matching the query (plan 3.12; messages in Spam and Trash only with in:spam, in:trash or in:anywhere), newest first, at most 2000; labelId narrows them like in:. Words match prefixes of words in the subject, people, attachment names and the downloaded body (see indexing); has:attachment works before bodies are downloaded. A search that runs over 3 s answers an empty page with approximate: true. 422 invalid_query: a closing bracket without its opening one, or over 64 terms or 16 nested brackets (unclosed brackets and quotes are accepted)."
       operationId: listThreads
       parameters:
         - description: Account; the account of labelId, or the active account, when omitted.
@@ -3490,12 +3677,12 @@ paths:
           schema:
             description: "System key (INBOX, ...) or l_ id. Omitted: all mail except threads entirely in Trash or Spam."
             type: string
-        - description: Full-text query (plain words; no operators yet).
+        - description: Search query in the Gmail syntax (from:, to:, subject:, label:, in:, is:, has:, before:, after:, older_than:, newer_than:, larger:, smaller:, filename:, list:, cc:, bcc:, deliveredto:, rfc822msgid:, OR, -, ( ), { }, "phrases"); parsed on the server. Saved in the search history of the account (first page only).
           explode: false
           in: query
           name: q
           schema:
-            description: Full-text query (plain words; no operators yet).
+            description: Search query in the Gmail syntax (from:, to:, subject:, label:, in:, is:, has:, before:, after:, older_than:, newer_than:, larger:, smaller:, filename:, list:, cc:, bcc:, deliveredto:, rfc822msgid:, OR, -, ( ), { }, "phrases"); parsed on the server. Saved in the search history of the account (first page only).
             maxLength: 500
             type: string
         - explode: false

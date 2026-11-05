@@ -57,12 +57,14 @@ type View struct {
 	fetcher BodyFetcher
 	// FetchWait bounds the wait for an on-demand download (plan 5.1: 10 s).
 	FetchWait time.Duration
+	// SearchTimeout is the statement_timeout of a search (plan 3.12: 3 s).
+	SearchTimeout time.Duration
 }
 
 // New returns a View. blobs and fetcher may be nil (content endpoints then
 // answer from the mirror only).
 func New(pool *pgxpool.Pool, blobs blob.BlobStore, fetcher BodyFetcher) *View {
-	return &View{pool: pool, q: sqlcgen.New(pool), blobs: blobs, fetcher: fetcher, FetchWait: 10 * time.Second}
+	return &View{pool: pool, q: sqlcgen.New(pool), blobs: blobs, fetcher: fetcher, FetchWait: 10 * time.Second, SearchTimeout: DefaultSearchTimeout}
 }
 
 // ResolveAccount returns accountID when it belongs to the user, or the active
@@ -118,7 +120,8 @@ type ListParams struct {
 	AccountID int64
 	// LabelID is the label to list; 0 lists "All mail" of the account.
 	LabelID int64
-	// Query is a plain full-text query (no operators).
+	// Query is a search query (internal/search); with one, the page lists
+	// the threads with a matching message (LabelID narrows it like in:).
 	Query  string
 	Cursor string
 	Limit  int
@@ -129,6 +132,11 @@ type ThreadPage struct {
 	Threads            []ops.Thread
 	NextCursor         *string
 	ResultSizeEstimate int
+	// Approximate: the search hit its time limit; the page is empty.
+	Approximate bool
+	// IndexingDone is set for a search: the share of messages whose body is
+	// indexed (IndexingDone).
+	IndexingDone *float64
 }
 
 type threadRow struct {
@@ -189,6 +197,9 @@ func (v *View) ListThreads(ctx context.Context, p ListParams) (*ThreadPage, erro
 		limit = DefaultLimit
 	}
 	limit = min(limit, MaxLimit)
+	if strings.TrimSpace(p.Query) != "" {
+		return v.searchList(ctx, p, limit)
+	}
 	at, id, first, err := decodeCursor(p.Cursor)
 	if err != nil {
 		return nil, err
@@ -199,8 +210,6 @@ func (v *View) ListThreads(ctx context.Context, p ListParams) (*ThreadPage, erro
 	}
 	var rows []threadRow
 	switch {
-	case strings.TrimSpace(p.Query) != "":
-		rows, err = v.search(ctx, p, tstz(at, first), curID, limit+1)
 	case p.LabelID != 0:
 		var rs []sqlcgen.ListThreadsByLabelRow
 		rs, err = v.q.ListThreadsByLabel(ctx, sqlcgen.ListThreadsByLabelParams{
@@ -248,25 +257,18 @@ func (v *View) ListThreads(ctx context.Context, p ListParams) (*ThreadPage, erro
 	if err := ops.FillDraftIDs(ctx, v.pool, page.Threads); err != nil {
 		return nil, err
 	}
-	page.ResultSizeEstimate = len(page.Threads)
-	if page.NextCursor != nil || p.Cursor != "" || strings.TrimSpace(p.Query) == "" {
-		page.ResultSizeEstimate, err = v.estimate(ctx, p, len(page.Threads), page.NextCursor != nil)
-		if err != nil {
-			return nil, err
-		}
+	page.ResultSizeEstimate, err = v.estimate(ctx, p)
+	if err != nil {
+		return nil, err
 	}
 	return page, nil
 }
 
 // estimate is the number of threads of the view: the exact count of the label
-// (an index-only scan), the thread count of the account for "All mail", and
-// for a search the rows seen so far.
-func (v *View) estimate(ctx context.Context, p ListParams, got int, more bool) (int, error) {
+// (an index-only scan), the thread count of the account for "All mail".
+func (v *View) estimate(ctx context.Context, p ListParams) (int, error) {
 	var n int
-	switch {
-	case strings.TrimSpace(p.Query) != "":
-		return got, nil
-	case p.LabelID != 0:
+	if p.LabelID != 0 {
 		err := v.pool.QueryRow(ctx, `SELECT count(*)::int FROM thread_labels WHERE user_id = $1 AND label_id = $2 AND NOT hidden`, p.UserID, p.LabelID).Scan(&n)
 		return n, err
 	}
@@ -279,48 +281,6 @@ func ptrTime(t pgtype.Timestamptz) *time.Time {
 		return nil
 	}
 	return &t.Time
-}
-
-// search is the list with a full-text query: threads with a message whose
-// search_tsv matches (plainto_tsquery, no operators; plan 3.12 is a later
-// slice).
-func (v *View) search(ctx context.Context, p ListParams, at pgtype.Timestamptz, curID int64, n int) ([]threadRow, error) {
-	const cols = `t.id, t.account_id, t.subject, t.snippet, t.last_message_at, t.message_count, t.unread_count, t.has_attachments,
-       t.participants, t.snoozed_until, t.pending_ops, %s,
-       ARRAY(SELECT x.label_id FROM thread_labels x WHERE x.thread_id = t.id AND NOT x.hidden ORDER BY x.label_id)::bigint[]`
-	const match = `EXISTS (SELECT 1 FROM messages m WHERE m.thread_id = t.id AND m.search_tsv @@ plainto_tsquery('simple', unaccent($1)))`
-	var q string
-	var args []any
-	if p.LabelID != 0 {
-		q = `SELECT ` + fmt.Sprintf(cols, "tl.sort_at") + `
-FROM thread_labels tl JOIN threads t ON t.id = tl.thread_id
-WHERE tl.user_id = $2 AND tl.label_id = $3 AND NOT tl.hidden AND (tl.sort_at, tl.thread_id) < ($4::timestamptz, $5::bigint) AND ` + match + `
-ORDER BY tl.sort_at DESC, tl.thread_id DESC LIMIT $6`
-		args = []any{p.Query, p.UserID, p.LabelID, at, curID, n}
-	} else {
-		q = `SELECT ` + fmt.Sprintf(cols, "t.sort_at") + `
-FROM threads t
-WHERE t.user_id = $2 AND t.account_id = $3 AND (t.sort_at, t.id) < ($4::timestamptz, $5::bigint) AND ` + match + `
-  AND EXISTS (SELECT 1 FROM thread_labels x JOIN labels l ON l.id = x.label_id WHERE x.thread_id = t.id AND NOT x.hidden
-              AND l.system_key IS DISTINCT FROM 'TRASH' AND l.system_key IS DISTINCT FROM 'SPAM')
-ORDER BY t.sort_at DESC, t.id DESC LIMIT $6`
-		args = []any{p.Query, p.UserID, p.AccountID, at, curID, n}
-	}
-	rows, err := v.pool.Query(ctx, q, args...)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var out []threadRow
-	for rows.Next() {
-		var r threadRow
-		if err := rows.Scan(&r.ID, &r.AccountID, &r.Subject, &r.Snippet, &r.LastMessageAt, &r.MessageCount, &r.UnreadCount,
-			&r.HasAttachments, &r.Participants, &r.SnoozedUntil, &r.PendingOps, &r.SortAt, &r.LabelIDs); err != nil {
-			return nil, err
-		}
-		out = append(out, r)
-	}
-	return out, rows.Err()
 }
 
 func threadOf(r threadRow, keys map[int64]string) ops.Thread {

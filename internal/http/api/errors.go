@@ -11,6 +11,7 @@ import (
 
 	"github.com/silopost/silo-server/internal/accounts"
 	"github.com/silopost/silo-server/internal/mailview"
+	"github.com/silopost/silo-server/internal/search"
 )
 
 // Stable machine-readable error codes (plan 5.3). The frontend branches on these.
@@ -33,6 +34,7 @@ const (
 	CodeLabelExists        = "label_exists"
 	CodeFolderNotEmpty     = "folder_not_empty"
 	CodeContentUnavailable = "content_not_available"
+	CodeInvalidQuery       = "invalid_query"
 	CodeInternal           = "internal_error"
 )
 
@@ -188,6 +190,8 @@ func viewError(err error) error {
 		return problem(http.StatusBadRequest, CodeValidation, strings.TrimPrefix(err.Error(), "mailview: invalid request: "))
 	case errors.Is(err, mailview.ErrContentNotAvailable):
 		return errContentUnavailable()
+	case errors.Is(err, search.ErrInvalidQuery):
+		return problem(http.StatusUnprocessableEntity, CodeInvalidQuery, strings.TrimPrefix(err.Error(), "search: "))
 	}
 	return errInternal(err)
 }
