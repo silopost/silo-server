@@ -90,6 +90,17 @@ func (s *session) discover(ctx context.Context) (map[int64]*imap.StatusData, err
 			if seen[f.name] {
 				continue
 			}
+			// A folder made by POST /labels whose CREATE has not run yet.
+			if f.uidValidity == 0 {
+				var pend bool
+				if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM jobs WHERE account_id = $1 AND kind = 'imap_op' AND status IN ('pending', 'running')
+					AND payload->>'op' = 'create_folder' AND payload->>'name' = $2)`, s.acc.id, f.name).Scan(&pend); err != nil {
+					return err
+				}
+				if pend {
+					continue
+				}
+			}
 			if e := renameTarget(f, fresh); e != nil {
 				s.log.Info("folder renamed on the server", "from", f.name, "to", e.name)
 				if err := renameFolder(ctx, tx, f, e.name, e.delim); err != nil {

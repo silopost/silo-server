@@ -32,7 +32,10 @@ const opMaxAge = 7 * 24 * time.Hour
 
 // opRequest hands an imap_op job to the session that executes it.
 type opRequest struct {
-	job  worker.Job
+	job worker.Job
+	// fn, when set, replaces the job: work on the ops connection that is not
+	// a queued operation (content on demand).
+	fn   func(ctx context.Context, s *session, c *conn) error
 	done chan error
 }
 
@@ -239,6 +242,7 @@ ORDER BY l.message_id, l.folder_id`, msgIDs)
 	// Server commands; their effects are applied to the mirror in fin.
 	var fin []func(tx pgx.Tx) error
 	touched := map[int64]bool{}
+	needDiscover := false
 	byFolder := func(sel func(it opItem) []opLoc) map[int64][]opLoc {
 		out := map[int64][]opLoc{}
 		for _, it := range items {
@@ -297,6 +301,18 @@ ORDER BY l.message_id, l.folder_id`, msgIDs)
 			touched[fid], touched[target.id] = true, true
 			fin = append(fin, f)
 		}
+	case mail.OpCreateFolder:
+		if err := s.createFolder(ctx, c, p.Name); err != nil {
+			return err
+		}
+		needDiscover = true
+	case mail.OpDeleteFolder:
+		if f := folders[p.FolderID]; f != nil {
+			if err := c.await(ctx, 0, func() error { return c.imap().Delete(f.name).Wait() }); err != nil {
+				return err
+			}
+		}
+		needDiscover = true
 	case mail.OpExpunge:
 		groups := byFolder(func(it opItem) []opLoc {
 			var out []opLoc
@@ -359,6 +375,9 @@ ORDER BY l.message_id, l.folder_id`, msgIDs)
 	}
 	if len(gone) > 0 {
 		s.log.Info("write-back skipped messages that are gone", "job", job.ID, "messages", len(gone))
+	}
+	if needDiscover {
+		s.w.request(func(pd *pending) { pd.discover = true })
 	}
 	// Plan 3.5.4: a finished operation triggers an incremental sync of the
 	// folders it touched.
@@ -724,4 +743,18 @@ func numsOf(s imap.NumSet) []imap.UID {
 		return n
 	}
 	return nil
+}
+
+// createFolder runs CREATE for the labels API; an existing folder is fine.
+func (s *session) createFolder(ctx context.Context, c *conn, name string) error {
+	if strings.TrimSpace(name) == "" {
+		return fmt.Errorf("%w: empty folder name", errOpPermanent)
+	}
+	err := c.await(ctx, 0, func() error { return c.imap().Create(name, nil).Wait() })
+	var ie *imap.Error
+	if err == nil || errors.As(err, &ie) && ie.Code == imap.ResponseCodeAlreadyExists {
+		s.log.Info("created folder", "name", name)
+		return nil
+	}
+	return err
 }

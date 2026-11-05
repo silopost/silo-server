@@ -16,6 +16,11 @@ const (
 	OpMove    = "move"
 	OpFlags   = "flags"
 	OpExpunge = "expunge"
+
+	// Folder operations (labels API): no messages, the job carries Name or
+	// FolderID. They are invisible to the overlay (it joins op_messages).
+	OpCreateFolder = "create_folder"
+	OpDeleteFolder = "delete_folder"
 )
 
 // OpPayload is jobs.payload of an imap_op job.
@@ -27,6 +32,10 @@ type OpPayload struct {
 	// flags (and move: flags set before moving, e.g. $Junk).
 	Add    []string `json:"add,omitempty"`
 	Remove []string `json:"remove,omitempty"`
+	// create_folder: the folder name as the user typed it (hierarchy with /).
+	Name string `json:"name,omitempty"`
+	// delete_folder: mailbox_folders.id.
+	FolderID int64 `json:"folderId,omitempty"`
 }
 
 // pendingOp is one pending operation of one message.

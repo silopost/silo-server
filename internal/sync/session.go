@@ -99,7 +99,7 @@ func (s *session) startOps(ctx context.Context) {
 				s.opsDone <- nil
 				return
 			case r := <-s.opsReq:
-				err := s.execOp(octx, c, r.job)
+				err := s.runRequest(octx, c, r)
 				r.done <- err
 				if err != nil && !isCommandError(err) && !errors.Is(err, errOpPermanent) && octx.Err() == nil {
 					s.opsDone <- err // connection trouble: the session reconnects
@@ -461,7 +461,7 @@ func (s *session) tx(ctx context.Context, fn func(tx pgx.Tx) error) error {
 // serveOp executes a write-back job on the sync connection; connection
 // errors end the session.
 func (s *session) serveOp(ctx context.Context, r opRequest) error {
-	err := s.execOp(ctx, s.sc, r.job)
+	err := s.runRequest(ctx, s.sc, r)
 	r.done <- err
 	if err != nil && !isCommandError(err) && !errors.Is(err, errOpPermanent) {
 		return err
