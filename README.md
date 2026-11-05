@@ -154,6 +154,44 @@ accept `50MB` style values, rates `5MB/s`, durations `5m`. Worth knowing:
   `thread.updated` carry `snoozedUntil`. Waking needs a running Silo (mail waits safely in
   Snoozed); `snooze_items` point at messages, not UIDs, so a snooze survives a
   UIDVALIDITY change or a re-created Snoozed folder.
+- Filters (`internal/filters`, plan 3.11): `GET /filters?accountId=` (in `position`
+  order), `GET/PUT/DELETE /filters/{id}`, `POST /filters` → `Filter`
+  `{id: f_…, accountId, name, criteria, criteriaNormalized, actions, enabled, position,
+  createdAt, updatedAt}`. `criteria` is a query of the search syntax (the same parser,
+  AST and semantics as `GET /threads?q=`; `422 invalid_query` likewise; empty or only
+  `in:anywhere` is `422 invalid_filter`); `actions`: `archive` (skip the inbox),
+  `markRead`, `star`, `important`, `addLabelIds` (user labels of the filter's account,
+  else `422 invalid_label`), `trash` (not with `archive`), `forwardTo`; at least one.
+  `PUT` replaces the whole filter; `position` (0-based, in `POST`/`PUT`) moves it and the
+  others shift — that is how filters are reordered. Matching runs on the server only:
+  ingest queues `filter_eval` for messages that appear in INBOX for the first time with
+  `internal_date >= accounts.filters_since` (set when the account first goes live; older
+  mail is only touched by apply); the enabled filters run in memory (`search.Matcher`)
+  in position order and the actions of every matching filter are applied together
+  (trash wins over archive) as `imap_op` operations **without the undo window** (no
+  `operationId`; `operation.failed` still reports a job given up). A filter with a word
+  of the body (a term without a key) or `forwardTo` waits up to 10 s from ingest for the
+  body (the sync downloads new INBOX bodies at once, else a priority fetch), then runs
+  on the headers. A new message archived or trashed by a filter does not wake its
+  snoozed thread; one left in INBOX does. `forwardTo` sends a copy at once through the
+  compose path (a forward draft, sent without the undo-send window, saved in Sent),
+  never of the account's own mail and never by apply. `POST /filters/{id}/apply` →
+  `202 {jobId, matchedEstimate}` queues `filter_apply`: the same AST as SQL over the
+  account's messages (drafts and, unless the criteria name them, Spam/Trash left out),
+  in batches of 500 operations without undo, then the event `filter.applied
+  {filterId, accountId, messages, threads}`. Migration `000007` adds `filters.name`,
+  `enabled`, `updated_at`.
+- Settings: `GET /settings` and `PATCH /settings` (JSON merge: only the fields sent
+  change; `activeAccountId: null` clears it) over `users.settings`; the same object is
+  `settings` of `GET /session`. Fields: `density` (`default|comfortable|compact`),
+  `undoSendSeconds` (5/10/20/30: the undo-send window), `signature` (HTML ≤ 32 KiB,
+  stored sanitized like message HTML), `timezone` (IANA name: `before:`/`after:` of
+  search and filters, snooze presets; else `422 invalid_timezone`),
+  `keyboardShortcutsEnabled`, `conversationView`, `activeAccountId` (an account of the
+  user), `desktopNotifications` (the preference is shared; each client asks the system
+  for its own permission); other bad values are `422 invalid_setting`. The answer carries
+  `updatedAt` (`users.settings.updated_at`); other sessions get `settings.updated
+  {updatedAt}` and reload.
 - Sessions and accounts (`internal/auth`, `internal/accounts`): `POST/GET/DELETE /session`, `GET /sessions`, `DELETE /sessions/{id}`, `GET/POST /accounts`, `POST /accounts/test`, `GET/PATCH/DELETE /accounts/{id}`, `GET /accounts/{id}/folders`, `POST /accounts/{id}/resync`, `GET /accounts/{id}/sync-status`, `GET /meta`. Accounts carry `position` and are listed in that order (`GET /session`, `GET /accounts`). Migration `000005` turns `sent_append` on for generic accounts created before sending existed. The full list is `api/openapi.yaml`.
 - Reading the mailbox (`internal/mailview`): `GET /labels` (counters, pseudo label
   `UNREAD`), `POST /labels` (user label with an IMAP keyword, or a folder: `CREATE`
@@ -191,6 +229,7 @@ accept `50MB` style values, rates `5MB/s`, durations `5m`. Worth knowing:
   announced by `NOTIFY silo_events` at commit; `X-Silo-Client` is echoed as `origin`.
   `operation.failed` carries `kind` (`move`, `flags`, `labels`, `expunge`, `append`,
   `delete_draft`, `create_folder`, `delete_folder`) so the client can name the action.
+  `filter.applied` ends `POST /filters/{id}/apply`; `settings.updated` follows `PATCH /settings`.
 - Benchmark (nightly workflow): `SILO_BENCH_INBOX=true go test ./internal/mailview
   -run TestInboxListBenchmark -v` loads 100k threads / 300k messages and checks
   p95 < 50 ms and the `thread_labels_list` plan of the inbox query.
