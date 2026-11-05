@@ -54,7 +54,7 @@ func selectInbox(t *testing.T, c *imapclient.Client) {
 
 func uidOf(t *testing.T, c *imapclient.Client, hdr string) imap.UID {
 	t.Helper()
-	data, err := c.UIDSearch(&imap.SearchCriteria{Header: []imap.SearchCriteriaHeaderField{{Key: "Message-ID", Value: hdr}}}, nil).Wait()
+	data, err := c.UIDSearch(&imap.SearchCriteria{Header: []imap.SearchCriteriaHeaderField{{Key: "Message-ID", Value: hdr}}, NotFlag: []imap.Flag{imap.FlagDeleted}}, nil).Wait()
 	must(t, err)
 	uids := data.AllUIDs()
 	if len(uids) != 1 {

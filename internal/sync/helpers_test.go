@@ -10,6 +10,7 @@ import (
 	"net"
 	"os"
 	"strconv"
+	"strings"
 	stdsync "sync"
 	"sync/atomic"
 	"testing"
@@ -358,6 +359,46 @@ type proxy struct {
 	up      bool
 	conns   []net.Conn
 	accepts atomic.Int64
+	lines   []string // client -> server lines (commands)
+}
+
+// cmdLog records the commands clients send through the proxy.
+type cmdLog struct {
+	p   *proxy
+	buf []byte
+}
+
+func (l *cmdLog) Write(b []byte) (int, error) {
+	l.buf = append(l.buf, b...)
+	for {
+		i := bytes.Index(l.buf, []byte{13, 10})
+		if i < 0 {
+			break
+		}
+		line := string(l.buf[:i])
+		l.buf = l.buf[i+2:]
+		l.p.mu.Lock()
+		l.p.lines = append(l.p.lines, line)
+		l.p.mu.Unlock()
+	}
+	return len(b), nil
+}
+
+// count returns how many recorded commands contain all the parts.
+func (p *proxy) count(parts ...string) int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	n := 0
+next:
+	for _, l := range p.lines {
+		for _, s := range parts {
+			if !strings.Contains(strings.ToUpper(l), strings.ToUpper(s)) {
+				continue next
+			}
+		}
+		n++
+	}
+	return n
 }
 
 func newProxy(t *testing.T, target string) *proxy {
@@ -397,7 +438,7 @@ func (p *proxy) serve() {
 			p.mu.Lock()
 			p.conns = append(p.conns, b)
 			p.mu.Unlock()
-			go func() { _, _ = io.Copy(b, c); b.Close() }()
+			go func() { _, _ = io.Copy(io.MultiWriter(b, &cmdLog{p: p}), c); b.Close() }()
 			_, _ = io.Copy(c, b)
 			c.Close()
 		}()
