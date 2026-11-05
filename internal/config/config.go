@@ -86,6 +86,17 @@ type Config struct {
 
 	BlobBackend string `env:"SILO_BLOB_BACKEND" envDefault:"fs"`
 	BlobFSDir   string `env:"SILO_BLOB_FS_DIR" envDefault:"/data/blobs"`
+
+	// SILO_BLOB_BACKEND=s3 (S3Store): an S3-compatible bucket (MinIO, AWS,
+	// ...). The bucket must exist.
+	BlobS3Endpoint  string `env:"SILO_BLOB_S3_ENDPOINT"` // host:port or URL
+	BlobS3Bucket    string `env:"SILO_BLOB_S3_BUCKET"`
+	BlobS3AccessKey string `env:"SILO_BLOB_S3_ACCESS_KEY"`
+	BlobS3SecretKey string `env:"SILO_BLOB_S3_SECRET_KEY"`
+	BlobS3Region    string `env:"SILO_BLOB_S3_REGION" envDefault:"us-east-1"`
+	BlobS3Prefix    string `env:"SILO_BLOB_S3_PREFIX"`
+	BlobS3UseSSL    bool   `env:"SILO_BLOB_S3_USE_SSL" envDefault:"true"`
+	BlobS3PathStyle bool   `env:"SILO_BLOB_S3_PATH_STYLE" envDefault:"true"`
 }
 
 // Load parses the process environment, applies derived defaults and checks the
@@ -191,7 +202,14 @@ func (c Config) ValidateServe() error {
 	switch c.BlobBackend {
 	case "fs":
 	case "s3":
-		add("SILO_BLOB_BACKEND=s3 is not supported yet")
+		for _, v := range []struct{ name, val string }{
+			{"SILO_BLOB_S3_ENDPOINT", c.BlobS3Endpoint}, {"SILO_BLOB_S3_BUCKET", c.BlobS3Bucket},
+			{"SILO_BLOB_S3_ACCESS_KEY", c.BlobS3AccessKey}, {"SILO_BLOB_S3_SECRET_KEY", c.BlobS3SecretKey},
+		} {
+			if v.val == "" {
+				add("%s is required when SILO_BLOB_BACKEND=s3", v.name)
+			}
+		}
 	default:
 		add("SILO_BLOB_BACKEND must be fs or s3, got %q", c.BlobBackend)
 	}

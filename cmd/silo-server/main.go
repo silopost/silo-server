@@ -111,7 +111,7 @@ func serve(ctx context.Context, args []string) error {
 		return err
 	}
 	defer pool.Close()
-	blobs, err := blob.NewFSStore(cfg.BlobFSDir)
+	blobs, err := blob.Open(ctx, cfg)
 	if err != nil {
 		return err
 	}

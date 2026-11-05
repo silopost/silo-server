@@ -129,7 +129,9 @@ func TestValidateServe(t *testing.T) {
 		{name: "initial concurrency zero", env: map[string]string{"SILO_SYNC_INITIAL_CONCURRENCY": "0"}, wantErr: "SILO_SYNC_INITIAL_CONCURRENCY"},
 		{name: "backfill rate zero", env: map[string]string{"SILO_SYNC_BACKFILL_RATE": "0"}, wantErr: "SILO_SYNC_BACKFILL_RATE"},
 		{name: "worker concurrency zero", env: map[string]string{"SILO_WORKER_CONCURRENCY": "0"}, wantErr: "SILO_WORKER_CONCURRENCY"},
-		{name: "s3 unsupported", env: map[string]string{"SILO_BLOB_BACKEND": "s3"}, wantErr: "not supported"},
+		{name: "s3 needs endpoint and bucket", env: map[string]string{"SILO_BLOB_BACKEND": "s3"}, wantErr: "SILO_BLOB_S3_BUCKET is required"},
+		{name: "s3 needs credentials", env: map[string]string{"SILO_BLOB_BACKEND": "s3", "SILO_BLOB_S3_ENDPOINT": "minio:9000", "SILO_BLOB_S3_BUCKET": "silo"}, wantErr: "SILO_BLOB_S3_SECRET_KEY"},
+		{name: "s3 valid", env: map[string]string{"SILO_BLOB_BACKEND": "s3", "SILO_BLOB_S3_ENDPOINT": "minio:9000", "SILO_BLOB_S3_BUCKET": "silo", "SILO_BLOB_S3_ACCESS_KEY": "a", "SILO_BLOB_S3_SECRET_KEY": "b"}},
 		{name: "bad blob backend", env: map[string]string{"SILO_BLOB_BACKEND": "gcs"}, wantErr: "SILO_BLOB_BACKEND"},
 	}
 	for _, tt := range tests {
