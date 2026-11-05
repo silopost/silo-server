@@ -17,6 +17,9 @@ import (
 func OrphanGC(ctx context.Context, d *Deps, accountID int64, now time.Time) (*mail.PurgeResult, error) {
 	var res *mail.PurgeResult
 	err := inTx(ctx, d.Pool, func(tx pgx.Tx) error {
+		if err := mail.LockAccount(ctx, tx, accountID); err != nil {
+			return err
+		}
 		var complete bool
 		var minSync *time.Time
 		err := tx.QueryRow(ctx, `

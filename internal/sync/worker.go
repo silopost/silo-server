@@ -34,6 +34,7 @@ type AccountWorker struct {
 	pend      pending
 	connLimit int // connections this account may use (lowered on BYE/LIMIT)
 	state     string
+	live      *session // connected session that executes imap_op jobs
 }
 
 // pending is the incremental work requested since the last scheduler pass.
@@ -301,5 +302,14 @@ func (w *AccountWorker) connectAndRun(ctx context.Context, attempt *int) error {
 		return err
 	}
 	*attempt = 0
+	w.mu.Lock()
+	w.live = s
+	w.mu.Unlock()
+	defer func() {
+		w.mu.Lock()
+		w.live = nil
+		w.mu.Unlock()
+		close(s.ended)
+	}()
 	return s.run(ctx)
 }

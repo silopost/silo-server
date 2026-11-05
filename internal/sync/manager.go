@@ -10,6 +10,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
+	"github.com/silopost/silo-server/internal/ops"
 	"github.com/silopost/silo-server/internal/worker"
 )
 
@@ -80,6 +81,13 @@ func (m *Manager) RegisterJobs(jw *worker.Worker) {
 			w.RequestResync(p.Mode)
 		}
 		return nil
+	})
+	jw.Register(ops.JobKind, func(ctx context.Context, j worker.Job) error {
+		w := m.ensure(j.AccountID.Int64)
+		if w == nil {
+			return worker.Defer(5*time.Second, "sync engine stopping")
+		}
+		return w.RunOp(ctx, j)
 	})
 	jw.Register(JobOrphanGC, func(ctx context.Context, j worker.Job) error {
 		res, err := OrphanGC(ctx, m.d, j.AccountID.Int64, m.d.now())

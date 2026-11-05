@@ -39,12 +39,22 @@ type session struct {
 	slowUntil  time.Time           // after NO [OVERQUOTA]/[LIMIT]
 	quotaHit   bool
 	lastProg   time.Time
+
+	// Write-back: imap_op jobs arrive on opsReq from the account job loop and
+	// run on the ops connection, or on the sync connection (priority over
+	// incremental work and backfill) when the pool has only two connections.
+	opsReq  chan opRequest
+	ended   chan struct{}
+	opsConn *conn
+	opsDone chan error
+	opsStop context.CancelFunc
 }
 
 func newSession(w *AccountWorker, acc *account, sc *conn) *session {
 	return &session{
 		w: w, d: w.d, acc: acc, sc: sc, log: w.log,
 		candidates: map[int64][]uint32{}, bodySkip: map[int64]time.Time{}, bodyWork: true,
+		opsReq: make(chan opRequest), ended: make(chan struct{}),
 	}
 }
 
@@ -54,13 +64,56 @@ func (s *session) close() {
 		s.idleStop()
 		<-s.idleDone
 	}
+	if s.opsStop != nil {
+		s.opsStop()
+		<-s.opsDone
+	}
 	_ = s.sc.cl.Logout(context.Background())
+}
+
+// startOps opens the ops connection when the pool allows a third one
+// (SILO_SYNC_MAX_CONNECTIONS_PER_ACCOUNT >= 3); otherwise, or when the
+// server refuses it, the sync connection executes the write-back.
+func (s *session) startOps(ctx context.Context) {
+	s.w.mu.Lock()
+	limit := s.w.connLimit
+	s.w.mu.Unlock()
+	if limit < 3 {
+		return
+	}
+	c, err := s.w.dial(ctx, s.acc)
+	if err != nil {
+		s.w.mu.Lock()
+		s.w.connLimit = 2
+		s.w.mu.Unlock()
+		s.log.Warn("ops connection unavailable; write-back shares the sync connection", "err", err)
+		return
+	}
+	octx, cancel := context.WithCancel(ctx)
+	s.opsConn, s.opsStop, s.opsDone = c, cancel, make(chan error, 1)
+	go func() {
+		defer func() { _ = c.cl.Logout(context.Background()) }()
+		for {
+			select {
+			case <-octx.Done():
+				s.opsDone <- nil
+				return
+			case r := <-s.opsReq:
+				err := s.execOp(octx, c, r.job)
+				r.done <- err
+				if err != nil && !isCommandError(err) && !errors.Is(err, errOpPermanent) && octx.Err() == nil {
+					s.opsDone <- err // connection trouble: the session reconnects
+					return
+				}
+			}
+		}
+	}()
 }
 
 func (s *session) saveCapabilities(ctx context.Context) error {
 	names := s.sc.caps.Names()
 	slices.Sort(names)
-	return inTx(ctx, s.d.Pool, func(tx pgx.Tx) error {
+	return s.tx(ctx, func(tx pgx.Tx) error {
 		_, err := tx.Exec(ctx, `UPDATE accounts SET capabilities = $2 WHERE id = $1`, s.acc.id, names)
 		return err
 	})
@@ -96,7 +149,7 @@ func (s *session) reloadFolders(ctx context.Context) error {
 // goLive switches the account to live (plan 3.5.2: after phase A), starts
 // the idle connection and schedules a catch-up pass over all folders.
 func (s *session) goLive(ctx context.Context) error {
-	if err := inTx(ctx, s.d.Pool, func(tx pgx.Tx) error {
+	if err := s.tx(ctx, func(tx pgx.Tx) error {
 		_, err := tx.Exec(ctx, `UPDATE accounts SET filters_since = now() WHERE id = $1 AND filters_since IS NULL`, s.acc.id)
 		return err
 	}); err != nil {
@@ -106,6 +159,7 @@ func (s *session) goLive(ctx context.Context) error {
 		return err
 	}
 	s.startIdle(ctx)
+	s.startOps(ctx)
 	s.w.request(func(p *pending) { p.all = true })
 	return nil
 }
@@ -202,10 +256,23 @@ func (s *session) run(ctx context.Context) error {
 		inboxTick = t.C
 	}
 	var idleErr <-chan error = s.idleDone
+	var opsErr <-chan error = s.opsDone
+	var opsCh <-chan opRequest
+	if s.opsConn == nil {
+		opsCh = s.opsReq // shared connection: write-back before sync work
+	}
 	for {
 		select { // events that arrived while working
 		case <-ctx.Done():
 			return nil
+		case r := <-opsCh:
+			if err := s.serveOp(ctx, r); err != nil {
+				return err
+			}
+			continue
+		case err := <-opsErr:
+			s.opsStop, s.opsDone = nil, nil
+			return err
 		case err := <-idleErr:
 			s.idleStop, s.idleDone = nil, nil
 			return err
@@ -236,6 +303,13 @@ func (s *session) run(ctx context.Context) error {
 		case <-ctx.Done():
 			return nil
 		case <-s.w.kick:
+		case r := <-opsCh:
+			if err := s.serveOp(ctx, r); err != nil {
+				return err
+			}
+		case err := <-opsErr:
+			s.opsStop, s.opsDone = nil, nil
+			return err
 		case err := <-idleErr:
 			s.idleStop, s.idleDone = nil, nil
 			return err
@@ -301,7 +375,7 @@ func (s *session) incremental(ctx context.Context, p pending) error {
 			return err
 		}
 	}
-	return inTx(ctx, s.d.Pool, func(tx pgx.Tx) error {
+	return s.tx(ctx, func(tx pgx.Tx) error {
 		tag, err := tx.Exec(ctx, `UPDATE accounts SET last_sync_at = now() WHERE id = $1 AND sync_state <> 'disabled'`, s.acc.id)
 		if err == nil && tag.RowsAffected() == 0 {
 			return errAccountGone
@@ -344,7 +418,7 @@ func (s *session) syncFolderSafe(ctx context.Context, f *folder, force bool, st 
 }
 
 func (s *session) folderError(ctx context.Context, f *folder, err error) error {
-	return inTx(ctx, s.d.Pool, func(tx pgx.Tx) error {
+	return s.tx(ctx, func(tx pgx.Tx) error {
 		_, e := tx.Exec(ctx, `UPDATE mailbox_folders SET last_error = $2, error_count = error_count + 1 WHERE id = $1`, f.id, err.Error())
 		return e
 	})
@@ -371,4 +445,26 @@ func (s *session) afterBatch(phase string, n int) {
 	if h := s.d.Hooks.AfterBatch; h != nil {
 		h(phase, n)
 	}
+}
+
+// tx runs fn in a transaction holding the account's write lock, which keeps
+// the sync, the write-back and the API from interleaving on the same messages.
+func (s *session) tx(ctx context.Context, fn func(tx pgx.Tx) error) error {
+	return inTx(ctx, s.d.Pool, func(tx pgx.Tx) error {
+		if err := mail.LockAccount(ctx, tx, s.acc.id); err != nil {
+			return err
+		}
+		return fn(tx)
+	})
+}
+
+// serveOp executes a write-back job on the sync connection; connection
+// errors end the session.
+func (s *session) serveOp(ctx context.Context, r opRequest) error {
+	err := s.execOp(ctx, s.sc, r.job)
+	r.done <- err
+	if err != nil && !isCommandError(err) && !errors.Is(err, errOpPermanent) {
+		return err
+	}
+	return nil
 }

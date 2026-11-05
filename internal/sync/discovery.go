@@ -67,7 +67,7 @@ func (s *session) discover(ctx context.Context) (map[int64]*imap.StatusData, err
 	s.acc.mapping = acc.mapping
 	roles := assignRoles(entries, acc.mapping)
 
-	err = inTx(ctx, s.d.Pool, func(tx pgx.Tx) error {
+	err = s.tx(ctx, func(tx pgx.Tx) error {
 		existing, err := loadFolders(ctx, tx, s.acc.id)
 		if err != nil {
 			return err

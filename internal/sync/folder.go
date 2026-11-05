@@ -40,7 +40,7 @@ func (s *session) prepare(ctx context.Context, f *folder, sel *imap.SelectData) 
 	if f.role == RoleInbox {
 		kw := slices.Contains(sel.PermanentFlags, imap.FlagWildcard)
 		if kw != s.acc.keywordsSupp {
-			if err := inTx(ctx, s.d.Pool, func(tx pgx.Tx) error {
+			if err := s.tx(ctx, func(tx pgx.Tx) error {
 				_, err := tx.Exec(ctx, `UPDATE accounts SET keywords_supported = $2 WHERE id = $1`, s.acc.id, kw)
 				return err
 			}); err != nil {
@@ -61,7 +61,7 @@ func (s *session) prepare(ctx context.Context, f *folder, sel *imap.SelectData) 
 		s.log.Warn("UIDVALIDITY changed; refetching folder", "folder", f.name, "old", f.uidValidity, "new", sel.UIDValidity)
 	}
 	perm := flagStrings(sel.PermanentFlags)
-	err := inTx(ctx, s.d.Pool, func(tx pgx.Tx) error {
+	err := s.tx(ctx, func(tx pgx.Tx) error {
 		if reset {
 			if _, err := tx.Exec(ctx, `UPDATE message_locations SET stale = true WHERE folder_id = $1`, f.id); err != nil {
 				return err
@@ -204,7 +204,7 @@ func (s *session) syncFolder(ctx context.Context, f *folder, force bool, st *ima
 		chunk := vanished[:n]
 		vanished = vanished[n:]
 		var res *mail.VanishedResult
-		if err := inTx(ctx, s.d.Pool, func(tx pgx.Tx) error {
+		if err := s.tx(ctx, func(tx pgx.Tx) error {
 			var err error
 			res, err = mail.LocationVanished(ctx, tx, f.id, chunk)
 			return err
@@ -256,7 +256,7 @@ func (s *session) syncFolder(ctx context.Context, f *folder, force bool, st *ima
 		n := min(len(updates), flagsBatch)
 		chunk := updates[:n]
 		updates = updates[n:]
-		if err := inTx(ctx, s.d.Pool, func(tx pgx.Tx) error {
+		if err := s.tx(ctx, func(tx pgx.Tx) error {
 			_, err := mail.ApplyFlagsBatch(ctx, tx, f.id, chunk)
 			return err
 		}); err != nil {
@@ -266,7 +266,7 @@ func (s *session) syncFolder(ctx context.Context, f *folder, force bool, st *ima
 
 	// 4. Watermarks.
 	newNext := max(oldNext, top)
-	err = inTx(ctx, s.d.Pool, func(tx pgx.Tx) error {
+	err = s.tx(ctx, func(tx pgx.Tx) error {
 		_, err := tx.Exec(ctx, `
 UPDATE mailbox_folders SET uidnext = $2, highestmodseq = COALESCE($3, highestmodseq), messages_count = $4,
   last_sync_at = now(), last_full_flags_at = CASE WHEN $5 THEN now() ELSE last_full_flags_at END,
@@ -294,7 +294,7 @@ WHERE id = $1`, f.id, int64(newNext), nullUint(sel.HighestModSeq), int(sel.NumMe
 }
 
 func (s *session) touchFolder(ctx context.Context, f *folder) error {
-	return inTx(ctx, s.d.Pool, func(tx pgx.Tx) error {
+	return s.tx(ctx, func(tx pgx.Tx) error {
 		_, err := tx.Exec(ctx, `UPDATE mailbox_folders SET last_sync_at = now(), last_error = NULL, error_count = 0 WHERE id = $1`, f.id)
 		return err
 	})
@@ -315,7 +315,7 @@ func (s *session) ingestUIDs(ctx context.Context, f *folder, uids []uint32) ([]m
 			continue
 		}
 		var res *mail.IngestResult
-		if err := inTx(ctx, s.d.Pool, func(tx pgx.Tx) error {
+		if err := s.tx(ctx, func(tx pgx.Tx) error {
 			var err error
 			res, err = mail.IngestBatch(ctx, tx, s.acc.id, f.id, msgs)
 			return err

@@ -60,7 +60,7 @@ func (s *session) phaseA(ctx context.Context) error {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		if err := inTx(ctx, s.d.Pool, func(tx pgx.Tx) error {
+		if err := s.tx(ctx, func(tx pgx.Tx) error {
 			if _, err := tx.Exec(ctx, `UPDATE sync_cursors SET phase = 'headers', updated_at = now() WHERE folder_id = $1`, f.id); err != nil {
 				return err
 			}
@@ -111,7 +111,7 @@ func (s *session) headerBatch(ctx context.Context, f *folder, phase string, uids
 	for _, m := range msgs {
 		bytes += m.Size
 	}
-	err = inTx(ctx, s.d.Pool, func(tx pgx.Tx) error {
+	err = s.tx(ctx, func(tx pgx.Tx) error {
 		if len(msgs) > 0 {
 			if _, err := mail.IngestBatch(ctx, tx, s.acc.id, f.id, msgs); err != nil {
 				return err
@@ -213,7 +213,7 @@ func (s *session) phaseBBatch(ctx context.Context, f *folder) error {
 // unmatched after a UIDVALIDITY change vanish now.
 func (s *session) finishHeaders(ctx context.Context, f *folder) error {
 	var res *mail.VanishedResult
-	err := inTx(ctx, s.d.Pool, func(tx pgx.Tx) error {
+	err := s.tx(ctx, func(tx pgx.Tx) error {
 		var err error
 		if res, err = vanishAll(ctx, tx, f.id, true); err != nil {
 			return err
@@ -253,7 +253,7 @@ func (s *session) phaseCBatch(ctx context.Context) (bool, error) {
 			if !s.quotaHit {
 				s.quotaHit = true
 				s.log.Warn("mirror quota reached; body backfill stopped", "used", used)
-				_ = inTx(ctx, s.d.Pool, func(tx pgx.Tx) error {
+				_ = s.tx(ctx, func(tx pgx.Tx) error {
 					return mail.WriteEvent(ctx, tx, s.acc.userID, EventAccountError, map[string]any{
 						"accountId": s.acc.id, "code": ErrCodeQuota, "detail": "SILO_MIRROR_QUOTA_PER_ACCOUNT reached",
 					})
@@ -307,7 +307,7 @@ ORDER BY m.internal_date DESC, m.id DESC LIMIT 100`, s.acc.id, skip)
 		}
 	}
 	if len(deferred) > 0 {
-		return true, inTx(ctx, s.d.Pool, func(tx pgx.Tx) error {
+		return true, s.tx(ctx, func(tx pgx.Tx) error {
 			_, err := tx.Exec(ctx, `UPDATE messages SET body_state = 'deferred' WHERE id = ANY($1) AND body_state = 'headers'`, deferred)
 			return err
 		})
@@ -386,7 +386,7 @@ func (s *session) fetchBodyItems(ctx context.Context, f *folder, items []bodyIte
 	}
 	t1 := time.Now()
 	var got int64
-	err := inTx(ctx, s.d.Pool, func(tx pgx.Tx) error {
+	err := s.tx(ctx, func(tx pgx.Tx) error {
 		if len(deferred) > 0 {
 			if _, err := tx.Exec(ctx, `UPDATE messages SET body_state = 'deferred' WHERE id = ANY($1) AND body_state = 'headers'`, deferred); err != nil {
 				return err
@@ -424,7 +424,7 @@ func (s *session) finishBodies(ctx context.Context) error {
 			return nil
 		}
 	}
-	return inTx(ctx, s.d.Pool, func(tx pgx.Tx) error {
+	return s.tx(ctx, func(tx pgx.Tx) error {
 		tag, err := tx.Exec(ctx, `
 UPDATE sync_cursors c SET phase = 'done', updated_at = now() FROM mailbox_folders f
 WHERE f.id = c.folder_id AND f.account_id = $1 AND c.phase = 'bodies'`, s.acc.id)
