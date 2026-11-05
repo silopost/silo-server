@@ -9,11 +9,14 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
+
+	"github.com/silopost/silo-server/internal/http/api"
 )
 
 // Deps are the dependencies the router needs.
 type Deps struct {
 	Logger *slog.Logger
+	API    api.Options
 }
 
 // NewRouter returns the root handler with the common middleware stack.
@@ -29,6 +32,7 @@ func NewRouter(d Deps) http.Handler {
 	r.Use(middleware.Recoverer)
 
 	r.Get("/healthz", healthz)
+	api.Mount(r, d.API)
 	return r
 }
 

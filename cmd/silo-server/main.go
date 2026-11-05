@@ -15,6 +15,7 @@ import (
 
 	"github.com/silopost/silo-server/internal/config"
 	siloHTTP "github.com/silopost/silo-server/internal/http"
+	"github.com/silopost/silo-server/internal/http/api"
 	"github.com/silopost/silo-server/internal/store"
 	"github.com/silopost/silo-server/internal/version"
 )
@@ -88,8 +89,15 @@ func serve(ctx context.Context, args []string) error {
 	}
 
 	srv := &http.Server{
-		Addr:              cfg.HTTPAddr,
-		Handler:           siloHTTP.NewRouter(siloHTTP.Deps{Logger: logger}),
+		Addr: cfg.HTTPAddr,
+		Handler: siloHTTP.NewRouter(siloHTTP.Deps{
+			Logger: logger,
+			API: api.Options{
+				ServerVersion:      version.Version,
+				AuthMode:           cfg.AuthMode,
+				AllowCustomServers: cfg.AllowCustomServers,
+			},
+		}),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 
