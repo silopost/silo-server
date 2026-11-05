@@ -2394,6 +2394,74 @@ paths:
       summary: Get server metadata
       tags:
         - meta
+  /operations/{id}/undo:
+    post:
+      description: "Cancels the operation while its jobs are still waiting (until undoUntil): they are deleted and the threads return to the state of the mail server in the same transaction, so the server never sees the operation; the answer is the threads after the undo. Once the operation is being sent to (or was executed on) the server the answer is 409 undo_expired: the client then issues the inverse operation itself (e.g. modify with addLabelIds [INBOX] after an archive). Flag changes (UNREAD, STARRED, labels) are sent at once, so they are undone the same way. An unknown operation, or one of another user, is 404."
+      operationId: undoOperation
+      parameters:
+        - description: operationId returned by a modify, trash or untrash request.
+          in: path
+          name: id
+          required: true
+          schema:
+            description: operationId returned by a modify, trash or untrash request.
+            type: string
+        - description: Client id, echoed as origin in the events it causes.
+          in: header
+          name: X-Silo-Client
+          schema:
+            description: Client id, echoed as origin in the events it causes.
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OperationResult"
+          description: OK
+        "401":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Unauthorized
+        "403":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Forbidden
+        "404":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Not Found
+        "409":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Conflict
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Unprocessable Entity
+        "500":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Internal Server Error
+      security:
+        - cookieAuth: []
+          csrfHeader: []
+        - bearerAuth: []
+      summary: Undo an operation inside its undo window
+      tags:
+        - threads
   /session:
     delete:
       operationId: logout
