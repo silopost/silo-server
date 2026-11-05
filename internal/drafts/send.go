@@ -222,7 +222,9 @@ type sendPayload struct {
 }
 
 func writeOutboundEvent(ctx context.Context, tx pgx.Tx, userID, accountID, msgID, outboundID int64, status, errText string, failed []string, origin string) error {
-	ev := map[string]any{"outboundId": outboundID, "accountId": accountID, "messageId": msgID, "status": status}
+	// draftId: the same row as messageId, as the d_ id of GET /drafts/{id} (opening the draft
+	// again after a failure needs no id mapping in the client).
+	ev := map[string]any{"outboundId": outboundID, "accountId": accountID, "messageId": msgID, "draftId": msgID, "status": status}
 	if errText != "" {
 		ev["error"] = errText
 	}

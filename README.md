@@ -119,7 +119,7 @@ accept `50MB` style values, rates `5MB/s`, durations `5m`. Worth knowing:
   `SILO_ALLOW_INSECURE_TRANSPORT`; AUTH PLAIN, else LOGIN; the server's `SIZE` is
   checked): 4xx/network errors retry after 30 s, 2 min, 10 min, 30 min, 5xx fails at
   once, recipients refused at `RCPT` go to `failed_recipients`. A failed send is a draft
-  again (`outbound.status` event with `error`; the draft's `lastSend` keeps
+  again (`outbound.status` event with `error` and `draftId`; the draft's `lastSend` keeps
   `{outboundId, status, error, failedRecipients, updatedAt}` until the next send). A
   send left in `sending` by a crash (no update for 2 × the SMTP timeout, its job not
   running) is failed by `blob_gc` with `error: "interrupted"` and is **not** retried

@@ -181,7 +181,8 @@ func TestSendAndUndo(t *testing.T) {
 	if n := s.count(`SELECT count(*) FROM thread_labels tl JOIN labels l ON l.id = tl.label_id WHERE tl.thread_id = $1 AND l.system_key = 'SCHEDULED'`, origThread); n != 1 {
 		t.Error("thread not SCHEDULED")
 	}
-	if n := s.count(`SELECT count(*) FROM events WHERE type = 'outbound.status' AND payload->>'status' = 'queued' AND payload->>'origin' = 'tab-s'`); n != 1 {
+	if n := s.count(`SELECT count(*) FROM events WHERE type = 'outbound.status' AND payload->>'status' = 'queued' AND payload->>'origin' = 'tab-s'
+		AND payload->>'draftId' = payload->>'messageId'`); n != 1 {
 		t.Error("no outbound.status queued event with origin")
 	}
 	if n := s.count(`SELECT count(*) FROM events WHERE type = 'thread.updated' AND payload->>'origin' = 'tab-s'`); n == 0 {
