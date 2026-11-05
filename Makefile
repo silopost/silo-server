@@ -3,7 +3,7 @@ LDFLAGS := -s -w -X github.com/silopost/silo-server/internal/version.Version=$(V
 
 SQLC := github.com/sqlc-dev/sqlc/cmd/sqlc@v1.31.1
 
-.PHONY: build test lint run sqlc
+.PHONY: build test lint run sqlc openapi
 
 build:
 	CGO_ENABLED=0 go build -trimpath -ldflags "$(LDFLAGS)" -o bin/silo-server ./cmd/silo-server
@@ -20,3 +20,7 @@ run:
 # Regenerate internal/store/sqlcgen from migrations/ and internal/store/queries/.
 sqlc:
 	go run $(SQLC) generate
+
+# Regenerate api/openapi.yaml from the huma operations (no database needed).
+openapi:
+	go run ./cmd/silo-openapi
