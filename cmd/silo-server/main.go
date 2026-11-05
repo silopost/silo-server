@@ -33,6 +33,7 @@ var commands = map[string]func(ctx context.Context, args []string) error{
 	"serve":          serve,
 	"migrate":        migrateCmd,
 	"rotate-secrets": rotateSecretsCmd,
+	"reconcile":      reconcileCmd,
 }
 
 func main() {

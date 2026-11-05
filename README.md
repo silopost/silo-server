@@ -21,6 +21,7 @@ silo-server migrate up                # apply pending migrations
 silo-server migrate down --yes        # revert everything (drops all data)
 silo-server migrate version           # current schema version
 silo-server rotate-secrets           # re-encrypt account secrets after a key change
+silo-server reconcile [--account ID] # report drift of derived mail data (threads, labels)
 silo-server version
 ```
 
