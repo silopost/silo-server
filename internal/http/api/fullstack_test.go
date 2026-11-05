@@ -155,9 +155,14 @@ func imapUser(t *testing.T, addr, user, pass string) *imapclient.Client {
 // appendMsg APPENDs a small plain message with the given Message-ID.
 func appendMsg(t *testing.T, c *imapclient.Client, folder, msgID, from, to, subject string) {
 	t.Helper()
-	raw := []byte(fmt.Sprintf("From: %s\r\nTo: %s\r\nSubject: %s\r\nMessage-ID: <%s>\r\nDate: %s\r\nMIME-Version: 1.0\r\n"+
+	appendRaw(t, c, folder, []byte(fmt.Sprintf("From: %s\r\nTo: %s\r\nSubject: %s\r\nMessage-ID: <%s>\r\nDate: %s\r\nMIME-Version: 1.0\r\n"+
 		"Content-Type: text/plain; charset=utf-8\r\n\r\nBody of %s\r\n", from, to, subject, msgID,
-		time.Now().Add(-time.Hour).Format(time.RFC1123Z), subject))
+		time.Now().Add(-time.Hour).Format(time.RFC1123Z), subject)))
+}
+
+// appendRaw APPENDs a message to a folder.
+func appendRaw(t *testing.T, c *imapclient.Client, folder string, raw []byte) {
+	t.Helper()
 	cmd := c.Append(folder, int64(len(raw)), &imap.AppendOptions{Time: time.Now().Add(-time.Hour)})
 	if _, err := cmd.Write(raw); err != nil {
 		t.Fatal(err)
