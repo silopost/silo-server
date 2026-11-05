@@ -1,0 +1,25 @@
+name: Nightly
+
+on:
+  schedule:
+    - cron: "17 2 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  inbox-benchmark:
+    # Phase 2 DoD (plan 4.7): inbox list over 100k threads / 300k messages,
+    # p95 < 50 ms and a plan on thread_labels_list.
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - run: go test ./internal/mailview -run TestInboxListBenchmark -count=1 -v
+        env:
+          SILO_BENCH_INBOX: "true"
+          SILO_REQUIRE_DOCKER: "true"
