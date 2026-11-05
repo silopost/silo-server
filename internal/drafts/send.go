@@ -368,16 +368,16 @@ func (s *Service) Autocomplete(ctx context.Context, userID int64, q string) ([]C
 // Forward sends a copy of a message to one address at once, without the
 // undo-send window: the forward action of a filter (plan 3.11). It is the
 // compose path (a draft in forward mode, prefilled with the text of the
-// original, addressed to `to`, then sent with Immediate), so the message is
-// built, sent, saved in Sent and counted like any other. A draft left
-// behind by a failed step is removed.
+// original and carrying its attachments, addressed to `to`, then sent with
+// Immediate), so the message is built, sent, saved in Sent and counted like
+// any other. A draft left behind by a failed step is removed.
 func (s *Service) Forward(ctx context.Context, userID, messageID int64, to, origin string) (int64, error) {
 	d, err := s.Create(ctx, CreateParams{UserID: userID, ReplyTo: messageID, Mode: ModeForward, Origin: origin})
 	if err != nil {
 		return 0, err
 	}
 	_, err = s.Update(ctx, UpdateParams{UserID: userID, ID: d.ID, Version: d.Version, To: []mail.Address{{Email: to}},
-		Subject: d.Subject, BodyHTML: d.BodyHTML, Origin: origin})
+		Subject: d.Subject, BodyHTML: d.BodyHTML, AttachmentIDs: attachmentIDs(d), Origin: origin})
 	if err == nil {
 		var r *SendResult
 		if r, err = s.Send(ctx, SendParams{UserID: userID, ID: d.ID, Immediate: true, Origin: origin}); err == nil {
@@ -388,4 +388,12 @@ func (s *Service) Forward(ctx context.Context, userID, messageID int64, to, orig
 		return 0, errors.Join(err, derr)
 	}
 	return 0, err
+}
+
+func attachmentIDs(d *Draft) []int64 {
+	ids := make([]int64, 0, len(d.Attachments))
+	for _, a := range d.Attachments {
+		ids = append(ids, a.ID)
+	}
+	return ids
 }

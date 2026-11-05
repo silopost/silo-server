@@ -36,7 +36,7 @@ func testDraftSync(t *testing.T, p imaptest.Profile) {
 
 	d, err := svc.Create(ctx, drafts.CreateParams{UserID: e.a.userID, AccountID: e.a.id, Origin: "test"})
 	must(t, err)
-	up, err := svc.Upload(ctx, e.a.userID, "notes.txt", "text/plain", strings.NewReader("attached notes"))
+	up, err := svc.Upload(ctx, e.a.userID, "notes.txt", "text/plain", false, strings.NewReader("attached notes"))
 	must(t, err)
 	save := func(version int32, subject string) *drafts.Draft {
 		t.Helper()

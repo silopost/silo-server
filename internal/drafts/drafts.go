@@ -37,7 +37,26 @@ var (
 	ErrInvalid  = errors.New("drafts: invalid request")
 	ErrConflict = errors.New("drafts: version conflict")
 	ErrTooLarge = errors.New("drafts: upload too large")
+	// ErrInlineNotImage: only image/* uploads may be inline.
+	ErrInlineNotImage = errors.New("drafts: an inline upload must be an image")
 )
+
+// Warnings of a new reply or forward (Draft.Warnings).
+const (
+	// WarnQuoteUnavailable: the body of the original could not be downloaded;
+	// the quote holds its snippet only.
+	WarnQuoteUnavailable = "quote_unavailable"
+	// WarnAttachmentsUnavailable: some attachments of a forwarded message
+	// could not be downloaded and were left out.
+	WarnAttachmentsUnavailable = "attachments_unavailable"
+	// WarnAttachmentsTooLarge: attachments of a forwarded message over the
+	// attachment limit (together) were left out.
+	WarnAttachmentsTooLarge = "attachments_too_large"
+)
+
+// PrefillWait bounds the download of the original's content for a reply or
+// forward whose body is not in the mirror.
+const PrefillWait = 10 * time.Second
 
 // Reply modes of a new draft.
 const (
@@ -112,6 +131,10 @@ type Upload struct {
 	Filename    string
 	ContentType string
 	Size        int64
+	// Inline: a picture shown in the HTML of the draft as cid:CID (plan 5.6).
+	Inline bool
+	// CID is the Content-ID (without <>) of an inline upload, "" otherwise.
+	CID string
 }
 
 // Draft is a local draft. ID is the id of its local message.
@@ -123,8 +146,11 @@ type Draft struct {
 	BodyJSON                json.RawMessage
 	InReplyTo               *int64
 	Attachments             []Upload
-	Version                 int32
-	UpdatedAt               time.Time
+	// Warnings of a new reply or forward (only from Create): WarnQuoteUnavailable,
+	// WarnAttachmentsUnavailable, WarnAttachmentsTooLarge.
+	Warnings  []string
+	Version   int32
+	UpdatedAt time.Time
 	// SyncedVersion is the version saved in the server's Drafts folder (0: none).
 	SyncedVersion int32
 	// ServerChanged: the copy in the server's Drafts folder was changed or
@@ -207,8 +233,14 @@ func cleanContentType(ct string) string {
 
 // Upload streams one file into the blob store (kind local) and records it as
 // an upload of the user. A file larger than MaxUploadBytes fails with
-// ErrTooLarge and leaves nothing behind.
-func (s *Service) Upload(ctx context.Context, userID int64, filename, contentType string, r io.Reader) (*Upload, error) {
+// ErrTooLarge and leaves nothing behind. An inline upload (a picture pasted
+// into the editor, plan 5.6) must be image/* (ErrInlineNotImage); it gets a
+// Content-ID, which the client puts in the HTML as cid:CID.
+func (s *Service) Upload(ctx context.Context, userID int64, filename, contentType string, inline bool, r io.Reader) (*Upload, error) {
+	ct := cleanContentType(contentType)
+	if inline && !strings.HasPrefix(ct, "image/") {
+		return nil, ErrInlineNotImage
+	}
 	lr := &limitReader{r: r, n: s.o.MaxUploadBytes}
 	sum, size, err := s.o.Blobs.Put(ctx, lr)
 	if lr.exceeded {
@@ -218,7 +250,12 @@ func (s *Service) Upload(ctx context.Context, userID int64, filename, contentTyp
 		return nil, err
 	}
 	sha, _ := hex.DecodeString(sum)
-	u := &Upload{Filename: cleanFilename(filename), ContentType: cleanContentType(contentType), Size: size}
+	u := &Upload{Filename: cleanFilename(filename), ContentType: ct, Size: size, Inline: inline}
+	var cid *string
+	if inline {
+		u.CID = randomToken() + "@silo"
+		cid = &u.CID
+	}
 	err = s.inTx(ctx, func(tx pgx.Tx) error {
 		if _, err := tx.Exec(ctx, `
 INSERT INTO blobs (sha256, size_bytes, kind, ref_count) VALUES ($1, $2, 'local', 1)
@@ -226,8 +263,8 @@ ON CONFLICT (sha256) DO UPDATE SET ref_count = blobs.ref_count + 1`, sha, size);
 			return err
 		}
 		return tx.QueryRow(ctx, `
-INSERT INTO attachments (message_id, user_id, blob_sha256, filename, content_type, size_bytes, part_path)
-VALUES (NULL, $1, $2, $3, $4, $5, '') RETURNING id`, userID, sha, u.Filename, u.ContentType, size).Scan(&u.ID)
+INSERT INTO attachments (message_id, user_id, blob_sha256, filename, content_type, size_bytes, part_path, is_inline, content_id)
+VALUES (NULL, $1, $2, $3, $4, $5, '', $6, $7) RETURNING id`, userID, sha, u.Filename, u.ContentType, size, inline, cid).Scan(&u.ID)
 	})
 	if err != nil {
 		return nil, fmt.Errorf("drafts: record upload: %w", err)
@@ -239,8 +276,8 @@ VALUES (NULL, $1, $2, $3, $4, $5, '') RETURNING id`, userID, sha, u.Filename, u.
 func (s *Service) GetUpload(ctx context.Context, userID, id int64) (*Upload, error) {
 	u := &Upload{ID: id}
 	err := s.o.Pool.QueryRow(ctx, `
-SELECT a.filename, a.content_type, a.size_bytes FROM attachments a
-WHERE a.id = $1 AND a.user_id = $2 AND a.part_path = '' AND a.blob_sha256 IS NOT NULL`, id, userID).Scan(&u.Filename, &u.ContentType, &u.Size)
+SELECT a.filename, a.content_type, a.size_bytes, a.is_inline, COALESCE(a.content_id, '') FROM attachments a
+WHERE a.id = $1 AND a.user_id = $2 AND a.part_path = '' AND a.blob_sha256 IS NOT NULL`, id, userID).Scan(&u.Filename, &u.ContentType, &u.Size, &u.Inline, &u.CID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -266,6 +303,11 @@ type original struct {
 	bodyText            string
 	date                time.Time
 	refs                []string
+	bodyState, snippet  string
+	hasHTML             bool
+	// draftHTML is the body of a local draft (or a message sent from Silo
+	// whose drafts row remains), quoted as is.
+	draftHTML *string
 }
 
 func (s *Service) loadOriginal(ctx context.Context, userID, id int64) (*original, error) {
@@ -274,9 +316,10 @@ func (s *Service) loadOriginal(ctx context.Context, userID, id int64) (*original
 	err := s.o.Pool.QueryRow(ctx, `
 SELECT m.account_id, m.thread_id, m.message_id_hdr, m.subject, m.from_addr::text, m.from_name, m.reply_to, m.to_addrs, m.cc_addrs,
        m.body_text, COALESCE(m.header_date, m.internal_date),
-       COALESCE((SELECT array_agg(r.ref_message_id_hdr ORDER BY r.position) FROM message_references r WHERE r.message_id = m.id), '{}')
+       COALESCE((SELECT array_agg(r.ref_message_id_hdr ORDER BY r.position) FROM message_references r WHERE r.message_id = m.id), '{}'),
+       m.body_state, m.snippet, m.has_html, (SELECT d.body_html FROM drafts d WHERE d.message_id = m.id)
 FROM messages m WHERE m.id = $1 AND m.user_id = $2`, id, userID).Scan(&o.accountID, &o.threadID, &o.msgIDHdr, &o.subject,
-		&o.from.Email, &o.from.Name, &replyTo, &to, &cc, &o.bodyText, &o.date, &o.refs)
+		&o.from.Email, &o.from.Name, &replyTo, &to, &cc, &o.bodyText, &o.date, &o.refs, &o.bodyState, &o.snippet, &o.hasHTML, &o.draftHTML)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -324,8 +367,9 @@ func quoteHeader(o *original) string {
 }
 
 // prefill fills recipients, subject and body of a reply or forward (plan
-// 3.8/3.9; the same for every client).
-func prefill(mode, self string, o *original) (f mail.DraftFields) {
+// 3.8/3.9; the same for every client). quote is the HTML of the original
+// (quoteOf).
+func prefill(mode, self string, o *original, quote string) (f mail.DraftFields) {
 	set := &addrSet{seen: map[string]bool{self: true}}
 	switch mode {
 	case ModeReply, ModeReplyAll:
@@ -342,7 +386,7 @@ func prefill(mode, self string, o *original) (f mail.DraftFields) {
 			set.add(&f.To, o.to...)
 			set.add(&f.Cc, o.cc...)
 		}
-		f.BodyHTML = "<p></p><p>On " + html.EscapeString(quoteHeader(o)) + " wrote:</p><blockquote>" + mail.TextToHTML(o.bodyText) + "</blockquote>"
+		f.BodyHTML = "<p></p><p>On " + html.EscapeString(quoteHeader(o)) + " wrote:</p><blockquote>" + quote + "</blockquote>"
 	case ModeForward:
 		f.Subject = prefixed(o.subject, "Fwd:", "fw:")
 		var to []string
@@ -351,7 +395,7 @@ func prefill(mode, self string, o *original) (f mail.DraftFields) {
 		}
 		f.BodyHTML = "<p></p><p>---------- Forwarded message ---------<br>From: " + html.EscapeString(quoteHeader(o)) +
 			"<br>Subject: " + html.EscapeString(o.subject) + "<br>To: " + html.EscapeString(strings.Join(to, ", ")) + "</p>" +
-			mail.TextToHTML(o.bodyText)
+			quote
 	}
 	return f
 }
@@ -399,8 +443,15 @@ func (s *Service) Create(ctx context.Context, p CreateParams) (*Draft, error) {
 	}
 	nd.MessageIDHdr = randomToken() + "@" + domain
 	var inReplyTo *int64
+	var pc *prefillContent
 	if o != nil {
-		nd.DraftFields = prefill(p.Mode, self, o)
+		if pc, err = s.prepare(ctx, p.UserID, p.ReplyTo, p.Mode, o); err != nil {
+			return nil, err
+		}
+		nd.DraftFields = prefill(p.Mode, self, o, pc.quote)
+		for _, a := range pc.copies {
+			nd.HasAttachments = nd.HasAttachments || !(a.inline && a.cid != "")
+		}
 		inReplyTo = &p.ReplyTo
 		if p.Mode != ModeForward {
 			nd.ThreadID = o.threadID
@@ -421,11 +472,17 @@ func (s *Service) Create(ctx context.Context, p CreateParams) (*Draft, error) {
 		if msgID, _, err = mail.CreateDraftMessage(ctx, tx, nd); err != nil {
 			return err
 		}
+		attIDs := []int64{}
+		if pc != nil && len(pc.copies) > 0 {
+			if attIDs, err = copyAttachments(ctx, tx, p.UserID, msgID, pc.copies); err != nil {
+				return fmt.Errorf("drafts: copy attachments: %w", err)
+			}
+		}
 		if _, err := tx.Exec(ctx, `
 INSERT INTO drafts (message_id, user_id, account_id, to_addrs, cc_addrs, bcc_addrs, subject, body_html,
-  in_reply_to_message_id, silo_draft_id)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`, msgID, p.UserID, p.AccountID, addrJSON(nd.To), addrJSON(nd.Cc),
-			addrJSON(nd.Bcc), nd.Subject, nd.BodyHTML, inReplyTo, nd.SiloDraftID); err != nil {
+  in_reply_to_message_id, silo_draft_id, attachment_ids)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`, msgID, p.UserID, p.AccountID, addrJSON(nd.To), addrJSON(nd.Cc),
+			addrJSON(nd.Bcc), nd.Subject, nd.BodyHTML, inReplyTo, nd.SiloDraftID, attIDs); err != nil {
 			return fmt.Errorf("drafts: insert: %w", err)
 		}
 		_, err = mail.RefreshMessages(ctx, tx, p.AccountID, []int64{msgID}, p.Origin)
@@ -434,7 +491,11 @@ VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`, msgID, p.UserID, p.AccountID,
 	if err != nil {
 		return nil, err
 	}
-	return s.load(ctx, s.o.Pool, p.UserID, msgID)
+	d, err := s.load(ctx, s.o.Pool, p.UserID, msgID)
+	if err == nil && pc != nil {
+		d.Warnings = pc.warnings
+	}
+	return d, err
 }
 
 func addrJSON(l []mail.Address) []byte {
@@ -490,7 +551,7 @@ WHERE d.message_id = $1 AND d.user_id = $2 AND `+notSending, id, userID).Scan(&d
 		_ = json.Unmarshal(p.raw, p.dst)
 	}
 	rows, err := db.Query(ctx, `
-SELECT id, filename, content_type, size_bytes FROM attachments WHERE message_id = $1
+SELECT id, filename, content_type, size_bytes, is_inline, COALESCE(content_id, '') FROM attachments WHERE message_id = $1
 ORDER BY array_position($2::bigint[], id) NULLS LAST, id`, id, ids)
 	if err != nil {
 		return nil, err
@@ -499,7 +560,7 @@ ORDER BY array_position($2::bigint[], id) NULLS LAST, id`, id, ids)
 	d.Attachments = []Upload{}
 	for rows.Next() {
 		var u Upload
-		if err := rows.Scan(&u.ID, &u.Filename, &u.ContentType, &u.Size); err != nil {
+		if err := rows.Scan(&u.ID, &u.Filename, &u.ContentType, &u.Size, &u.Inline, &u.CID); err != nil {
 			return nil, err
 		}
 		d.Attachments = append(d.Attachments, u)

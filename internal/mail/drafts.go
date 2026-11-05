@@ -164,7 +164,8 @@ func (d *DraftMIME) Recipients() []string {
 }
 
 // BuildDraftMIME builds the message of a local draft (plan 3.8/3.9):
-// multipart/alternative text+html, wrapped in multipart/mixed with the
+// multipart/alternative text+html, in multipart/related with the inline
+// pictures its HTML shows (cid:), in multipart/mixed with the other
 // attachments pinned to the draft; From the account, the draft's Message-ID,
 // In-Reply-To/References of a reply, X-Silo-Draft-Id. Bcc stays in the
 // draft; BuildSendMIME removes it. ErrNoDraft when the message has no drafts row.
@@ -270,77 +271,146 @@ WHERE message_id = $1 AND blob_sha256 IS NOT NULL ORDER BY id`, messageID)
 	h.Set("MIME-Version", "1.0")
 
 	text := HTMLToText(html)
-	writeAlt := func(iw *gomail.InlineWriter) error {
-		for _, p := range []struct{ ct, body string }{{"text/plain", text}, {"text/html", html}} {
-			var ph gomail.InlineHeader
-			ph.Set("Content-Type", p.ct+"; charset=utf-8")
-			ph.Set("Content-Transfer-Encoding", "quoted-printable")
-			w, err := iw.CreatePart(ph)
-			if err != nil {
-				return err
-			}
-			if _, err := io.WriteString(w, p.body); err != nil {
-				return err
-			}
-			if err := w.Close(); err != nil {
-				return err
-			}
+	var related, mixed []att
+	lowerHTML := strings.ToLower(html)
+	for _, a := range atts {
+		// An inline picture goes in multipart/related when the HTML refers
+		// to it; one that is not used (removed from the text) is sent as a
+		// plain attachment, as Gmail does.
+		if a.inline && a.cid != nil && *a.cid != "" && strings.Contains(lowerHTML, "cid:"+strings.ToLower(*a.cid)) {
+			related = append(related, a)
+		} else {
+			a.inline = false
+			mixed = append(mixed, a)
 		}
-		return iw.Close()
 	}
 
+	writeAlt := func(w *message.Writer) error {
+		for _, p := range []struct{ ct, body string }{{"text/plain", text}, {"text/html", html}} {
+			var ph message.Header
+			ph.Set("Content-Type", p.ct+"; charset=utf-8")
+			ph.Set("Content-Transfer-Encoding", "quoted-printable")
+			pw, err := w.CreatePart(ph)
+			if err != nil {
+				return err
+			}
+			if _, err := io.WriteString(pw, p.body); err != nil {
+				return err
+			}
+			if err := pw.Close(); err != nil {
+				return err
+			}
+		}
+		return w.Close()
+	}
+	writeAtt := func(w *message.Writer, a att) error {
+		var ah message.Header
+		params := map[string]string{}
+		if a.filename != "" {
+			params["name"] = a.filename
+		}
+		ah.SetContentType(a.contentType, params)
+		ah.Set("Content-Transfer-Encoding", "base64")
+		disp := "attachment"
+		if a.inline {
+			disp = "inline"
+		}
+		dparams := map[string]string{}
+		if a.filename != "" {
+			dparams["filename"] = a.filename
+		}
+		ah.SetContentDisposition(disp, dparams)
+		if a.inline {
+			ah.Set("Content-Id", "<"+*a.cid+">")
+		}
+		pw, err := w.CreatePart(ah)
+		if err != nil {
+			return err
+		}
+		f, err := store.Open(ctx, hex.EncodeToString(a.sha))
+		if err != nil {
+			return fmt.Errorf("mail: open draft attachment: %w", err)
+		}
+		_, err = io.Copy(pw, f)
+		_ = f.Close()
+		if err != nil {
+			return err
+		}
+		return pw.Close()
+	}
+	altHeader := func() message.Header {
+		var ah message.Header
+		ah.SetContentType("multipart/alternative", nil)
+		return ah
+	}
+	writeRelated := func(w *message.Writer) error {
+		aw, err := w.CreatePart(altHeader())
+		if err != nil {
+			return err
+		}
+		if err := writeAlt(aw); err != nil {
+			return err
+		}
+		for _, a := range related {
+			if err := writeAtt(w, a); err != nil {
+				return err
+			}
+		}
+		return w.Close()
+	}
+
+	// Structure (plan 3.9 step 1):
+	// mixed( related( alternative(text, html), inline... ), attachments... ),
+	// leaving out the levels that have one part.
 	var buf bytes.Buffer
-	if len(atts) == 0 {
-		iw, err := gomail.CreateInlineWriter(&buf, h)
-		if err != nil {
-			return nil, err
-		}
-		if err := writeAlt(iw); err != nil {
-			return nil, err
-		}
-	} else {
-		mw, err := gomail.CreateWriter(&buf, h)
-		if err != nil {
-			return nil, err
-		}
-		iw, err := mw.CreateInline()
-		if err != nil {
-			return nil, err
-		}
-		if err := writeAlt(iw); err != nil {
-			return nil, err
-		}
-		for _, a := range atts {
-			var ah gomail.AttachmentHeader
-			ah.Set("Content-Type", a.contentType)
-			ah.Set("Content-Transfer-Encoding", "base64")
-			if a.inline {
-				ah.Set("Content-Disposition", "inline")
-			}
-			if a.filename != "" {
-				ah.SetFilename(a.filename)
-			}
-			if a.cid != nil && *a.cid != "" {
-				ah.Set("Content-Id", "<"+*a.cid+">")
-			}
-			w, err := mw.CreateAttachment(ah)
+	top := h.Header
+	switch {
+	case len(mixed) > 0:
+		top.SetContentType("multipart/mixed", nil)
+	case len(related) > 0:
+		top.SetContentType("multipart/related", map[string]string{"type": "multipart/alternative"})
+	default:
+		top.SetContentType("multipart/alternative", nil)
+	}
+	w, err := message.CreateWriter(&buf, top)
+	if err != nil {
+		return nil, err
+	}
+	switch {
+	case len(mixed) > 0:
+		if len(related) > 0 {
+			var rh message.Header
+			rh.SetContentType("multipart/related", map[string]string{"type": "multipart/alternative"})
+			rw, err := w.CreatePart(rh)
 			if err != nil {
 				return nil, err
 			}
-			f, err := store.Open(ctx, hex.EncodeToString(a.sha))
-			if err != nil {
-				return nil, fmt.Errorf("mail: open draft attachment: %w", err)
+			if err := writeRelated(rw); err != nil {
+				return nil, err
 			}
-			_, err = io.Copy(w, f)
-			_ = f.Close()
+		} else {
+			aw, err := w.CreatePart(altHeader())
 			if err != nil {
 				return nil, err
 			}
-			if err := w.Close(); err != nil {
+			if err := writeAlt(aw); err != nil {
 				return nil, err
 			}
 		}
-		if err := mw.Close(); err != nil {
+		for _, a := range mixed {
+			if err := writeAtt(w, a); err != nil {
+				return nil, err
+			}
+		}
+		if err := w.Close(); err != nil {
+			return nil, err
+		}
+	case len(related) > 0:
+		if err := writeRelated(w); err != nil {
+			return nil, err
+		}
+	default:
+		if err := writeAlt(w); err != nil {
 			return nil, err
 		}
 	}
