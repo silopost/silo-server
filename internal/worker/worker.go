@@ -51,6 +51,17 @@ type Worker struct {
 	started bool
 	running map[int64]bool // accounts with a live RunAccount loop
 	subs    []chan struct{}
+	notify  func(payload string)
+}
+
+// OnNotify installs fn, called with the payload of every silo_jobs
+// notification (the account id of the inserted job, or "" for a general job).
+// The sync engine uses it to start the worker of an account that has none yet,
+// so that its account loop can claim the job. fn must not block.
+func (w *Worker) OnNotify(fn func(payload string)) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.notify = fn
 }
 
 // New returns a Worker.
@@ -257,10 +268,17 @@ func (w *Worker) listenOnce(ctx context.Context) error {
 	}
 	w.broadcast() // catch jobs inserted before LISTEN took effect
 	for {
-		if _, err := conn.WaitForNotification(ctx); err != nil {
+		n, err := conn.WaitForNotification(ctx)
+		if err != nil {
 			return err
 		}
 		w.broadcast()
+		w.mu.Lock()
+		fn := w.notify
+		w.mu.Unlock()
+		if fn != nil {
+			fn(n.Payload)
+		}
 	}
 }
 
