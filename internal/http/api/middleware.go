@@ -80,17 +80,34 @@ func (d *deps) checkOrigin(ctx huma.Context, next func(huma.Context)) {
 	next(ctx)
 }
 
-// requireSession authenticates the cookie and, for mutating methods, enforces
-// the CSRF header and the Origin check.
+// bearerToken returns the token of an "Authorization: Bearer" header and
+// whether such a header is present. Other schemes (e.g. Basic added by a
+// reverse proxy) are ignored, so cookie sessions keep working behind them.
+func bearerToken(ctx huma.Context) (token string, ok bool) {
+	scheme, tok, _ := strings.Cut(ctx.Header("Authorization"), " ")
+	if !strings.EqualFold(scheme, "Bearer") {
+		return "", false
+	}
+	return strings.TrimSpace(tok), true
+}
+
+// requireSession authenticates the request and, for cookie sessions on mutating
+// methods, enforces the CSRF header and the Origin check. A request with an
+// Authorization header is authenticated by it alone (bearer session, ADR 0007):
+// browsers never attach it on their own, so CSRF does not apply.
 func (d *deps) requireSession(ctx huma.Context, next func(huma.Context)) {
-	var token string
-	for _, c := range huma.ReadCookies(ctx) {
-		if c.Name == SessionCookie {
-			token = c.Value
-			break
+	token, bearer := bearerToken(ctx)
+	kind := auth.KindBearer
+	if !bearer {
+		kind = auth.KindCookie
+		for _, c := range huma.ReadCookies(ctx) {
+			if c.Name == SessionCookie {
+				token = c.Value
+				break
+			}
 		}
 	}
-	sess, err := d.auth.Authenticate(ctx.Context(), token)
+	sess, err := d.auth.Authenticate(ctx.Context(), token, kind)
 	switch {
 	case errors.Is(err, auth.ErrUnauthenticated):
 		writeProblem(ctx, errUnauthenticated().(*Problem))
@@ -100,7 +117,7 @@ func (d *deps) requireSession(ctx huma.Context, next func(huma.Context)) {
 		writeProblem(ctx, errInternal(err).(*Problem))
 		return
 	}
-	if !isSafeMethod(ctx.Method()) {
+	if kind == auth.KindCookie && !isSafeMethod(ctx.Method()) {
 		got := ctx.Header(CSRFHeader)
 		if !d.originAllowed(ctx) || subtle.ConstantTimeCompare([]byte(got), []byte(sess.CsrfToken)) != 1 {
 			writeProblem(ctx, problem(http.StatusForbidden, CodeCSRF, "Missing or invalid CSRF token."))
@@ -110,13 +127,14 @@ func (d *deps) requireSession(ctx huma.Context, next func(huma.Context)) {
 	next(huma.WithValue(ctx, ctxKey{}, sess))
 }
 
-// secured marks op as requiring a session (and CSRF token for mutations).
+// secured marks op as requiring a session: the cookie (plus the CSRF token for
+// mutations) or a bearer token.
 func (d *deps) secured(op huma.Operation) huma.Operation {
 	sec := map[string][]string{"cookieAuth": {}}
 	if !isSafeMethod(op.Method) {
 		sec["csrfHeader"] = []string{}
 	}
-	op.Security = []map[string][]string{sec}
+	op.Security = []map[string][]string{sec, {"bearerAuth": {}}}
 	op.Middlewares = append(op.Middlewares, d.requireSession)
 	return op
 }

@@ -69,7 +69,7 @@ func TestMigrateRoundTrip(t *testing.T) {
 	if got := extensions(t, pool); len(got) != 3 {
 		t.Fatalf("extensions after up = %v", got)
 	}
-	if v, dirty, err := MigrateVersion(ctx, url); err != nil || v != 1 || dirty {
+	if v, dirty, err := MigrateVersion(ctx, url); err != nil || v != 2 || dirty {
 		t.Fatalf("after up: version=%d dirty=%v err=%v", v, dirty, err)
 	}
 
@@ -119,7 +119,7 @@ func TestMigrateConcurrent(t *testing.T) {
 			t.Errorf("runner %d: %v", i, err)
 		}
 	}
-	if v, dirty, err := MigrateVersion(ctx, url); err != nil || v != 1 || dirty {
+	if v, dirty, err := MigrateVersion(ctx, url); err != nil || v != 2 || dirty {
 		t.Fatalf("version=%d dirty=%v err=%v", v, dirty, err)
 	}
 }

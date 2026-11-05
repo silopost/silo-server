@@ -220,7 +220,11 @@ func openSSE(t *testing.T, base string, l login, lastID string) *sseStream {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
 	rq, _ := http.NewRequestWithContext(ctx, http.MethodGet, base+"/api/v1/events", nil)
-	rq.AddCookie(l.cookie)
+	if l.bearer != "" {
+		rq.Header.Set("Authorization", "Bearer "+l.bearer)
+	} else {
+		rq.AddCookie(l.cookie)
+	}
 	if lastID != "" {
 		rq.Header.Set("Last-Event-ID", lastID)
 	}
@@ -668,6 +672,21 @@ UPDATE messages SET body_state = 'headers', raw_blob_sha256 = NULL, body_text = 
 				t.Fatal("no heartbeat")
 			}
 		}
+
+		// A native client streams with a bearer token of the same user.
+		bearer := "bearer-token-events"
+		if _, err := s.pool.Exec(context.Background(), `INSERT INTO sessions (user_id, token_hash, csrf_token, expires_at, kind)
+SELECT user_id, $1, 'unused', now() + interval '1 hour', 'bearer' FROM sessions WHERE token_hash = $2`,
+			tokenHash(bearer), tokenHash(l.cookie.Value)); err != nil {
+			t.Fatal(err)
+		}
+		sb := openSSE(t, s.srv.URL, login{bearer: bearer}, "")
+		select {
+		case <-sb.comments:
+		case <-time.After(2 * time.Second):
+			t.Fatal("bearer stream: no comment")
+		}
+		sb.cancel()
 
 		// DoD phase 2: a message appended by another client shows up within 2 s.
 		raw := plainMsg(900, "Fresh from Thunderbird", "hello fresh", time.Now())

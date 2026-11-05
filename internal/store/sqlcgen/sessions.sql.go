@@ -40,7 +40,7 @@ func (q *Queries) DeleteSession(ctx context.Context, arg DeleteSessionParams) (i
 }
 
 const getSessionByTokenHash = `-- name: GetSessionByTokenHash :one
-SELECT id, user_id, token_hash, csrf_token, created_at, last_seen_at, expires_at, user_agent, ip FROM sessions WHERE token_hash = $1
+SELECT id, user_id, token_hash, csrf_token, created_at, last_seen_at, expires_at, user_agent, ip, kind, client_name FROM sessions WHERE token_hash = $1
 `
 
 // tenancy: exempt the session is how the user is identified in the first place
@@ -57,23 +57,27 @@ func (q *Queries) GetSessionByTokenHash(ctx context.Context, tokenHash []byte) (
 		&i.ExpiresAt,
 		&i.UserAgent,
 		&i.Ip,
+		&i.Kind,
+		&i.ClientName,
 	)
 	return i, err
 }
 
 const insertSession = `-- name: InsertSession :one
-INSERT INTO sessions (user_id, token_hash, csrf_token, expires_at, user_agent, ip)
-VALUES ($1, $2, $3, $4, $5, $6)
-RETURNING id, user_id, token_hash, csrf_token, created_at, last_seen_at, expires_at, user_agent, ip
+INSERT INTO sessions (user_id, token_hash, csrf_token, expires_at, user_agent, ip, kind, client_name)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+RETURNING id, user_id, token_hash, csrf_token, created_at, last_seen_at, expires_at, user_agent, ip, kind, client_name
 `
 
 type InsertSessionParams struct {
-	UserID    int64
-	TokenHash []byte
-	CsrfToken string
-	ExpiresAt pgtype.Timestamptz
-	UserAgent string
-	Ip        *netip.Addr
+	UserID     int64
+	TokenHash  []byte
+	CsrfToken  string
+	ExpiresAt  pgtype.Timestamptz
+	UserAgent  string
+	Ip         *netip.Addr
+	Kind       string
+	ClientName string
 }
 
 func (q *Queries) InsertSession(ctx context.Context, arg InsertSessionParams) (Session, error) {
@@ -84,6 +88,8 @@ func (q *Queries) InsertSession(ctx context.Context, arg InsertSessionParams) (S
 		arg.ExpiresAt,
 		arg.UserAgent,
 		arg.Ip,
+		arg.Kind,
+		arg.ClientName,
 	)
 	var i Session
 	err := row.Scan(
@@ -96,12 +102,14 @@ func (q *Queries) InsertSession(ctx context.Context, arg InsertSessionParams) (S
 		&i.ExpiresAt,
 		&i.UserAgent,
 		&i.Ip,
+		&i.Kind,
+		&i.ClientName,
 	)
 	return i, err
 }
 
 const listSessionsByUser = `-- name: ListSessionsByUser :many
-SELECT id, user_id, token_hash, csrf_token, created_at, last_seen_at, expires_at, user_agent, ip FROM sessions WHERE user_id = $1 AND expires_at > now()
+SELECT id, user_id, token_hash, csrf_token, created_at, last_seen_at, expires_at, user_agent, ip, kind, client_name FROM sessions WHERE user_id = $1 AND expires_at > now()
 ORDER BY last_seen_at DESC, id DESC
 `
 
@@ -124,6 +132,8 @@ func (q *Queries) ListSessionsByUser(ctx context.Context, userID int64) ([]Sessi
 			&i.ExpiresAt,
 			&i.UserAgent,
 			&i.Ip,
+			&i.Kind,
+			&i.ClientName,
 		); err != nil {
 			return nil, err
 		}

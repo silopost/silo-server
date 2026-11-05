@@ -269,6 +269,8 @@ type Session struct {
 	ExpiresAt  pgtype.Timestamptz
 	UserAgent  string
 	Ip         *netip.Addr
+	Kind       string
+	ClientName string
 }
 
 type Snooze struct {

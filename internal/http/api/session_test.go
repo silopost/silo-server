@@ -161,8 +161,14 @@ func serve(h http.Handler, q req) resp {
 
 type login struct {
 	cookie *http.Cookie
+	bearer string // token of a bearer session (instead of cookie)
 	csrf   string
 	body   api.SessionBody
+}
+
+// bearerHdr is the Authorization header carrying token.
+func bearerHdr(token string) map[string]string {
+	return map[string]string{"Authorization": "Bearer " + token}
 }
 
 func (e *env) login(h http.Handler, user, pass string) login {
@@ -407,6 +413,143 @@ func TestSessionAndAccounts(t *testing.T) {
 			if r := serve(h, req{method: "GET", path: "/session", cookie: l.cookie}); r.Code != http.StatusUnauthorized {
 				t.Errorf("%s: expired session accepted: %d", name, r.Code)
 			}
+		}
+	})
+
+	t.Run("bearer", func(t *testing.T) {
+		r := serve(h, req{method: "POST", path: "/session", body: map[string]any{
+			"email": user, "password": pass, "client": map[string]string{"kind": "bearer", "name": "Pixel 8"},
+		}})
+		if r.Code != http.StatusOK {
+			t.Fatalf("bearer login: %d %s", r.Code, r.Body)
+		}
+		if sc := r.Header().Values("Set-Cookie"); len(sc) != 0 {
+			t.Errorf("bearer login set cookies: %q", sc)
+		}
+		var body api.SessionBody
+		r.json(&body)
+		tok := body.Token
+		if len(tok) < 40 || body.User.Email == "" {
+			t.Fatalf("bearer login body: %s", r.Body)
+		}
+		var kind, name string
+		if err := e.pool.QueryRow(ctx, `SELECT kind, client_name FROM sessions WHERE token_hash = $1`, tokenHash(tok)).Scan(&kind, &name); err != nil {
+			t.Fatal(err)
+		}
+		if kind != "bearer" || name != "Pixel 8" {
+			t.Errorf("stored session: kind %q name %q", kind, name)
+		}
+
+		// Cookie logins are unchanged: no token in the body.
+		if c := e.login(h, user, pass); c.body.Token != "" || c.cookie == nil {
+			t.Errorf("cookie login: token %q cookie %v", c.body.Token, c.cookie)
+		}
+
+		r = serve(h, req{method: "GET", path: "/session", headers: bearerHdr(tok)})
+		if r.Code != http.StatusOK || strings.Contains(r.Body.String(), `"token"`) {
+			t.Fatalf("GET /session with bearer: %d %s", r.Code, r.Body)
+		}
+
+		// Mutations need no CSRF token or same Origin with a bearer token...
+		body2 := map[string]string{"email": "silo@silo.test", "username": user, "password": pass}
+		hdr := bearerHdr(tok)
+		hdr["Origin"] = "https://evil.example"
+		if r := serve(h, req{method: "POST", path: "/accounts/test", body: body2, headers: hdr}); r.Code != http.StatusOK {
+			t.Errorf("bearer mutation without csrf: %d %s", r.Code, r.Body)
+		}
+		// ...while the same mutation with the cookie still does.
+		if r := serve(h, req{method: "POST", path: "/accounts/test", body: body2, cookie: first.cookie}); r.Code != http.StatusForbidden || r.code() != api.CodeCSRF {
+			t.Errorf("cookie mutation without csrf: %d %q", r.Code, r.code())
+		}
+
+		// A token is only accepted on the channel it was issued for.
+		if r := serve(h, req{method: "GET", path: "/session", headers: bearerHdr(first.cookie.Value)}); r.Code != http.StatusUnauthorized {
+			t.Errorf("cookie token as bearer: %d", r.Code)
+		}
+		if r := serve(h, req{method: "GET", path: "/session", cookie: &http.Cookie{Name: api.SessionCookie, Value: tok}}); r.Code != http.StatusUnauthorized {
+			t.Errorf("bearer token as cookie: %d", r.Code)
+		}
+		for name, hdr := range map[string]map[string]string{
+			"unknown token": bearerHdr("not-a-token"),
+			"empty token":   bearerHdr(""),
+		} {
+			if r := serve(h, req{method: "GET", path: "/session", headers: hdr}); r.Code != http.StatusUnauthorized {
+				t.Errorf("%s: %d", name, r.Code)
+			}
+		}
+		// The bearer header wins over a valid cookie; other schemes are ignored.
+		if r := serve(h, req{method: "GET", path: "/session", cookie: first.cookie, headers: bearerHdr("not-a-token")}); r.Code != http.StatusUnauthorized {
+			t.Errorf("bad bearer with good cookie: %d", r.Code)
+		}
+		if r := serve(h, req{method: "GET", path: "/session", cookie: first.cookie, headers: map[string]string{"Authorization": "Basic dTpw"}}); r.Code != http.StatusOK {
+			t.Errorf("cookie behind basic auth: %d", r.Code)
+		}
+
+		// The session list shows kind and device name.
+		r = serve(h, req{method: "GET", path: "/sessions", headers: bearerHdr(tok)})
+		var list struct{ Sessions []api.SessionInfo }
+		r.json(&list)
+		var mine *api.SessionInfo
+		for i, s := range list.Sessions {
+			if s.Current {
+				mine = &list.Sessions[i]
+			}
+			if s.Kind != "cookie" && s.Kind != "bearer" {
+				t.Errorf("session %s kind %q", s.ID, s.Kind)
+			}
+		}
+		if mine == nil || mine.Kind != "bearer" || mine.ClientName != "Pixel 8" {
+			t.Fatalf("current bearer session: %+v", mine)
+		}
+		if d := time.Until(mine.ExpiresAt); d < 89*24*time.Hour {
+			t.Errorf("bearer sliding expiry in %s, want ~90 days", d)
+		}
+
+		// Revoking another device from a bearer session needs no CSRF either.
+		other := e.login(h, user, pass)
+		r = serve(h, req{method: "GET", path: "/sessions", cookie: other.cookie})
+		r.json(&list)
+		otherID := ""
+		for _, s := range list.Sessions {
+			if s.Current {
+				otherID = s.ID
+			}
+		}
+		if r := serve(h, req{method: "DELETE", path: "/sessions/" + otherID, headers: bearerHdr(tok)}); r.Code != http.StatusNoContent {
+			t.Errorf("revoke from bearer: %d %s", r.Code, r.Body)
+		}
+
+		// Expiry: the bearer lifetimes are longer than the cookie ones but still enforced.
+		if _, err := e.pool.Exec(ctx, "UPDATE sessions SET created_at = now() - interval '91 days' WHERE token_hash = $1", tokenHash(tok)); err != nil {
+			t.Fatal(err)
+		}
+		if r := serve(h, req{method: "GET", path: "/session", headers: bearerHdr(tok)}); r.Code != http.StatusOK {
+			t.Errorf("bearer session past the cookie absolute lifetime: %d", r.Code)
+		}
+		for name, sql := range map[string]string{
+			"idle":     "UPDATE sessions SET expires_at = now() - interval '1 minute' WHERE token_hash = $1",
+			"absolute": "UPDATE sessions SET created_at = now() - interval '366 days' WHERE token_hash = $1",
+		} {
+			r := serve(h, req{method: "POST", path: "/session", body: map[string]any{
+				"email": user, "password": pass, "client": map[string]string{"kind": "bearer"},
+			}})
+			var b api.SessionBody
+			r.json(&b)
+			if _, err := e.pool.Exec(ctx, sql, tokenHash(b.Token)); err != nil {
+				t.Fatal(err)
+			}
+			if r := serve(h, req{method: "GET", path: "/session", headers: bearerHdr(b.Token)}); r.Code != http.StatusUnauthorized {
+				t.Errorf("%s: expired bearer session accepted: %d", name, r.Code)
+			}
+		}
+
+		// Logout ends the bearer session without touching cookies.
+		r = serve(h, req{method: "DELETE", path: "/session", headers: bearerHdr(tok)})
+		if r.Code != http.StatusNoContent || len(r.Header().Values("Set-Cookie")) != 0 {
+			t.Errorf("bearer logout: %d %q", r.Code, r.Header().Values("Set-Cookie"))
+		}
+		if r := serve(h, req{method: "GET", path: "/session", headers: bearerHdr(tok)}); r.Code != http.StatusUnauthorized {
+			t.Errorf("bearer session after logout: %d", r.Code)
 		}
 	})
 

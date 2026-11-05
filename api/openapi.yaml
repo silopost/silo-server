@@ -437,9 +437,28 @@ components:
       required:
         - labels
       type: object
+    LoginClient:
+      additionalProperties: false
+      properties:
+        kind:
+          description: "bearer: native client; the token is returned in the body and no cookie is set."
+          enum:
+            - cookie
+            - bearer
+          type: string
+        name:
+          description: Device name shown in the session list, e.g. "Pixel 8".
+          maxLength: 100
+          type: string
+      required:
+        - kind
+      type: object
     LoginInputBody:
       additionalProperties: false
       properties:
+        client:
+          $ref: "#/components/schemas/LoginClient"
+          description: Kind of session to open; a browser cookie session when omitted.
         email:
           description: Mailbox address (or local part, per SILO_DEFAULT_LOGIN_FORMAT).
           maxLength: 254
@@ -836,10 +855,13 @@ components:
             - array
             - "null"
         csrfToken:
-          description: Send as X-Silo-CSRF on every mutating request.
+          description: Send as X-Silo-CSRF on every mutating request (cookie sessions only).
           type: string
         settings:
           $ref: "#/components/schemas/Settings"
+        token:
+          description: Bearer token of a session opened with client.kind=bearer; returned once, by POST /session only.
+          type: string
         user:
           $ref: "#/components/schemas/User"
       required:
@@ -851,6 +873,9 @@ components:
     SessionInfo:
       additionalProperties: false
       properties:
+        clientName:
+          description: Device name given by a native client at sign-in; empty for browsers.
+          type: string
         createdAt:
           format: date-time
           type: string
@@ -868,6 +893,12 @@ components:
           type:
             - string
             - "null"
+        kind:
+          description: "cookie: browser session; bearer: native client token."
+          enum:
+            - cookie
+            - bearer
+          type: string
         lastSeenAt:
           format: date-time
           type: string
@@ -879,6 +910,8 @@ components:
         - lastSeenAt
         - expiresAt
         - userAgent
+        - kind
+        - clientName
         - ip
         - current
       type: object
@@ -1236,6 +1269,10 @@ components:
         - isAdmin
       type: object
   securitySchemes:
+    bearerAuth:
+      description: Session token returned by POST /session with client.kind=bearer (native clients). No cookie and no CSRF header are used with it.
+      scheme: bearer
+      type: http
     cookieAuth:
       description: Session cookie set by POST /session.
       in: cookie
@@ -1276,6 +1313,7 @@ paths:
           description: Internal Server Error
       security:
         - cookieAuth: []
+        - bearerAuth: []
       summary: List the accounts of the user with their sync state
       tags:
         - accounts
@@ -1328,6 +1366,7 @@ paths:
       security:
         - cookieAuth: []
           csrfHeader: []
+        - bearerAuth: []
       summary: Add an account
       tags:
         - accounts
@@ -1375,6 +1414,7 @@ paths:
       security:
         - cookieAuth: []
           csrfHeader: []
+        - bearerAuth: []
       summary: Test a connection without saving
       tags:
         - accounts
@@ -1426,6 +1466,7 @@ paths:
       security:
         - cookieAuth: []
           csrfHeader: []
+        - bearerAuth: []
       summary: Remove an account from Silo
       tags:
         - accounts
@@ -1485,6 +1526,7 @@ paths:
       security:
         - cookieAuth: []
           csrfHeader: []
+        - bearerAuth: []
       summary: Change account settings
       tags:
         - accounts
@@ -1532,6 +1574,7 @@ paths:
           description: Internal Server Error
       security:
         - cookieAuth: []
+        - bearerAuth: []
       summary: List the server folders of an account with roles and sync mode
       tags:
         - accounts
@@ -1592,6 +1635,7 @@ paths:
       security:
         - cookieAuth: []
           csrfHeader: []
+        - bearerAuth: []
       summary: Map folder roles and choose which folders are synced
       tags:
         - accounts
@@ -1655,6 +1699,7 @@ paths:
       security:
         - cookieAuth: []
           csrfHeader: []
+        - bearerAuth: []
       summary: Force a sync of the account
       tags:
         - accounts
@@ -1703,6 +1748,7 @@ paths:
           description: Internal Server Error
       security:
         - cookieAuth: []
+        - bearerAuth: []
       summary: Get the sync state of an account
       tags:
         - accounts
@@ -1764,6 +1810,7 @@ paths:
           description: Service Unavailable
       security:
         - cookieAuth: []
+        - bearerAuth: []
       summary: Attachment bytes
       tags:
         - messages
@@ -1812,6 +1859,7 @@ paths:
           description: Internal Server Error
       security:
         - cookieAuth: []
+        - bearerAuth: []
       summary: Server-Sent Events stream
       tags:
         - events
@@ -1871,6 +1919,7 @@ paths:
           description: Internal Server Error
       security:
         - cookieAuth: []
+        - bearerAuth: []
       summary: Events after a sequence number (fallback for /events)
       tags:
         - events
@@ -1919,6 +1968,7 @@ paths:
           description: Internal Server Error
       security:
         - cookieAuth: []
+        - bearerAuth: []
       summary: List the labels of an account with thread counters
       tags:
         - labels
@@ -1988,6 +2038,7 @@ paths:
       security:
         - cookieAuth: []
           csrfHeader: []
+        - bearerAuth: []
       summary: Create a label or a folder
       tags:
         - labels
@@ -2060,6 +2111,7 @@ paths:
       security:
         - cookieAuth: []
           csrfHeader: []
+        - bearerAuth: []
       summary: Delete a label or an empty folder
       tags:
         - labels
@@ -2141,6 +2193,7 @@ paths:
       security:
         - cookieAuth: []
           csrfHeader: []
+        - bearerAuth: []
       summary: Rename, recolour or hide a label
       tags:
         - labels
@@ -2207,6 +2260,7 @@ paths:
       security:
         - cookieAuth: []
           csrfHeader: []
+        - bearerAuth: []
       summary: Add or remove labels on single messages
       tags:
         - threads
@@ -2261,6 +2315,7 @@ paths:
           description: Service Unavailable
       security:
         - cookieAuth: []
+        - bearerAuth: []
       summary: Sanitised HTML of a message
       tags:
         - messages
@@ -2315,6 +2370,7 @@ paths:
           description: Service Unavailable
       security:
         - cookieAuth: []
+        - bearerAuth: []
       summary: Original message (.eml)
       tags:
         - messages
@@ -2369,6 +2425,7 @@ paths:
       security:
         - cookieAuth: []
           csrfHeader: []
+        - bearerAuth: []
       summary: Sign out
       tags:
         - session
@@ -2395,11 +2452,12 @@ paths:
           description: Internal Server Error
       security:
         - cookieAuth: []
+        - bearerAuth: []
       summary: Get the current session
       tags:
         - session
     post:
-      description: In imap mode the credentials are verified with LOGIN on the default mail server. A new user and first account are created on first success. When the mail server is unreachable, a known user with the right password is let in and the account reports state `backoff`. Every failure answers 401 invalid_credentials after a constant minimum time.
+      description: "In imap mode the credentials are verified with LOGIN on the default mail server. A new user and first account are created on first success. When the mail server is unreachable, a known user with the right password is let in and the account reports state `backoff`. Every failure answers 401 invalid_credentials after a constant minimum time. Browsers get the silo_session cookie; with client.kind=bearer (native clients) no cookie is set and the body carries a token for the Authorization: Bearer header instead (shown once)."
       operationId: login
       requestBody:
         content:
@@ -2481,6 +2539,7 @@ paths:
           description: Internal Server Error
       security:
         - cookieAuth: []
+        - bearerAuth: []
       summary: List the sessions of the user
       tags:
         - session
@@ -2535,6 +2594,7 @@ paths:
       security:
         - cookieAuth: []
           csrfHeader: []
+        - bearerAuth: []
       summary: Revoke a session
       tags:
         - session
@@ -2618,6 +2678,7 @@ paths:
           description: Internal Server Error
       security:
         - cookieAuth: []
+        - bearerAuth: []
       summary: List threads of a label (or all mail), newest first
       tags:
         - threads
@@ -2682,6 +2743,7 @@ paths:
       security:
         - cookieAuth: []
           csrfHeader: []
+        - bearerAuth: []
       summary: Delete threads for good
       tags:
         - threads
@@ -2748,6 +2810,7 @@ paths:
       security:
         - cookieAuth: []
           csrfHeader: []
+        - bearerAuth: []
       summary: Add or remove labels on threads
       tags:
         - threads
@@ -2812,6 +2875,7 @@ paths:
       security:
         - cookieAuth: []
           csrfHeader: []
+        - bearerAuth: []
       summary: Move threads to the trash
       tags:
         - threads
@@ -2876,6 +2940,7 @@ paths:
       security:
         - cookieAuth: []
           csrfHeader: []
+        - bearerAuth: []
       summary: Restore threads from the trash
       tags:
         - threads
@@ -2922,6 +2987,7 @@ paths:
           description: Internal Server Error
       security:
         - cookieAuth: []
+        - bearerAuth: []
       summary: Get a thread with its messages
       tags:
         - threads

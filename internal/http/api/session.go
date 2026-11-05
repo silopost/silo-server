@@ -35,7 +35,8 @@ type Settings struct {
 // SessionBody is the state of the signed-in user.
 type SessionBody struct {
 	User      User      `json:"user"`
-	CSRFToken string    `json:"csrfToken" doc:"Send as X-Silo-CSRF on every mutating request."`
+	CSRFToken string    `json:"csrfToken" doc:"Send as X-Silo-CSRF on every mutating request (cookie sessions only)."`
+	Token     string    `json:"token,omitempty" doc:"Bearer token of a session opened with client.kind=bearer; returned once, by POST /session only."`
 	Settings  Settings  `json:"settings"`
 	Accounts  []Account `json:"accounts"`
 }
@@ -47,16 +48,25 @@ type SessionInfo struct {
 	LastSeenAt time.Time `json:"lastSeenAt"`
 	ExpiresAt  time.Time `json:"expiresAt"`
 	UserAgent  string    `json:"userAgent"`
+	Kind       string    `json:"kind" enum:"cookie,bearer" doc:"cookie: browser session; bearer: native client token."`
+	ClientName string    `json:"clientName" doc:"Device name given by a native client at sign-in; empty for browsers."`
 	IP         *string   `json:"ip"`
 	Current    bool      `json:"current" doc:"Whether this is the session making the request."`
 }
 
 type loginInput struct {
 	Body struct {
-		Email    string `json:"email" minLength:"1" maxLength:"254" doc:"Mailbox address (or local part, per SILO_DEFAULT_LOGIN_FORMAT)."`
-		Password string `json:"password" minLength:"1" maxLength:"1024"`
+		Email    string       `json:"email" minLength:"1" maxLength:"254" doc:"Mailbox address (or local part, per SILO_DEFAULT_LOGIN_FORMAT)."`
+		Password string       `json:"password" minLength:"1" maxLength:"1024"`
+		Client   *LoginClient `json:"client,omitempty" doc:"Kind of session to open; a browser cookie session when omitted."`
 	}
 	remote, userAgent string
+}
+
+// LoginClient selects the session kind at sign-in (ADR 0007).
+type LoginClient struct {
+	Kind string `json:"kind" enum:"cookie,bearer" doc:"bearer: native client; the token is returned in the body and no cookie is set."`
+	Name string `json:"name,omitempty" maxLength:"100" doc:"Device name shown in the session list, e.g. \"Pixel 8\"."`
 }
 
 // Resolve captures request details that are not part of the schema.
@@ -66,7 +76,7 @@ func (i *loginInput) Resolve(ctx huma.Context) []error {
 }
 
 type sessionOutput struct {
-	SetCookie http.Cookie `header:"Set-Cookie"`
+	SetCookie string `header:"Set-Cookie"`
 	Body      SessionBody
 }
 
@@ -83,21 +93,28 @@ type sessionIDInput struct {
 }
 
 type logoutOutput struct {
-	SetCookie http.Cookie `header:"Set-Cookie"`
+	SetCookie string `header:"Set-Cookie"` // empty: no header
 }
 
-func (d *deps) sessionCookie(token string, expires time.Time) http.Cookie {
-	return http.Cookie{
+func (d *deps) sessionCookie(token string, expires time.Time) string {
+	c := http.Cookie{
 		Name: SessionCookie, Value: token, Path: "/", Expires: expires,
 		HttpOnly: true, Secure: d.cookieSecure, SameSite: http.SameSiteLaxMode,
 	}
+	return c.String()
 }
 
-func (d *deps) clearedCookie() http.Cookie {
-	return http.Cookie{
+// clearedCookie drops the session cookie of a cookie session; bearer sessions
+// get no Set-Cookie at all.
+func (d *deps) clearedCookie(sess sqlcgen.Session) string {
+	if sess.Kind == auth.KindBearer {
+		return ""
+	}
+	c := http.Cookie{
 		Name: SessionCookie, Value: "", Path: "/", MaxAge: -1,
 		HttpOnly: true, Secure: d.cookieSecure, SameSite: http.SameSiteLaxMode,
 	}
+	return c.String()
 }
 
 func (d *deps) registerSession(a huma.API) {
@@ -107,11 +124,17 @@ func (d *deps) registerSession(a huma.API) {
 		Description: "In imap mode the credentials are verified with LOGIN on the default mail server. " +
 			"A new user and first account are created on first success. When the mail server is " +
 			"unreachable, a known user with the right password is let in and the account reports state `backoff`. " +
-			"Every failure answers 401 invalid_credentials after a constant minimum time.",
+			"Every failure answers 401 invalid_credentials after a constant minimum time. " +
+			"Browsers get the silo_session cookie; with client.kind=bearer (native clients) no cookie is set and the " +
+			"body carries a token for the Authorization: Bearer header instead (shown once).",
 		Errors:      []int{http.StatusUnauthorized, http.StatusForbidden, http.StatusTooManyRequests, http.StatusBadGateway},
 		Middlewares: huma.Middlewares{d.checkOrigin},
 	}, func(ctx context.Context, in *loginInput) (*sessionOutput, error) {
-		res, err := d.auth.Login(ctx, in.Body.Email, in.Body.Password, auth.Client{IP: in.remote, UserAgent: in.userAgent})
+		client := auth.Client{IP: in.remote, UserAgent: in.userAgent, Kind: auth.KindCookie}
+		if c := in.Body.Client; c != nil {
+			client.Kind, client.Name = c.Kind, c.Name
+		}
+		res, err := d.auth.Login(ctx, in.Body.Email, in.Body.Password, client)
 		var rl *auth.RateLimitError
 		switch {
 		case errors.As(err, &rl):
@@ -127,6 +150,10 @@ func (d *deps) registerSession(a huma.API) {
 		body, err := d.sessionBody(ctx, res.User, res.Session)
 		if err != nil {
 			return nil, err
+		}
+		if res.Session.Kind == auth.KindBearer {
+			body.Token = res.Token
+			return &sessionOutput{Body: body}, nil
 		}
 		return &sessionOutput{SetCookie: d.sessionCookie(res.Token, auth.AbsoluteExpiry(res.Session)), Body: body}, nil
 	})
@@ -157,7 +184,7 @@ func (d *deps) registerSession(a huma.API) {
 		if err := d.auth.Revoke(ctx, sess.UserID, sess.ID); err != nil && !errors.Is(err, auth.ErrNotFound) {
 			return nil, errInternal(err)
 		}
-		return &logoutOutput{SetCookie: d.clearedCookie()}, nil
+		return &logoutOutput{SetCookie: d.clearedCookie(sess)}, nil
 	})
 
 	huma.Register(a, d.secured(huma.Operation{
@@ -175,7 +202,8 @@ func (d *deps) registerSession(a huma.API) {
 		for _, s := range list {
 			info := SessionInfo{
 				ID: formatID("s_", s.ID), CreatedAt: s.CreatedAt.Time, LastSeenAt: s.LastSeenAt.Time,
-				ExpiresAt: s.ExpiresAt.Time, UserAgent: s.UserAgent, Current: s.ID == cur.ID,
+				ExpiresAt: s.ExpiresAt.Time, UserAgent: s.UserAgent, Kind: s.Kind, ClientName: s.ClientName,
+				Current: s.ID == cur.ID,
 			}
 			if s.Ip != nil {
 				ip := s.Ip.String()
@@ -204,7 +232,7 @@ func (d *deps) registerSession(a huma.API) {
 		}
 		out := &logoutOutput{}
 		if id == cur.ID {
-			out.SetCookie = d.clearedCookie()
+			out.SetCookie = d.clearedCookie(cur)
 		}
 		return out, nil
 	})

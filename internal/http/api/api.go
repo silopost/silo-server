@@ -101,6 +101,8 @@ func Mount(root chi.Router, o Options) huma.API {
 		cfg.Components.SecuritySchemes = map[string]*huma.SecurityScheme{
 			"cookieAuth": {Type: "apiKey", In: "cookie", Name: SessionCookie, Description: "Session cookie set by POST /session."},
 			"csrfHeader": {Type: "apiKey", In: "header", Name: CSRFHeader, Description: "csrfToken of the session; required on mutating requests."},
+			"bearerAuth": {Type: "http", Scheme: "bearer", Description: "Session token returned by POST /session with client.kind=bearer " +
+				"(native clients). No cookie and no CSRF header are used with it."},
 		}
 
 		a = humachi.New(r, cfg)

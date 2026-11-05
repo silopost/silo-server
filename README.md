@@ -101,6 +101,14 @@ accept `50MB` style values, rates `5MB/s`, durations `5m`. Worth knowing:
   (plain `http://` is for local development only). Mutating requests need the
   `X-Silo-CSRF` header and an `Origin` equal to `SILO_PUBLIC_URL` or the served host.
   Sign-in rate limits and the constant answer time are built in (per IP and per login).
+  Browser sessions last 30 days idle / 90 days at most.
+- Bearer sessions (native clients, ADR 0007 in `silo`): `POST /session` with
+  `"client": {"kind": "bearer", "name": "Pixel 8"}` returns `token` in the body (shown
+  once) and sets no cookie. Send it as `Authorization: Bearer <token>` on every request,
+  including `GET /events` and attachment downloads; no `X-Silo-CSRF` or `Origin` check
+  applies. Tokens are opaque (only the SHA-256 is stored in `sessions`), bound to their
+  channel (a cookie token is not accepted as bearer and vice versa), last 90 days idle /
+  365 days at most, and are listed with `kind` and `clientName` in `GET /sessions`.
 - Custom mail servers (`SILO_ALLOW_CUSTOM_SERVERS=true`) must resolve to public
   addresses unless listed in `SILO_CUSTOM_SERVER_ALLOWLIST` (host names, IPs or CIDRs).
 - Logging: `SILO_LOG_FORMAT` (`json`/`text`), `SILO_LOG_LEVEL`; listen address: `SILO_HTTP_ADDR`.

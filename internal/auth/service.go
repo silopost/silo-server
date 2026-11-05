@@ -30,7 +30,26 @@ import (
 const (
 	SlidingTTL  = 30 * 24 * time.Hour
 	AbsoluteTTL = 90 * 24 * time.Hour
+
+	// Bearer sessions (native clients, ADR 0007) live longer: a phone that is
+	// opened every few weeks must not sign out.
+	BearerSlidingTTL  = 90 * 24 * time.Hour
+	BearerAbsoluteTTL = 365 * 24 * time.Hour
 )
+
+// Session kinds (sessions.kind): the channel a session token is accepted on.
+const (
+	KindCookie = "cookie" // browser: silo_session cookie + CSRF header
+	KindBearer = "bearer" // native client: Authorization: Bearer
+)
+
+// ttls returns the sliding and absolute lifetime of a session kind.
+func ttls(kind string) (sliding, absolute time.Duration) {
+	if kind == KindBearer {
+		return BearerSlidingTTL, BearerAbsoluteTTL
+	}
+	return SlidingTTL, AbsoluteTTL
+}
 
 // Job kinds enqueued when an account must be (re)started. The account sync
 // engine registers handlers for them.
@@ -126,11 +145,13 @@ func New(o Options) *Service {
 type Client struct {
 	IP        string // remote address, with or without port
 	UserAgent string
+	Kind      string // session kind, KindCookie when empty
+	Name      string // device name given by a native client
 }
 
 // Login is the outcome of a successful sign-in.
 type Login struct {
-	Token   string // raw session token for the cookie; never stored
+	Token   string // raw session token (cookie or bearer); never stored
 	Session sqlcgen.Session
 	User    sqlcgen.User
 }
@@ -368,10 +389,15 @@ func (s *Service) newSession(ctx context.Context, q *sqlcgen.Queries, user sqlcg
 	if len(ua) > 512 {
 		ua = ua[:512]
 	}
+	kind := c.Kind
+	if kind == "" {
+		kind = KindCookie
+	}
+	sliding, _ := ttls(kind)
 	sess, err := q.InsertSession(ctx, sqlcgen.InsertSessionParams{
 		UserID: user.ID, TokenHash: hashToken(token), CsrfToken: csrf,
-		ExpiresAt: pgtype.Timestamptz{Time: now.Add(SlidingTTL), Valid: true},
-		UserAgent: ua, Ip: ip,
+		ExpiresAt: pgtype.Timestamptz{Time: now.Add(sliding), Valid: true},
+		UserAgent: ua, Ip: ip, Kind: kind, ClientName: c.Name,
 	})
 	if err != nil {
 		return nil, err
@@ -397,9 +423,11 @@ func (s *Service) inTx(ctx context.Context, fn func(*sqlcgen.Queries, pgx.Tx) er
 	return tx.Commit(ctx)
 }
 
-// Authenticate resolves a session token. It slides the idle expiry (at most once
-// a minute) and enforces the absolute lifetime.
-func (s *Service) Authenticate(ctx context.Context, token string) (sqlcgen.Session, error) {
+// Authenticate resolves a session token presented on the channel kind
+// (KindCookie or KindBearer); a token issued for the other channel is rejected.
+// It slides the idle expiry (at most once a minute) and enforces the absolute
+// lifetime.
+func (s *Service) Authenticate(ctx context.Context, token, kind string) (sqlcgen.Session, error) {
 	if token == "" {
 		return sqlcgen.Session{}, ErrUnauthenticated
 	}
@@ -411,13 +439,17 @@ func (s *Service) Authenticate(ctx context.Context, token string) (sqlcgen.Sessi
 	if err != nil {
 		return sqlcgen.Session{}, err
 	}
+	if sess.Kind != kind {
+		return sqlcgen.Session{}, ErrUnauthenticated
+	}
 	now := s.o.Now()
-	absolute := sess.CreatedAt.Time.Add(AbsoluteTTL)
+	slidingTTL, _ := ttls(sess.Kind)
+	absolute := AbsoluteExpiry(sess)
 	if !sess.ExpiresAt.Time.After(now) || !absolute.After(now) {
 		_, _ = q.DeleteSession(ctx, sqlcgen.DeleteSessionParams{ID: sess.ID, UserID: sess.UserID})
 		return sqlcgen.Session{}, ErrUnauthenticated
 	}
-	next := now.Add(SlidingTTL)
+	next := now.Add(slidingTTL)
 	if next.After(absolute) {
 		next = absolute
 	}
@@ -449,8 +481,12 @@ func (s *Service) Revoke(ctx context.Context, userID, sessionID int64) error {
 	return nil
 }
 
-// AbsoluteExpiry is when the session cookie may be dropped by the browser.
-func AbsoluteExpiry(sess sqlcgen.Session) time.Time { return sess.CreatedAt.Time.Add(AbsoluteTTL) }
+// AbsoluteExpiry is when the session ends regardless of activity (and when the
+// browser may drop the session cookie).
+func AbsoluteExpiry(sess sqlcgen.Session) time.Time {
+	_, absolute := ttls(sess.Kind)
+	return sess.CreatedAt.Time.Add(absolute)
+}
 
 func hashToken(token string) []byte {
 	sum := sha256.Sum256([]byte(token))
