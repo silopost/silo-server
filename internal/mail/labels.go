@@ -93,8 +93,9 @@ VALUES ($1, $2, $3, 'folder', $4) ON CONFLICT DO NOTHING RETURNING id`, userID, 
 // not recompute the thread aggregates; call RecomputeThread afterwards.
 //
 // A message without locations (orphaned) loses its system/folder labels and
-// keeps its user labels. Overlaying pending write-back operations belongs
-// here as well, once the ops package exists.
+// keeps its user labels. Pending imap_op operations of the message (op_messages)
+// are overlaid on the server state first (plan 3.6), and messages.pending_ops
+// is set to their number; locations flagged Deleted do not count.
 func DeriveSystemLabels(ctx context.Context, db DB, messageID int64) error {
 	return DeriveSystemLabelsBatch(ctx, db, []int64{messageID})
 }
@@ -279,7 +280,10 @@ VALUES ($1, $2, $3, 'user', $4, 'mirrored') ON CONFLICT DO NOTHING RETURNING id`
 // labels (false = ignore the keyword).
 func (idx *labelIndex) compute(st *msgState, keywordLabel func(kw string) (int64, bool)) desired {
 	d := desired{labels: map[int64]bool{}, isUnread: st.isUnread}
-	if len(st.locs) == 0 {
+	// A location flagged \Deleted is already gone for Silo (ADR 0006: without
+	// UIDPLUS a move leaves the source copy flagged until someone expunges it).
+	visible := slices.DeleteFunc(slices.Clone(st.locs), func(l loc) bool { return hasFlag(l.flags, `\Deleted`) })
+	if len(visible) == 0 {
 		return d
 	}
 	d.isUnread = false
@@ -288,7 +292,7 @@ func (idx *labelIndex) compute(st *msgState, keywordLabel func(kw string) (int64
 			d.labels[id] = true
 		}
 	}
-	for _, l := range st.locs {
+	for _, l := range visible {
 		if key, ok := roleLabel[l.role]; ok {
 			add(key)
 		} else if l.role == "user" && l.labelID != nil {
@@ -374,6 +378,10 @@ func deriveLabels(ctx context.Context, db DB, ids []int64, apply bool) (*labelPl
 		return plan, nil
 	}
 	states, err := loadStates(ctx, db, ids)
+	if err != nil {
+		return nil, err
+	}
+	pendingCount, err := applyOverlay(ctx, db, states, ids)
 	if err != nil {
 		return nil, err
 	}
@@ -476,6 +484,16 @@ func deriveLabels(ctx context.Context, db DB, ids []int64, apply bool) (*labelPl
 	}
 	if !apply {
 		return plan, nil
+	}
+	pendIDs := make([]int64, 0, len(states))
+	pendN := make([]int32, 0, len(states))
+	for _, st := range states {
+		pendIDs, pendN = append(pendIDs, st.id), append(pendN, int32(pendingCount[st.id]))
+	}
+	if _, err := db.Exec(ctx, `
+UPDATE messages m SET pending_ops = v.n FROM unnest($1::bigint[], $2::int[]) AS v(id, n)
+WHERE m.id = v.id AND m.pending_ops IS DISTINCT FROM v.n`, pendIDs, pendN); err != nil {
+		return nil, fmt.Errorf("mail: update pending_ops: %w", err)
 	}
 	if len(plan.addMsg) > 0 {
 		if _, err := db.Exec(ctx, `

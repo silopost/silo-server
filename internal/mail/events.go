@@ -19,6 +19,7 @@ const (
 
 type eventBuf struct {
 	userID   int64
+	origin   string // X-Silo-Client of the request that caused the events
 	types    []string
 	payloads []string
 }
@@ -27,6 +28,13 @@ func (b *eventBuf) add(typ string, payload any) {
 	raw, err := json.Marshal(payload)
 	if err != nil { // payloads are plain maps/structs; cannot fail
 		raw = []byte("{}")
+	}
+	if b.origin != "" {
+		var m map[string]any
+		if json.Unmarshal(raw, &m) == nil {
+			m["origin"] = b.origin
+			raw, _ = json.Marshal(m)
+		}
 	}
 	b.types = append(b.types, typ)
 	b.payloads = append(b.payloads, string(raw))
@@ -137,4 +145,38 @@ func WriteEvent(ctx context.Context, db DB, userID int64, typ string, payload an
 	b := &eventBuf{userID: userID}
 	b.add(typ, payload)
 	return b.flush(ctx, db)
+}
+
+// EventOperationFailed is written when a write-back operation is given up
+// (plan 5.4): {operationId, accountId, reason, threadIds}.
+const EventOperationFailed = "operation.failed"
+
+// RefreshMessages re-derives the labels of messages of one account (server
+// state + pending operations), recomputes their threads and writes
+// thread.updated (with pendingSync) and label.counts, in the caller's
+// transaction. origin (X-Silo-Client) is echoed in the events. The ops
+// package calls it after enqueueing, executing or cancelling operations.
+func RefreshMessages(ctx context.Context, db DB, accountID int64, msgIDs []int64, origin string) ([]int64, error) {
+	msgIDs = uniqueSorted(msgIDs)
+	if len(msgIDs) == 0 {
+		return nil, nil
+	}
+	var userID int64
+	if err := db.QueryRow(ctx, `SELECT user_id FROM accounts WHERE id = $1`, accountID).Scan(&userID); err != nil {
+		return nil, fmt.Errorf("mail: load account %d: %w", accountID, err)
+	}
+	ev := &eventBuf{userID: userID, origin: origin}
+	threads, err := refreshMessages(ctx, db, ev, accountID, msgIDs)
+	if err != nil {
+		return nil, err
+	}
+	return threads, ev.flush(ctx, db)
+}
+
+// LockAccount serialises the write transactions of one account between the
+// sync engine, the write-back and the API (pg_advisory_xact_lock; released
+// at commit). Take it first in the transaction.
+func LockAccount(ctx context.Context, db DB, accountID int64) error {
+	_, err := db.Exec(ctx, `SELECT pg_advisory_xact_lock(1397312335, $1::int)`, accountID)
+	return err
 }
