@@ -128,3 +128,13 @@ WHERE l.id = ANY($1) GROUP BY l.id ORDER BY l.id`, labelIDs)
 	}
 	return nil
 }
+
+// WriteEvent inserts one event of the given type for a user, in the caller's
+// transaction. Packages other than mail (the sync engine's account.status,
+// account.error and account.sync_progress) use it so that every event goes
+// through the same table and encoding.
+func WriteEvent(ctx context.Context, db DB, userID int64, typ string, payload any) error {
+	b := &eventBuf{userID: userID}
+	b.add(typ, payload)
+	return b.flush(ctx, db)
+}
