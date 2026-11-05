@@ -24,6 +24,9 @@ silo-server rotate-secrets           # re-encrypt account secrets after a key ch
 silo-server reconcile [--account ID] # report drift of derived mail data (threads, labels)
 silo-server rebuild-cache --account ID [--yes] # drop the cached mail of an account, sync it again
 silo-server user add|passwd|admin|list   # manage Silo users (see below)
+silo-server export-metadata [--out FILE|-] [--user EMAIL] [--no-local-blobs]   # metadata backup (JSON)
+silo-server import-metadata --in FILE|- [--merge]   # restore a metadata backup
+silo-server rebuild-cache --account ID|--all        # drop the mail cache and sync it again
 silo-server version
 ```
 
@@ -96,7 +99,8 @@ accept `50MB` style values, rates `5MB/s`, durations `5m`. Worth knowing:
   (32 random bytes, base64) and, in `SILO_AUTH_MODE=imap` (default),
   `SILO_DEFAULT_IMAP_HOST`.
 - `*_TLS=none` is only accepted with `SILO_ALLOW_INSECURE_TRANSPORT=true`.
-- `SILO_BLOB_BACKEND=s3` is not supported yet; `fs` stores under `SILO_BLOB_FS_DIR`.
+- Blobs (raw messages, attachments, uploads): `SILO_BLOB_BACKEND=fs` (default) stores under
+  `SILO_BLOB_FS_DIR`, `s3` in a bucket (see [S3Store](#s3store)).
 - Background jobs: `serve` runs a Postgres-backed job queue; `SILO_WORKER_CONCURRENCY`
   (default 4) sets the size of the general worker pool. Jobs are woken by
   `LISTEN/NOTIFY` with a 5 s polling fallback.
@@ -457,6 +461,87 @@ Endpoints for users with `is_admin` (others get `403 forbidden`), in both modes:
 Admins cannot disable, demote or delete themselves (`409 admin_self_change`). A
 disabled user cannot sign in in either mode, and their existing sessions stop
 working at once.
+
+## Backup and restore
+
+Postgres holds two kinds of data (plan 3.3, 4.1): the **cache** (messages,
+folders, threads, system labels, mirror blobs), which the sync rebuilds from
+the IMAP server, and the **metadata** that exists only in Silo. A metadata
+backup is one JSON document:
+
+```sh
+silo-server export-metadata --out silo-metadata.json   # all users; --user EMAIL for one
+silo-server migrate up                                  # on the new database
+silo-server import-metadata --in silo-metadata.json     # then start serve
+```
+
+What is in it: users (password hash, settings, TOTP), accounts (server
+configuration, the sealed mailbox password; no sync state), user labels
+(name, keyword, colour, nesting), user-label assignments and snoozes keyed by
+Message-ID, drafts and messages waiting to be sent (with their attachments
+and stored MIME inline as base64; `--no-local-blobs` keeps only the sha256),
+filters, manual contacts and search history. Not in it: sessions, events,
+jobs, write-back operations and the cache. Rows are keyed by stable identities
+(user email; account = user + IMAP host + username; label = account + name;
+message = Message-ID), never by local ids. The format is versioned and
+extensible: unknown sections are skipped with a warning, missing ones are
+empty.
+
+- **Same `SILO_SECRET_KEY`.** Mailbox passwords and TOTP secrets stay
+  encrypted with `SILO_SECRET_KEY` (re-sealed for the export, bound to the
+  stable keys instead of row ids). The import needs the same key (or it as
+  `SILO_SECRET_KEY_PREVIOUS`); keep the key with the backup, separately.
+- **Import** goes into a migrated database and fails if a user exists
+  already; `--merge` imports into existing users instead (accounts found by key
+  get the exported configuration, labels are upserted by name, assignments,
+  snoozes, filters, contacts and history are added, drafts already present are
+  skipped: importing twice changes nothing). Imported accounts start an
+  initial sync. Label assignments and snoozes wait in `metadata_restores` until
+  the sync has ingested their messages: the `metadata_restore` job applies them
+  as messages arrive (mirrored labels also get their keyword on the server),
+  retries every minute and gives up after 24 h (the job is then `dead` in the
+  admin job list and the unmatched rows stay with `last_error`). Scheduled
+  messages are queued again for their time (at once if it has passed).
+- **Limits.** Write-back operations still pending (`imap_op`, e.g. an archive
+  inside the undo window) are not in the backup: they run within seconds,
+  `backup.sh` waits until the account queue is empty. Label ids inside
+  `filters.actions` are copied as they are. A draft opened from another
+  client's Drafts copy (no `X-Silo-Draft-Id`) comes back as a local draft next
+  to that copy. A snooze already due is restored as is (woken by the snooze job).
+
+## rebuild-cache
+
+`silo-server rebuild-cache --account ID` (or `--all`; API:
+`POST /accounts/{id}/resync {"mode":"rebuild"}`) drops the mirror of an
+account and syncs it again from scratch: needed after a cache-only migration
+or a suspected corruption. In one transaction it stages the user-label
+assignments and snoozes by Message-ID (as an import does), deletes folders,
+cache messages, their threads and system labels (blob references are released;
+`blob_gc` deletes the mirror blobs), keeps drafts and messages waiting to be
+sent with their threads, and sets the account back to `connecting`. A running
+server restarts the account's sync worker; meanwhile lists show the partial
+state and `sync-status` reports `initial_sync`. Threading is deterministic, so
+the conversations come back the same, a reply draft included. An account with
+write-back operations still pending is refused (`409`, retry when they are done).
+
+## S3Store
+
+`SILO_BLOB_BACKEND=s3` keeps blobs in an S3-compatible bucket (MinIO, AWS S3,
+...) as `<prefix>/ab/cd/<sha256>`, content-addressed like the filesystem store.
+
+| Variable | Default | |
+|---|---|---|
+| `SILO_BLOB_S3_ENDPOINT` | – (required) | `host:port`, or a URL (`https://...`; the scheme wins over `_USE_SSL`) |
+| `SILO_BLOB_S3_BUCKET` | – (required) | must exist: `serve` checks it at startup and does not create it |
+| `SILO_BLOB_S3_ACCESS_KEY` / `_SECRET_KEY` | – (required) | credentials |
+| `SILO_BLOB_S3_REGION` | `us-east-1` | |
+| `SILO_BLOB_S3_PREFIX` | empty | key prefix, e.g. `silo/blobs` |
+| `SILO_BLOB_S3_USE_SSL` | `true` | |
+| `SILO_BLOB_S3_PATH_STYLE` | `true` | path-style bucket addressing (MinIO); `false` for virtual-hosted style |
+
+`Put` spools the upload to a temporary file to hash it first (the key is the
+hash), so the server needs temporary disk space for the largest blob.
+Switching backends does not move existing blobs.
 
 ## Development
 
