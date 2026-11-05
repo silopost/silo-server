@@ -180,3 +180,7 @@ func LockAccount(ctx context.Context, db DB, accountID int64) error {
 	_, err := db.Exec(ctx, `SELECT pg_advisory_xact_lock(1397312335, $1::int)`, accountID)
 	return err
 }
+
+// EventLabelChanged is written when a label is created, renamed, recoloured
+// or deleted (plan 5.4): {accountId, labelId}.
+const EventLabelChanged = "label.changed"
