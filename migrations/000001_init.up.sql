@@ -387,6 +387,17 @@ CREATE INDEX jobs_general ON jobs (run_at) WHERE status = 'pending' AND account_
 CREATE INDEX jobs_account ON jobs (account_id, run_at, id) WHERE status = 'pending';
 CREATE INDEX jobs_group   ON jobs (group_id);
 
+-- Wakes idle workers (LISTEN silo_jobs) as soon as a job is inserted; the
+-- payload is the account id or empty for general jobs.
+CREATE FUNCTION jobs_notify() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+  PERFORM pg_notify('silo_jobs', COALESCE(NEW.account_id::text, ''));
+  RETURN NULL;
+END
+$$;
+CREATE TRIGGER jobs_notify AFTER INSERT ON jobs
+  FOR EACH ROW EXECUTE FUNCTION jobs_notify();
+
 CREATE TABLE search_history (
   id         bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
   user_id    bigint NOT NULL REFERENCES users(id) ON DELETE CASCADE,

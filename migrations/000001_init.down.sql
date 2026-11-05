@@ -6,6 +6,8 @@ DROP TABLE IF EXISTS
   sessions, accounts, users
   CASCADE;
 
+DROP FUNCTION IF EXISTS jobs_notify();
+
 DROP EXTENSION IF EXISTS unaccent;
 DROP EXTENSION IF EXISTS pg_trgm;
 DROP EXTENSION IF EXISTS citext;

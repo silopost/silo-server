@@ -77,6 +77,8 @@ type Config struct {
 	SyncBackfillRate          ByteRate      `env:"SILO_SYNC_BACKFILL_RATE" envDefault:"5MB/s"`
 	UndoWindow                time.Duration `env:"SILO_UNDO_WINDOW" envDefault:"10s"`
 
+	WorkerConcurrency int `env:"SILO_WORKER_CONCURRENCY" envDefault:"4"`
+
 	BlobBackend string `env:"SILO_BLOB_BACKEND" envDefault:"fs"`
 	BlobFSDir   string `env:"SILO_BLOB_FS_DIR" envDefault:"/data/blobs"`
 }
@@ -169,6 +171,10 @@ func (c Config) ValidateServe() error {
 	}
 	if c.UndoWindow < 0 {
 		add("SILO_UNDO_WINDOW must not be negative")
+	}
+
+	if c.WorkerConcurrency < 1 {
+		add("SILO_WORKER_CONCURRENCY must be >= 1")
 	}
 
 	switch c.BlobBackend {
