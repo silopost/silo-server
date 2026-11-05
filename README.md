@@ -22,6 +22,7 @@ silo-server migrate down --yes        # revert everything (drops all data)
 silo-server migrate version           # current schema version
 silo-server rotate-secrets           # re-encrypt account secrets after a key change
 silo-server reconcile [--account ID] # report drift of derived mail data (threads, labels)
+silo-server rebuild-cache --account ID [--yes] # drop the cached mail of an account, sync it again
 silo-server version
 ```
 
@@ -76,6 +77,8 @@ accept `50MB` style values, rates `5MB/s`, durations `5m`. Worth knowing:
   backfill per account. Messages above `SILO_MIRROR_MAX_MESSAGE_BYTES` (default
   `50MB`) keep headers only (`deferred`); `SILO_MIRROR_QUOTA_PER_ACCOUNT` (default
   `0` = no limit) stops the body backfill of an account at that many mirrored bytes.
+  `SILO_SYNC_KEYWORD_FOLDER_LIMIT` (default `26`, `0` = no limit) is how many distinct
+  keywords one folder keeps (see "Labels and IMAP keywords").
 - Write-back (`internal/ops`): label changes (`POST /threads/modify`, `/messages/modify`,
   `/threads/trash`, `/untrash`, `/delete`) are applied locally at once and queued as
   `imap_op` jobs run by the account's worker. Folder moves wait `SILO_UNDO_WINDOW`
@@ -284,6 +287,64 @@ accept `50MB` style values, rates `5MB/s`, durations `5m`. Worth knowing:
 - Custom mail servers (`SILO_ALLOW_CUSTOM_SERVERS=true`) must resolve to public
   addresses unless listed in `SILO_CUSTOM_SERVER_ALLOWLIST` (host names, IPs or CIDRs).
 - Logging: `SILO_LOG_FORMAT` (`json`/`text`), `SILO_LOG_LEVEL`; listen address: `SILO_HTTP_ADDR`.
+
+## Labels and IMAP keywords
+
+User labels live in Postgres (`message_labels`) and, when the server keeps keywords
+(`\*` in the INBOX `PERMANENTFLAGS`, `keywordsSupported` in `sync-status`), are also
+written on the messages as IMAP keywords, so Thunderbird shows them as tags and a
+cache rebuild gets them back (plan 3.7).
+
+- Keyword = ASCII slug of the name (`Praca/Projekty` -> `Praca_Projekty`, `Zażółć` ->
+  `Zazolc`) with the account's `keyword_prefix` (default empty). A slug already used by
+  another label or listed by the server in a folder's `PERMANENTFLAGS` (a tag of another
+  client) gets `_2`, `_3`, ...: the mapping is explicit in `labels.imap_keyword`.
+- Keywords of other clients become labels named after the keyword (prefix stripped);
+  Thunderbird `$label1`-`$label5` become "Ważne", "Praca", "Osobiste", "Do zrobienia",
+  "Później". `$Forwarded`, `$MDNSent`, `$Junk`, `$NotJunk`, `NonJunk`, `$Important`,
+  `$Phishing` and `$SiloSnoozed` never become labels. A tag set elsewhere shows up within
+  seconds in INBOX (IDLE) and within `SILO_SYNC_POLL_INTERVAL` in other folders.
+- Rename and delete queue one flags operation over every message of the label in every
+  folder (`+new -old`, or `-old`).
+- `GET /labels` gives user labels a `keywordState`: `mirrored`; `local_only` (the server
+  keeps no keywords or refused them: the label exists only in Silo, `account.error`
+  `keywords_unsupported`); `partial` with `localOnlyFolders` (`f_` ids): a keyword
+  everywhere except those folders, where it lives only in Silo (`label.changed` is
+  written when a folder is added).
+- Folder limit: a Dovecot maildir folder keeps 26 distinct keywords (letters a-z in the
+  file names; sdbox/mdbox have no limit). Dovecot 2.4 does not refuse a 27th, it keeps it
+  only in its index (lost when the index is rebuilt), so Silo counts the folder's
+  `PERMANENTFLAGS` against `SILO_SYNC_KEYWORD_FOLDER_LIMIT` and does not store a label
+  keyword beyond it: the label becomes `partial` for that folder. A `NO` to the `STORE`
+  of a keyword in a folder that announces `\*` has the same effect. Set the limit to `0`
+  for servers without it.
+
+## Cache rebuild
+
+`POST /accounts/{id}/resync` with `{"mode": "rebuild"}` (or `silo-server rebuild-cache
+--account ID`, for an administrator, also after `TRUNCATE` of cache tables) drops what
+Silo mirrors for the account and runs the initial sync from scratch. The request is
+recorded in `account_rebuilds` and done by the account's worker (on the running server,
+or on the next `serve`): the live session ends, the cache is wiped in one transaction,
+then `account.status` (discovering, initial_sync, live), `resync` and `label.counts`
+events follow.
+
+- Wiped: messages and their locations, references, attachments rows, threads,
+  `thread_labels`, sync cursors; folders stay with their sync state reset. Blobs are
+  only released (`ref_count`); equal content is written to the same blob again.
+- Kept: labels (names, colours, tree, keywords), filters, settings, contacts, search
+  history, and the local messages of drafts and sends with their threads (re-attached
+  to their server copies by `X-Silo-Draft-Id` and Message-ID).
+- Carried over by `dedupe_key` (Message-ID + size) and re-attached while the messages
+  come back: snoozes (wake time, source folder), assignments of labels that are local
+  only (`local_only`, or in a `localOnlyFolders` folder), the message a draft answers.
+  Whatever is still missing when every folder finished its header backfill is dropped.
+- User labels with keywords come back from the server; without the `labels` rows
+  (no metadata) they are created again, named after their keywords.
+- Lost: undo of operations made before the rebuild.
+- Refused with `409 rebuild_blocked` while a message is queued or being sent
+  (`outbound`) or operations wait for write-back (`imap_op` jobs); try again when
+  `sync-status.pendingOps` is 0.
 
 ## Development
 
