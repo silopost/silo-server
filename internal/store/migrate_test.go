@@ -6,6 +6,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/golang-migrate/migrate/v4"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -69,7 +70,7 @@ func TestMigrateRoundTrip(t *testing.T) {
 	if got := extensions(t, pool); len(got) != 3 {
 		t.Fatalf("extensions after up = %v", got)
 	}
-	if v, dirty, err := MigrateVersion(ctx, url); err != nil || v != 4 || dirty {
+	if v, dirty, err := MigrateVersion(ctx, url); err != nil || v != 5 || dirty {
 		t.Fatalf("after up: version=%d dirty=%v err=%v", v, dirty, err)
 	}
 
@@ -119,7 +120,41 @@ func TestMigrateConcurrent(t *testing.T) {
 			t.Errorf("runner %d: %v", i, err)
 		}
 	}
-	if v, dirty, err := MigrateVersion(ctx, url); err != nil || v != 4 || dirty {
+	if v, dirty, err := MigrateVersion(ctx, url); err != nil || v != 5 || dirty {
 		t.Fatalf("version=%d dirty=%v err=%v", v, dirty, err)
+	}
+}
+
+// 000005 turns sent_append on for generic accounts that existed before it.
+func TestMigrateSentAppendGeneric(t *testing.T) {
+	ctx := context.Background()
+	url := newPostgres(t)
+	if err := withMigrator(ctx, url, func(m *migrate.Migrate) error { return m.Migrate(4) }); err != nil {
+		t.Fatal(err)
+	}
+	pool, err := Connect(ctx, url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	if _, err := pool.Exec(ctx, `
+INSERT INTO users (email) VALUES ('u@x.test');
+INSERT INTO accounts (user_id, email, provider, imap_host, imap_port, imap_tls, smtp_host, smtp_port, smtp_tls, username, secret_enc, sent_append)
+VALUES (1, 'g@x.test', 'generic', 'h', 993, 'implicit', 'h', 465, 'implicit', 'g', '\x00', false),
+       (1, 'm@x.test', 'gmail', 'h', 993, 'implicit', 'h', 465, 'implicit', 'm', '\x00', false)`); err != nil {
+		t.Fatal(err)
+	}
+	if err := MigrateUp(ctx, url); err != nil {
+		t.Fatal(err)
+	}
+	if got := listStrings(t, pool, `SELECT provider || '=' || sent_append::text FROM accounts ORDER BY id`); !slices.Equal(got, []string{"generic=true", "gmail=false"}) {
+		t.Errorf("after up: %v", got)
+	}
+	// Down is a no-op for the data.
+	if err := withMigrator(ctx, url, func(m *migrate.Migrate) error { return m.Migrate(4) }); err != nil {
+		t.Fatal(err)
+	}
+	if got := listStrings(t, pool, `SELECT provider || '=' || sent_append::text FROM accounts ORDER BY id`); !slices.Equal(got, []string{"generic=true", "gmail=false"}) {
+		t.Errorf("after down: %v", got)
 	}
 }
