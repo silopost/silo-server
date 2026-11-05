@@ -21,6 +21,7 @@ import (
 	"github.com/silopost/silo-server/internal/http/api"
 	"github.com/silopost/silo-server/internal/secrets"
 	"github.com/silopost/silo-server/internal/store"
+	silosync "github.com/silopost/silo-server/internal/sync"
 	"github.com/silopost/silo-server/internal/version"
 	"github.com/silopost/silo-server/internal/worker"
 )
@@ -118,18 +119,30 @@ func serve(ctx context.Context, args []string) error {
 
 	// Job handlers are registered by the features that enqueue them.
 	jobs := worker.New(worker.Options{Pool: pool, Logger: logger, Concurrency: cfg.WorkerConcurrency})
-	// The account sync engine is not built yet: acknowledge the start requests
-	// so they do not pile up as dead jobs. The engine replaces these handlers.
-	for _, kind := range []string{auth.JobAccountInitialSync, auth.JobAccountReconnect} {
-		jobs.Register(kind, func(ctx context.Context, j worker.Job) error {
-			logger.DebugContext(ctx, "account start requested; sync engine not available yet", "kind", j.Kind)
-			return nil
-		})
-	}
+	// The sync engine: one AccountWorker per account that is not disabled. Its
+	// job handlers (account.initial_sync, account.reconnect, account.resync,
+	// orphan_gc) only wake the account's worker.
+	syncMgr := silosync.NewManager(silosync.Deps{
+		Pool: pool, Keys: ring, Blobs: blobs, Logger: logger,
+		Settings: silosync.Settings{
+			MaxConnections:     cfg.SyncMaxConnectionsPerAcct,
+			InitialConcurrency: cfg.SyncInitialConcurrency,
+			PollInterval:       cfg.SyncPollInterval,
+			BackfillRate:       int64(cfg.SyncBackfillRate),
+			MaxMessageBytes:    int64(cfg.MirrorMaxMessageBytes),
+			QuotaPerAccount:    int64(cfg.MirrorQuotaPerAccount),
+			InsecureTLS:        cfg.AllowInsecureTransport,
+		},
+	})
+	syncMgr.RegisterJobs(jobs)
 	workerCtx, stopWorker := context.WithCancel(ctx)
 	workerDone := make(chan struct{})
 	go func() { defer close(workerDone); _ = jobs.Run(workerCtx) }()
-	defer func() { stopWorker(); <-workerDone }()
+	syncDone := make(chan struct{})
+	go func() { defer close(syncDone); _ = syncMgr.Run(workerCtx) }()
+	// Shutdown: account workers close their IMAP connections and finish the
+	// current transaction, then the job loops return.
+	defer func() { stopWorker(); <-syncDone; <-workerDone }()
 
 	srv := &http.Server{
 		Addr: cfg.HTTPAddr,
@@ -143,6 +156,7 @@ func serve(ctx context.Context, args []string) error {
 				AllowCustomServers: cfg.AllowCustomServers,
 				Auth:               authSvc,
 				Accounts:           accountSvc,
+				Sync:               silosync.NewService(pool),
 				PublicURL:          cfg.PublicURL,
 				Logger:             logger,
 			},

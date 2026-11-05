@@ -65,6 +65,15 @@ accept `50MB` style values, rates `5MB/s`, durations `5m`. Worth knowing:
 - Background jobs: `serve` runs a Postgres-backed job queue; `SILO_WORKER_CONCURRENCY`
   (default 4) sets the size of the general worker pool. Jobs are woken by
   `LISTEN/NOTIFY` with a 5 s polling fallback.
+- IMAP sync (`internal/sync`): `serve` runs one account worker per account that is
+  not disabled, each with up to `SILO_SYNC_MAX_CONNECTIONS_PER_ACCOUNT` connections
+  (default 3, minimum 2: `sync` + `idle`; the third is reserved for write-back).
+  `SILO_SYNC_INITIAL_CONCURRENCY` (default 2) limits how many accounts connect and
+  backfill at the same time, `SILO_SYNC_POLL_INTERVAL` (default `5m`) is the folder
+  poll/STATUS sweep, `SILO_SYNC_BACKFILL_RATE` (default `5MB/s`) paces the body
+  backfill per account. Messages above `SILO_MIRROR_MAX_MESSAGE_BYTES` (default
+  `50MB`) keep headers only (`deferred`); `SILO_MIRROR_QUOTA_PER_ACCOUNT` (default
+  `0` = no limit) stops the body backfill of an account at that many mirrored bytes.
 - Sessions: the `silo_session` cookie is `Secure` when `SILO_PUBLIC_URL` is `https://`
   (plain `http://` is for local development only). Mutating requests need the
   `X-Silo-CSRF` header and an `Origin` equal to `SILO_PUBLIC_URL` or the served host.
