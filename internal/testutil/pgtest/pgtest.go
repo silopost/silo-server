@@ -23,6 +23,21 @@ func New(t *testing.T) string {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 
+	url, terminate, err := Run(ctx)
+	if err != nil {
+		if os.Getenv("SILO_REQUIRE_DOCKER") == "true" {
+			t.Fatalf("start postgres container: %v", err)
+		}
+		t.Skipf("docker unavailable: %v", err)
+	}
+	t.Cleanup(terminate)
+	return url
+}
+
+// Run starts a postgres:17 container without a *testing.T, for packages that
+// share one container across all tests from TestMain. The returned function
+// terminates the container.
+func Run(ctx context.Context) (url string, terminate func(), err error) {
 	ctr, err := tcpostgres.Run(ctx, "postgres:17",
 		tcpostgres.WithDatabase("silo"),
 		tcpostgres.WithUsername("silo"),
@@ -30,16 +45,13 @@ func New(t *testing.T) string {
 		tcpostgres.BasicWaitStrategies(),
 	)
 	if err != nil {
-		if os.Getenv("SILO_REQUIRE_DOCKER") == "true" {
-			t.Fatalf("start postgres container: %v", err)
-		}
-		t.Skipf("docker unavailable: %v", err)
+		return "", nil, err
 	}
-	testcontainers.CleanupContainer(t, ctr)
-
-	url, err := ctr.ConnectionString(ctx, "sslmode=disable")
+	terminate = func() { _ = testcontainers.TerminateContainer(ctr) }
+	url, err = ctr.ConnectionString(ctx, "sslmode=disable")
 	if err != nil {
-		t.Fatalf("connection string: %v", err)
+		terminate()
+		return "", nil, err
 	}
-	return url
+	return url, terminate, nil
 }
