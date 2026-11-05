@@ -174,6 +174,7 @@ CREATE TABLE messages (
   snippet          text   NOT NULL DEFAULT '',
   body_text        text   NOT NULL DEFAULT '',
   has_attachments  bool   NOT NULL DEFAULT false,
+  has_html         bool   NOT NULL DEFAULT false,    -- a text/html part exists (known once the body is downloaded)
   is_unread        bool   NOT NULL DEFAULT true,    -- derived: no \Seen, plus pending operations
   list_id          text   NULL,
   list_unsubscribe text   NULL,
@@ -435,3 +436,15 @@ CREATE TABLE events (
 );
 CREATE INDEX events_user_seq ON events (user_id, seq);
 CREATE INDEX events_created  ON events (created_at);  -- pruned after 24 h
+
+-- Wakes the SSE hub (LISTEN silo_events) once per statement and commit with the
+-- highest seq inserted; NOTIFY is delivered only when the transaction commits.
+CREATE FUNCTION events_notify() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+  PERFORM pg_notify('silo_events', (SELECT max(seq) FROM new_rows)::text);
+  RETURN NULL;
+END
+$$;
+CREATE TRIGGER events_notify AFTER INSERT ON events
+  REFERENCING NEW TABLE AS new_rows
+  FOR EACH STATEMENT EXECUTE FUNCTION events_notify();

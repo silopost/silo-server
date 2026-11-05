@@ -190,6 +190,7 @@ type Message struct {
 	Snippet         string
 	BodyText        string
 	HasAttachments  bool
+	HasHtml         bool
 	IsUnread        bool
 	ListID          pgtype.Text
 	ListUnsubscribe pgtype.Text

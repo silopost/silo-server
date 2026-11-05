@@ -27,6 +27,7 @@ type ParsedBody struct {
 	Snippet     string
 	Attachments []ParsedAttachment
 	ParseError  string // non-empty if the MIME structure could not be fully read
+	HasHTML     bool   // a text/html part exists
 }
 
 // ParseBody parses a complete RFC 822 message: it extracts the body text
@@ -119,6 +120,7 @@ func (w *bodyWalker) walk(e *message.Entity, path []int, depth int) {
 	case "text/plain":
 		*w.plain = append(*w.plain, string(data))
 	case "text/html":
+		w.out.HasHTML = true
 		*w.html = append(*w.html, string(data))
 	}
 }
@@ -213,8 +215,9 @@ VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
 UPDATE messages SET raw_blob_sha256 = $2, body_state = 'full', body_text = $3,
   snippet = CASE WHEN $4 <> '' THEN $4 ELSE snippet END,
   has_attachments = CASE WHEN $5::text <> '' THEN has_attachments ELSE $6 END,
-  parse_error = COALESCE(NULLIF($5, ''), CASE WHEN parse_error LIKE 'mime:%' OR parse_error LIKE 'multipart:%' THEN NULL ELSE parse_error END)
-WHERE id = $1`, messageID, emlSha, parsed.Text, parsed.Snippet, parsed.ParseError, hasAtt)
+  parse_error = COALESCE(NULLIF($5, ''), CASE WHEN parse_error LIKE 'mime:%' OR parse_error LIKE 'multipart:%' THEN NULL ELSE parse_error END),
+  has_html = $7
+WHERE id = $1`, messageID, emlSha, parsed.Text, parsed.Snippet, parsed.ParseError, hasAtt, parsed.HasHTML)
 	if err != nil {
 		return nil, fmt.Errorf("mail: update message body: %w", err)
 	}
