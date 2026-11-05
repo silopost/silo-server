@@ -151,7 +151,11 @@ func serve(ctx context.Context, args []string) error {
 			return r.Body, nil
 		},
 	})
-	draftSvc.RegisterJobs(jobs)
+	opsSvc := ops.NewService(pool, cfg.UndoWindow)
+	draftSvc.RegisterJobs(jobs, func(ctx context.Context, now time.Time) error {
+		_, err := opsSvc.PurgeOperations(ctx, now)
+		return err
+	})
 	workerCtx, stopWorker := context.WithCancel(ctx)
 	workerDone := make(chan struct{})
 	go func() { defer close(workerDone); _ = jobs.Run(workerCtx) }()
@@ -178,7 +182,7 @@ func serve(ctx context.Context, args []string) error {
 				Auth:               authSvc,
 				Accounts:           accountSvc,
 				Sync:               silosync.NewService(pool),
-				Ops:                ops.NewService(pool, cfg.UndoWindow),
+				Ops:                opsSvc,
 				View:               view,
 				Drafts:             draftSvc,
 				Events:             hub,

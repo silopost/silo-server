@@ -86,6 +86,7 @@ func (s *Service) Delete(ctx context.Context, userID int64, threadIDs []int64, o
 		for _, msg := range b.msgs {
 			for _, l := range msg.locs {
 				if l.role == "trash" || l.role == "junk" {
+					b.final = true
 					b.add(mail.OpPayload{Op: mail.OpExpunge}, msg.id, l.folderID, 0)
 				}
 			}
@@ -107,7 +108,9 @@ type builder struct {
 	byRole     map[string]int64 // role -> folder id
 	folderRole map[int64]string
 	ops        map[string]*opBuild
-	local      []int64 // messages whose user labels changed locally
+	local      []int64   // messages whose user labels changed locally
+	inv        []invItem // how to undo the changes once the jobs ran
+	final      bool      // the operation cannot be undone (permanent delete)
 }
 
 func (b *builder) add(p mail.OpPayload, msgID, from int64, delay time.Duration) {
@@ -156,7 +159,8 @@ func (s *Service) run(ctx context.Context, userID int64, threadIDs, msgIDs []int
 			byAccount[m.accountID] = append(byAccount[m.accountID], m)
 		}
 		slices.Sort(accounts)
-		sentAny, folderOp := false, false
+		sentAny, folderOp, final := false, false, false
+		var inv []invItem
 		for _, acc := range accounts {
 			if err := mail.LockAccount(ctx, tx, acc); err != nil {
 				return err
@@ -168,6 +172,7 @@ func (s *Service) run(ctx context.Context, userID int64, threadIDs, msgIDs []int
 			if err := fn(ctx, tx, b); err != nil {
 				return err
 			}
+			inv, final = append(inv, b.inv...), final || b.final
 			touched := slices.Clone(b.local)
 			keys := make([]string, 0, len(b.ops))
 			for k := range b.ops {
@@ -200,6 +205,9 @@ func (s *Service) run(ctx context.Context, userID int64, threadIDs, msgIDs []int
 			if folderOp {
 				until := time.Now().Add(s.undoWindow)
 				res.UndoUntil = &until
+			}
+			if err := saveOperation(ctx, tx, group, userID, res.UndoUntil, inv, final); err != nil {
+				return err
 			}
 		}
 		res.ThreadIDs = uniq(res.ThreadIDs)
@@ -338,11 +346,16 @@ func (b *builder) modify(ctx context.Context, tx pgx.Tx, add, remove []LabelRef)
 	window := b.s.undoWindow
 	move := func(m *msgInfo, from location, role string, folderID int64, extraAdd, extraRemove []string) {
 		b.add(mail.OpPayload{Op: mail.OpMove, ToRole: role, ToFolderID: folderID, Add: extraAdd, Remove: extraRemove}, m.id, from.folderID, window)
+		b.inv = append(b.inv, invItem{MessageID: m.id, MoveTo: from.folderID, ExpectFolder: folderID, ExpectRole: role,
+			Add: changedFlags(m, extraRemove, false), Remove: changedFlags(m, extraAdd, true)})
 	}
 	flags := func(addF, removeF []string) {
 		for _, m := range b.msgs {
 			if len(m.locs) > 0 {
 				b.add(mail.OpPayload{Op: mail.OpFlags, Add: addF, Remove: removeF}, m.id, 0, 0)
+				if it := (invItem{MessageID: m.id, Add: changedFlags(m, removeF, false), Remove: changedFlags(m, addF, true)}); len(it.Add)+len(it.Remove) > 0 {
+					b.inv = append(b.inv, it)
+				}
 			}
 		}
 	}
@@ -462,6 +475,9 @@ func (b *builder) userLabel(ctx context.Context, tx pgx.Tx, l *labelInfo, plus b
 	ids := make([]int64, len(b.msgs))
 	for i, m := range b.msgs {
 		ids[i] = m.id
+	}
+	if err := b.recordLabel(ctx, tx, l.id, ids, plus); err != nil {
+		return err
 	}
 	if plus {
 		if _, err := tx.Exec(ctx, `INSERT INTO message_labels (message_id, label_id, user_id) SELECT unnest($1::bigint[]), $2, $3 ON CONFLICT DO NOTHING`, ids, l.id, b.userID); err != nil {

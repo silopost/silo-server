@@ -81,8 +81,12 @@ accept `50MB` style values, rates `5MB/s`, durations `5m`. Worth knowing:
   `imap_op` jobs run by the account's worker. Folder moves wait `SILO_UNDO_WINDOW`
   (default `10s`), flags go at once; queued changes are coalesced, and jobs wait
   (up to 7 days) while the account is offline. `POST /operations/{id}/undo` cancels an
-  operation while its jobs wait (the server never sees it); once a job was claimed it
-  answers `409 undo_expired` and the client sends the inverse modify.
+  operation while its jobs wait (the server never sees it); once a job was claimed or
+  ran, the server queues the inverse itself (messages back to the folders they came
+  from, flags and user labels changed back) as a new operation with its own
+  `operationId`/`undoUntil`. Inverses live in the `operations` table for 24 h (purged by
+  the hourly `blob_gc` job); older operations answer `409 undo_expired`, a permanent
+  delete outside its window `409 operation_not_undoable`.
 - Drafts and uploads (`internal/drafts`): `POST /uploads` streams one multipart file
   (up to `SILO_MAX_ATTACHMENT_BYTES`, default `25MB`, else `413 upload_too_large`) to
   the blob store as `u_…`; uploads not attached to a draft are removed after 24 h by the

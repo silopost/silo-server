@@ -93,15 +93,117 @@ func TestUndoOperation(t *testing.T) {
 		t.Errorf("second undo: %d %s", r.Code, r.Body)
 	}
 
-	// A worker claimed the job: too late, the client applies the inverse.
+	ctx := context.Background()
+	exec := func(q string, args ...any) {
+		t.Helper()
+		if _, err := m.pool.Exec(ctx, q, args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	undo := func(id, client string) (resp, api.OperationResult) {
+		t.Helper()
+		var out api.OperationResult
+		r := serve(m.web, m.as(req{method: "POST", path: "/operations/" + id + "/undo", headers: map[string]string{"X-Silo-Client": client}}))
+		if r.Code == http.StatusOK {
+			r.json(&out)
+		}
+		return r, out
+	}
+	folder := func(role string) int64 {
+		t.Helper()
+		var id int64
+		if err := m.pool.QueryRow(ctx, `
+INSERT INTO mailbox_folders (account_id, user_id, name, name_raw, role, uidvalidity)
+SELECT id, user_id, $2, $2, $2, 1 FROM accounts WHERE id = $1 RETURNING id`, m.accID, role).Scan(&id); err != nil {
+			t.Fatal(err)
+		}
+		return id
+	}
+	// executed simulates the worker: the message is in folderID on the
+	// server and the jobs of the operation are gone.
+	executed := func(op string, folderID int64) {
+		t.Helper()
+		exec(`UPDATE message_locations SET folder_id = $2 WHERE message_id IN (SELECT id FROM messages WHERE thread_id = $1)`, threadID, folderID)
+		exec(`DELETE FROM jobs WHERE group_id = $1::uuid`, op)
+	}
+
+	// After the job ran (Archive was created by it), the server applies the
+	// inverse as a new operation.
 	op = archive()
-	if _, err := m.pool.Exec(context.Background(), `UPDATE jobs SET locked_until = now() + interval '1 minute' WHERE group_id = $1::uuid`, *op.OperationID); err != nil {
+	executed(*op.OperationID, folder("archive"))
+	r, out = undo(*op.OperationID, "tab-v")
+	if r.Code != http.StatusOK || len(out.Threads) != 1 || !slices.Contains(out.Threads[0].LabelIDs, "INBOX") ||
+		slices.Contains(out.Threads[0].LabelIDs, "ARCHIVE") || !out.Threads[0].PendingSync ||
+		out.OperationID == nil || *out.OperationID == *op.OperationID || out.UndoUntil == nil {
+		t.Fatalf("undo after the job ran: %d %s", r.Code, r.Body)
+	}
+	if n := m.count(`SELECT count(*) FROM jobs WHERE group_id = $1::uuid AND payload->>'op' = 'move' AND (payload->>'toFolderId')::bigint = $2 AND run_at > now()`,
+		*out.OperationID, m.inbox); n != 1 {
+		t.Errorf("inverse move jobs = %d", n)
+	}
+	if n := m.count(`SELECT count(*) FROM events WHERE type = 'thread.updated' AND payload->>'origin' = 'tab-v'`); n == 0 {
+		t.Error("no thread.updated with the origin of the late undo")
+	}
+	if r, _ := undo(*op.OperationID, ""); r.Code != http.StatusNotFound {
+		t.Errorf("second late undo: %d %s", r.Code, r.Body)
+	}
+	// The undo is an operation: undoing it inside its window cancels it.
+	back := *out.OperationID
+	r, out = undo(back, "")
+	if r.Code != http.StatusOK || !slices.Contains(out.Threads[0].LabelIDs, "ARCHIVE") || slices.Contains(out.Threads[0].LabelIDs, "INBOX") ||
+		out.OperationID != nil || out.Threads[0].PendingSync {
+		t.Fatalf("undo of the undo: %d %s", r.Code, r.Body)
+	}
+	if n := m.count(`SELECT count(*) FROM jobs WHERE account_id = $1 AND kind = 'imap_op'`, m.accID); n != 0 {
+		t.Errorf("jobs left after undoing the undo: %d", n)
+	}
+
+	// A user label mirrored as a keyword: the flags job was claimed at once;
+	// the undo takes the label off again.
+	exec(`UPDATE accounts SET keywords_supported = true WHERE id = $1`, m.accID)
+	var labelID int64
+	if err := m.pool.QueryRow(ctx, `INSERT INTO labels (user_id, account_id, name, type) SELECT user_id, id, 'Projekt', 'user' FROM accounts WHERE id = $1 RETURNING id`, m.accID).Scan(&labelID); err != nil {
 		t.Fatal(err)
 	}
-	r = serve(m.web, m.as(req{method: "POST", path: "/operations/" + *op.OperationID + "/undo"}))
-	if r.Code != http.StatusConflict || r.code() != api.CodeUndoExpired {
-		t.Errorf("undo of a claimed job: %d %s", r.Code, r.Body)
+	lid := id36("l_", labelID)
+	var lop api.OperationResult
+	r = serve(m.web, m.as(req{method: "POST", path: "/threads/modify", body: map[string]any{"ids": []string{tid}, "addLabelIds": []string{lid}}}))
+	r.json(&lop)
+	if r.Code != http.StatusOK || lop.OperationID == nil || !slices.Contains(lop.Threads[0].LabelIDs, lid) {
+		t.Fatalf("add label: %d %s", r.Code, r.Body)
 	}
+	exec(`UPDATE jobs SET locked_until = now() + interval '1 minute' WHERE group_id = $1::uuid`, *lop.OperationID)
+	r, out = undo(*lop.OperationID, "")
+	if r.Code != http.StatusOK || slices.Contains(out.Threads[0].LabelIDs, lid) || out.OperationID == nil || out.UndoUntil != nil {
+		t.Fatalf("undo of the label after its job was claimed: %d %s", r.Code, r.Body)
+	}
+	if n := m.count(`SELECT count(*) FROM message_labels WHERE label_id = $1`, labelID); n != 0 {
+		t.Errorf("label still on %d messages", n)
+	}
+	if n := m.count(`SELECT count(*) FROM jobs WHERE group_id = $1::uuid AND payload->>'op' = 'flags' AND payload->'remove' ? 'Projekt'`, *out.OperationID); n != 1 {
+		t.Errorf("inverse keyword jobs = %d", n)
+	}
+
+	// Outside the retention: too late.
+	exec(`DELETE FROM jobs WHERE account_id = $1`, m.accID)
+	exec(`UPDATE operations SET created_at = now() - interval '25 hours' WHERE id = $1::uuid`, *out.OperationID)
+	if r, _ := undo(*out.OperationID, ""); r.Code != http.StatusConflict || r.code() != api.CodeUndoExpired {
+		t.Errorf("undo after the retention: %d %s", r.Code, r.Body)
+	}
+
+	// A permanent delete can be undone only inside its window.
+	exec(`UPDATE message_locations SET folder_id = $2 WHERE message_id IN (SELECT id FROM messages WHERE thread_id = $1)`, threadID, folder("trash"))
+	var dop api.OperationResult
+	r = serve(m.web, m.as(req{method: "POST", path: "/threads/delete", body: map[string]any{"ids": []string{tid}}}))
+	r.json(&dop)
+	if r.Code != http.StatusOK || dop.OperationID == nil {
+		t.Fatalf("delete: %d %s", r.Code, r.Body)
+	}
+	exec(`UPDATE jobs SET locked_until = now() + interval '1 minute' WHERE group_id = $1::uuid`, *dop.OperationID)
+	if r, _ := undo(*dop.OperationID, ""); r.Code != http.StatusConflict || r.code() != api.CodeNotUndoable {
+		t.Errorf("undo of a permanent delete: %d %s", r.Code, r.Body)
+	}
+	op = dop
 
 	other := newUserSession(t, m.env, "other-undo@silo.test")
 	r = serve(m.web, req{method: "POST", path: "/operations/" + *op.OperationID + "/undo", cookie: other.cookie, csrf: other.csrf})

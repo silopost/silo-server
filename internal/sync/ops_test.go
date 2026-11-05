@@ -335,6 +335,30 @@ func testWriteBack(t *testing.T, p imaptest.Profile) {
 		}
 	})
 
+	t.Run("undo after the window moves back", func(t *testing.T) {
+		id, _ := e.thread("m12@silo.test")
+		r := e.modify("m12@silo.test", nil, sys("INBOX"))
+		waitFor(t, 10*time.Second, "archived on the server", func() bool {
+			return slices.Equal(e.serverFolders("m12@silo.test"), []string{"Archive"})
+		})
+		e.waitNoJobs(5 * time.Second)
+		u, err := e.svc.Undo(context.Background(), e.a.userID, r.OperationID, "test")
+		must(t, err)
+		if u.OperationID == "" || u.OperationID == r.OperationID || u.UndoUntil == nil {
+			t.Fatalf("late undo: %+v", u)
+		}
+		if l := e.a.labelsOf(id); !l["INBOX"] || l["ARCHIVE"] {
+			t.Errorf("labels right after the late undo: %v", l)
+		}
+		waitFor(t, 15*time.Second, "back in INBOX on the server", func() bool {
+			return slices.Equal(e.serverFolders("m12@silo.test"), []string{"INBOX"})
+		})
+		e.waitNoJobs(5 * time.Second)
+		if l := e.a.labelsOf(id); !l["INBOX"] || l["ARCHIVE"] {
+			t.Errorf("labels after the inverse ran: %v", l)
+		}
+	})
+
 	e.waitNoJobs(10 * time.Second)
 	e.mgr.Worker(e.a.id).RequestResync("full")
 	time.Sleep(2 * time.Second)

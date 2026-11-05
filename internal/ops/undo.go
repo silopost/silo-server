@@ -2,20 +2,31 @@ package ops
 
 import (
 	"context"
+	"errors"
 
 	"github.com/jackc/pgx/v5"
 
 	"github.com/silopost/silo-server/internal/mail"
 )
 
-// Undo cancels an operation inside its undo window (plan 3.6): its jobs are
-// deleted (their op_messages go with them) and the messages re-derived, so
-// the visible state returns to the server state in the same transaction and
-// the IMAP server never sees the operation. Once a job of the operation has
-// been claimed by a worker it is too late (ErrTooLate): the caller then
-// issues the inverse operation. User labels without a keyword were written
-// locally and are not part of the jobs; the inverse modify reverts them.
+// Undo cancels an operation (plan 3.6, 5.2). Inside its undo window its jobs
+// are deleted (their op_messages go with them), its local user-label changes
+// reverted and the messages re-derived, so the visible state returns to the
+// server state in the same transaction and the IMAP server never sees the
+// operation. Once a job was claimed or ran, the recorded inverse is applied
+// as a new operation (own OperationID and undo window) for OperationRetention;
+// later it is ErrTooLate, and a permanent delete is ErrNotUndoable.
 func (s *Service) Undo(ctx context.Context, userID int64, operationID string, origin string) (*Result, error) {
+	res, err := s.cancel(ctx, userID, operationID, origin)
+	if errors.Is(err, ErrTooLate) || errors.Is(err, ErrNotFound) {
+		return s.reverse(ctx, userID, operationID, origin)
+	}
+	return res, err
+}
+
+// cancel deletes the jobs of an operation that no worker has claimed and
+// puts back its local user-label changes.
+func (s *Service) cancel(ctx context.Context, userID int64, operationID string, origin string) (*Result, error) {
 	res := &Result{}
 	err := s.inTx(ctx, func(tx pgx.Tx) error {
 		rows, err := tx.Query(ctx, `
@@ -64,6 +75,20 @@ ORDER BY j.account_id FOR UPDATE OF j`, operationID, userID)
 				return err
 			}
 			if _, err := tx.Exec(ctx, `DELETE FROM jobs WHERE id = ANY($1) AND account_id = $2`, jobs, acc); err != nil {
+				return err
+			}
+			threads, err := mail.RefreshMessages(ctx, tx, acc, msgs, origin)
+			if err != nil {
+				return err
+			}
+			res.ThreadIDs = append(res.ThreadIDs, threads...)
+		}
+		labelled, err := revertLabels(ctx, tx, userID, operationID)
+		if err != nil {
+			return err
+		}
+		for acc, msgs := range labelled {
+			if err := mail.LockAccount(ctx, tx, acc); err != nil {
 				return err
 			}
 			threads, err := mail.RefreshMessages(ctx, tx, acc, msgs, origin)

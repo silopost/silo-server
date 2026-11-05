@@ -80,14 +80,24 @@ WHERE b.sha256 = c.sha`, shas)
 	}
 }
 
-// RegisterJobs binds blob_gc to the job worker.
-func (s *Service) RegisterJobs(w *worker.Worker) {
+// RegisterJobs binds blob_gc to the job worker. The periodic job also runs
+// the extra clean-up steps (e.g. ops.Service.PurgeOperations) after BlobGC.
+func (s *Service) RegisterJobs(w *worker.Worker, extra ...func(ctx context.Context, now time.Time) error) {
 	w.Register(JobBlobGC, func(ctx context.Context, _ worker.Job) error {
-		r, err := s.BlobGC(ctx, time.Now())
-		if err == nil && (r.Uploads > 0 || r.Blobs > 0) {
+		now := time.Now()
+		r, err := s.BlobGC(ctx, now)
+		if err != nil {
+			return err
+		}
+		if r.Uploads > 0 || r.Blobs > 0 {
 			s.log.Info("blob gc", "uploads", r.Uploads, "blobs", r.Blobs)
 		}
-		return err
+		for _, fn := range extra {
+			if err := fn(ctx, now); err != nil {
+				return err
+			}
+		}
+		return nil
 	})
 }
 

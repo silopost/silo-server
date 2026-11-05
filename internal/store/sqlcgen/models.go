@@ -237,6 +237,14 @@ type OpMessage struct {
 	ExpectFolderID pgtype.Int8
 }
 
+type Operation struct {
+	ID        pgtype.UUID
+	UserID    int64
+	CreatedAt pgtype.Timestamptz
+	UndoUntil pgtype.Timestamptz
+	Inverse   []byte
+}
+
 type Outbound struct {
 	ID                int64
 	UserID            int64

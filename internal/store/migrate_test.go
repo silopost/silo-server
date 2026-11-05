@@ -9,11 +9,11 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// appTables is every table created by 000001_init (schema_migrations excluded).
+// appTables is every table created by the migrations (schema_migrations excluded).
 var appTables = []string{
 	"accounts", "attachments", "blobs", "contacts", "drafts", "events", "filters",
 	"jobs", "labels", "mailbox_folders", "message_labels", "message_locations",
-	"message_references", "messages", "op_messages", "outbound", "search_history", "sessions",
+	"message_references", "messages", "op_messages", "operations", "outbound", "search_history", "sessions",
 	"snooze_items", "snoozes", "sync_cursors", "thread_labels", "threads", "users",
 }
 
@@ -69,7 +69,7 @@ func TestMigrateRoundTrip(t *testing.T) {
 	if got := extensions(t, pool); len(got) != 3 {
 		t.Fatalf("extensions after up = %v", got)
 	}
-	if v, dirty, err := MigrateVersion(ctx, url); err != nil || v != 3 || dirty {
+	if v, dirty, err := MigrateVersion(ctx, url); err != nil || v != 4 || dirty {
 		t.Fatalf("after up: version=%d dirty=%v err=%v", v, dirty, err)
 	}
 
@@ -119,7 +119,7 @@ func TestMigrateConcurrent(t *testing.T) {
 			t.Errorf("runner %d: %v", i, err)
 		}
 	}
-	if v, dirty, err := MigrateVersion(ctx, url); err != nil || v != 3 || dirty {
+	if v, dirty, err := MigrateVersion(ctx, url); err != nil || v != 4 || dirty {
 		t.Fatalf("version=%d dirty=%v err=%v", v, dirty, err)
 	}
 }
