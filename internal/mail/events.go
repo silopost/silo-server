@@ -148,7 +148,8 @@ func WriteEvent(ctx context.Context, db DB, userID int64, typ string, payload an
 }
 
 // EventOperationFailed is written when a write-back operation is given up
-// (plan 5.4): {operationId, accountId, reason, threadIds}.
+// (plan 5.4): {operationId, accountId, kind, reason, threadIds}; kind is
+// sync.OpKind of the job (move, flags, labels, ...).
 const EventOperationFailed = "operation.failed"
 
 // RefreshMessages re-derives the labels of messages of one account (server

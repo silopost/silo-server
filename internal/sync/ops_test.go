@@ -253,7 +253,7 @@ func testWriteBack(t *testing.T, p imaptest.Profile) {
 	})
 
 	t.Run("message gone before the job runs", func(t *testing.T) {
-		before := e.a.int(`SELECT count(*) FROM events WHERE user_id = $1 AND type = 'operation.failed' AND payload->>'reason' = 'message_gone'`, e.a.userID)
+		before := e.a.int(`SELECT count(*) FROM events WHERE user_id = $1 AND type = 'operation.failed' AND payload->>'reason' = 'message_gone' AND payload->>'kind' = 'move'`, e.a.userID)
 		e.modify("m6@silo.test", nil, sys("INBOX"))
 		selectInbox(t, e.other)
 		uid := uidOf(t, e.other, "<m6@silo.test>")
@@ -261,7 +261,7 @@ func testWriteBack(t *testing.T, p imaptest.Profile) {
 		must(t, err)
 		must(t, e.other.Expunge().Close())
 		waitFor(t, 10*time.Second, "operation.failed message_gone", func() bool {
-			return e.a.int(`SELECT count(*) FROM events WHERE user_id = $1 AND type = 'operation.failed' AND payload->>'reason' = 'message_gone'`, e.a.userID) > before
+			return e.a.int(`SELECT count(*) FROM events WHERE user_id = $1 AND type = 'operation.failed' AND payload->>'reason' = 'message_gone' AND payload->>'kind' = 'move'`, e.a.userID) > before
 		})
 		e.waitNoJobs(5 * time.Second)
 	})

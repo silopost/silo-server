@@ -16,6 +16,7 @@ type Account struct {
 	ID          string     `json:"id" example:"acc_1"`
 	Email       string     `json:"email"`
 	DisplayName string     `json:"displayName"`
+	Position    int        `json:"position" doc:"Order of the account among the user's accounts (0 first); account lists are sorted by it. silo-web maps /u/<n> to the n-th account."`
 	Provider    string     `json:"provider" enum:"generic,gmail,microsoft"`
 	Username    string     `json:"username"`
 	IMAPHost    string     `json:"imapHost"`
@@ -32,7 +33,7 @@ type Account struct {
 
 func accountOf(a sqlcgen.Account) Account {
 	out := Account{
-		ID: formatID("acc_", a.ID), Email: a.Email, DisplayName: a.DisplayName, Provider: a.Provider, Username: a.Username,
+		ID: formatID("acc_", a.ID), Email: a.Email, DisplayName: a.DisplayName, Position: int(a.Position), Provider: a.Provider, Username: a.Username,
 		IMAPHost: a.ImapHost, IMAPPort: int(a.ImapPort), IMAPTLS: a.ImapTls,
 		SMTPHost: a.SmtpHost, SMTPPort: int(a.SmtpPort), SMTPTLS: a.SmtpTls,
 		SentAppend: a.SentAppend, State: a.SyncState,

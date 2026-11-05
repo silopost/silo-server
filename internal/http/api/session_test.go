@@ -825,6 +825,27 @@ func TestSessionAndAccounts(t *testing.T) {
 		if r.Code != http.StatusOK || st.State != "connecting" || st.ID != a.ID {
 			t.Errorf("sync-status: %d %s", r.Code, r.Body)
 		}
+
+		// Accounts carry position and both lists are sorted by it (silo-web
+		// maps /u/<n> to the n-th account).
+		if _, err := e.pool.Exec(ctx, `
+INSERT INTO accounts (user_id, email, imap_host, imap_port, imap_tls, smtp_host, smtp_port, smtp_tls, username, secret_enc, position)
+VALUES (1, 'first@silo.test', 'h1', 993, 'implicit', 'h1', 465, 'implicit', 'first', '\x00', -1),
+       (1, 'third@silo.test', 'h3', 993, 'implicit', 'h3', 465, 'implicit', 'third', '\x00', 7)`); err != nil {
+			t.Fatal(err)
+		}
+		var list struct {
+			Accounts []api.Account `json:"accounts"`
+		}
+		var sess api.SessionBody
+		serve(h, as(req{method: "GET", path: "/accounts"})).json(&list)
+		serve(h, as(req{method: "GET", path: "/session"})).json(&sess)
+		for name, accs := range map[string][]api.Account{"/accounts": list.Accounts, "/session": sess.Accounts} {
+			if len(accs) != 3 || accs[0].Email != "first@silo.test" || accs[0].Position != -1 ||
+				accs[1].ID != a.ID || accs[1].Position != a.Position || accs[2].Email != "third@silo.test" || accs[2].Position != 7 {
+				t.Errorf("%s order: %+v", name, accs)
+			}
+		}
 	})
 }
 

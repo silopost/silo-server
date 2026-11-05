@@ -148,8 +148,26 @@ func writeFailed(ctx context.Context, tx pgx.Tx, accountID int64, job worker.Job
 		threads = []int64{}
 	}
 	return mail.WriteEvent(ctx, tx, userID, mail.EventOperationFailed, map[string]any{
-		"operationId": op, "accountId": accountID, "reason": reason, "threadIds": threads,
+		"operationId": op, "accountId": accountID, "kind": OpKind(job.Payload), "reason": reason, "threadIds": threads,
 	})
+}
+
+// OpKind names the action of an imap_op job for operation.failed (plan 5.4):
+// the op of its payload (move, flags, expunge, append, delete_draft,
+// create_folder, delete_folder), except that flags changing only user label
+// keywords is "labels".
+func OpKind(payload []byte) string {
+	var p mail.OpPayload
+	if err := json.Unmarshal(payload, &p); err != nil || p.Op == "" {
+		return "unknown"
+	}
+	if p.Op == mail.OpFlags {
+		fl := append(slices.Clone(p.Add), p.Remove...)
+		if len(fl) > 0 && !slices.ContainsFunc(fl, func(f string) bool { return !mail.IsLabelKeyword(f) }) {
+			return "labels"
+		}
+	}
+	return p.Op
 }
 
 // opLoc is one location of a message of the job.
