@@ -179,7 +179,7 @@ func (mb *mailbox) populate(specs ...spec) map[string]int {
 			c := mb.client()
 			for i := 0; i < s.count; i++ {
 				id := first + i + 1
-				age := time.Duration(s.count-i) * 60 * 24 * time.Hour / time.Duration(s.count+1)
+				age := time.Duration(float64(60*24*time.Hour) * float64(s.count-i) / float64(s.count+1))
 				when := now.Add(-age).Truncate(time.Second)
 				reply := 0
 				if i%5 == 4 {
