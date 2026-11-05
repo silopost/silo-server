@@ -78,3 +78,21 @@ accept `50MB` style values, rates `5MB/s`, durations `5m`. Worth knowing:
   Postgres (testcontainers). They are skipped with `-short` or when Docker is
   unavailable; set `SILO_REQUIRE_DOCKER=true` to make that a failure (CI does).
   `make test` uses `-race`, which needs a C compiler.
+
+### IMAP integration tests
+
+`internal/imapx` and the future sync engine are tested against a real Dovecot
+(`dovecot/dovecot:2.4.5`, pinned) started per test by `internal/testutil/imaptest`
+(`imaptest.Start(t, profile)` returns address, user and password; plaintext IMAP,
+account `silo`). Profiles select what the server advertises:
+
+| Profile | Advertises | Used for |
+|---|---|---|
+| `full` | Dovecot defaults: `CONDSTORE QRESYNC MOVE UIDPLUS IDLE SPECIAL-USE ...` | main sync path |
+| `no-condstore` | everything except `CONDSTORE QRESYNC` | full-scan fallback |
+| `no-move` | everything except `MOVE UIDPLUS` (and `IMAP4rev2`) | COPY + STORE + EXPUNGE fallback |
+
+Config files and Dovecot 2.4 notes: `internal/testutil/imaptest/testdata/imap/README.md`.
+Same rules as Postgres tests: skipped with `-short` or without Docker, a failure
+with `SILO_REQUIRE_DOCKER=true`. `internal/imapx/spike_test.go` records what
+go-imap/v2 can and cannot do; run it with `-v` to see the findings.
