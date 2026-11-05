@@ -53,8 +53,9 @@ func (d *deps) registerEvents(a huma.API) {
 		Summary: "Server-Sent Events stream",
 		Description: "Pushes changes of the mailbox as they are committed. After a reconnect with Last-Event-ID the " +
 			"missed events (24 h retained) are replayed first; an id older than the retention yields a resync event. " +
-			"A ': ping' comment is sent every 25 s. A client that cannot keep up is disconnected and replays on reconnect.",
-		Responses: eventStreamDoc, Errors: []int{http.StatusUnauthorized},
+			"A ': ping' comment is sent every 25 s. A client that cannot keep up is disconnected and replays on reconnect. " +
+			"At most 8 streams per user are open at once; more answer 429 rate_limited (use /events/poll).",
+		Responses: eventStreamDoc, Errors: []int{http.StatusUnauthorized, http.StatusTooManyRequests},
 	}), func(ctx context.Context, in *eventsInput) (*huma.StreamResponse, error) {
 		userID := sessionFrom(ctx).UserID
 		last := in.LastEventID
@@ -88,6 +89,12 @@ func (d *deps) registerEvents(a huma.API) {
 		}
 		return &huma.StreamResponse{Body: func(c huma.Context) {
 			defer cl.Close()
+			release, ok := d.streams.acquire(userID)
+			if !ok {
+				writeProblem(c, errTooManyStreams())
+				return
+			}
+			defer release()
 			c.SetHeader("Content-Type", "text/event-stream")
 			c.SetHeader("Cache-Control", "no-cache")
 			c.SetHeader("X-Accel-Buffering", "no")

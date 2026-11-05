@@ -64,6 +64,8 @@ type Options struct {
 	// check and decides the Secure flag of the session cookie (https only).
 	PublicURL string
 	Logger    *slog.Logger
+	// MaxStreamsPerUser caps concurrent GET /events streams per user (MaxStreamsPerUser when 0).
+	MaxStreamsPerUser int
 }
 
 // deps is what the handlers share.
@@ -81,10 +83,12 @@ type deps struct {
 	log          *slog.Logger
 	publicOrigin string
 	cookieSecure bool
+	streams      *streamSlots
 }
 
 func newDeps(o Options) *deps {
 	d := &deps{auth: o.Auth, accts: o.Accounts, sync: o.Sync, ops: o.Ops, view: o.View, drafts: o.Drafts, events: o.Events, filters: o.Filters, admin: o.Admin, heartbeat: o.SSEHeartbeat, log: o.Logger}
+	d.streams = newStreamSlots(o.MaxStreamsPerUser)
 	if d.heartbeat <= 0 {
 		d.heartbeat = 25 * time.Second
 	}
@@ -120,8 +124,10 @@ func Mount(root chi.Router, o Options) huma.API {
 				"(native clients). No cookie and no CSRF header are used with it."},
 		}
 
+		cfg.Transformers = append(cfg.Transformers, problemTransformer)
 		a = humachi.New(r, cfg)
 		d := newDeps(o)
+		d.useSecurityLog(a)
 		registerMeta(a, o)
 		d.registerSession(a)
 		d.registerAccounts(a)

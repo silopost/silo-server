@@ -35,6 +35,7 @@ func sessionFrom(ctx context.Context) sqlcgen.Session {
 // writeProblem writes p as the response (for use inside middleware, where the
 // operation handler never runs).
 func writeProblem(ctx huma.Context, p *Problem) {
+	noteProblem(ctx.Context(), p)
 	for k, vs := range p.header {
 		for _, v := range vs {
 			ctx.AppendHeader(k, v)
@@ -117,6 +118,7 @@ func (d *deps) requireSession(ctx huma.Context, next func(huma.Context)) {
 		writeProblem(ctx, errInternal(err).(*Problem))
 		return
 	}
+	noteUser(ctx.Context(), sess.UserID)
 	if kind == auth.KindCookie && !isSafeMethod(ctx.Method()) {
 		got := ctx.Header(CSRFHeader)
 		if !d.originAllowed(ctx) || subtle.ConstantTimeCompare([]byte(got), []byte(sess.CsrfToken)) != 1 {

@@ -137,6 +137,7 @@ func (d *deps) registerSession(a huma.API) {
 		Errors:      []int{http.StatusUnauthorized, http.StatusForbidden, http.StatusTooManyRequests, http.StatusBadGateway},
 		Middlewares: huma.Middlewares{d.checkOrigin},
 	}, func(ctx context.Context, in *loginInput) (*sessionOutput, error) {
+		noteLogin(ctx, in.Body.Email)
 		client := auth.Client{IP: in.remote, UserAgent: in.userAgent, Kind: auth.KindCookie}
 		if c := in.Body.Client; c != nil {
 			client.Kind, client.Name = c.Kind, c.Name

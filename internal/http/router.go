@@ -25,6 +25,8 @@ type Deps struct {
 	API   api.Options
 	// TrustedProxies is SILO_TRUSTED_PROXIES (see RealIP).
 	TrustedProxies []netip.Prefix
+	// RateLimits are the per-IP limits of /api/v1 (zero: unlimited).
+	RateLimits RateLimits
 }
 
 // NewRouter returns the root handler with the common middleware stack.
@@ -38,6 +40,7 @@ func NewRouter(d Deps) http.Handler {
 	r.Use(RealIP(d.TrustedProxies))
 	r.Use(requestLogger(logger))
 	r.Use(middleware.Recoverer)
+	r.Use(rateLimit(d.RateLimits, logger))
 
 	r.Get("/healthz", healthz)
 	api.Mount(r, d.API)

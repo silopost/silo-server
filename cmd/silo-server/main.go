@@ -129,7 +129,15 @@ func serve(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	authSvc := auth.New(auth.Options{Pool: pool, Keys: ring, Config: cfg, Logger: logger})
+	apiLimit, err := cfg.APIRateLimit()
+	if err != nil {
+		return err
+	}
+	authLimit, err := cfg.AuthRateLimit()
+	if err != nil {
+		return err
+	}
+	authSvc := auth.New(auth.Options{Pool: pool, Keys: ring, Config: cfg, Logger: logger, IPLimit: authLimit})
 	accountSvc := accounts.New(accounts.Options{Pool: pool, Keys: ring, Config: cfg, Logger: logger})
 
 	// Job handlers are registered by the features that enqueue them.
@@ -218,6 +226,7 @@ func serve(ctx context.Context, args []string) error {
 				Logger:             logger,
 			},
 			TrustedProxies: proxies,
+			RateLimits:     siloHTTP.RateLimits{API: apiLimit, Auth: authLimit},
 		}),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
