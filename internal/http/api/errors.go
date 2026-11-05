@@ -39,6 +39,7 @@ const (
 	CodeNotInInbox           = "not_in_inbox"
 	CodeNotSnoozed           = "not_snoozed"
 	CodeThumbnailUnsupported = "thumbnail_unsupported"
+	CodeRebuildBlocked       = "rebuild_blocked"
 	CodeInternal             = "internal_error"
 )
 

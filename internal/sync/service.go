@@ -19,7 +19,8 @@ import (
 var (
 	ErrNotFound       = errors.New("sync: not found")
 	ErrInvalid        = errors.New("sync: invalid request")
-	ErrNotImplemented = errors.New("sync: not implemented")
+	// ErrRebuildBlocked wraps mail.ErrRebuildBlocked with the reason.
+	ErrRebuildBlocked = mail.ErrRebuildBlocked
 )
 
 // Service backs the sync endpoints of the API. It never talks to IMAP:
@@ -271,17 +272,13 @@ func (s *Service) UpdateFolders(ctx context.Context, userID, accountID int64, up
 }
 
 // RequestResync enqueues a resync for the account's worker: incremental (all
-// folders now) or full (also a full flag comparison). rebuild (drop and
-// rebuild the cache, plan 3.3) belongs to phase 4 and answers
-// ErrNotImplemented.
+// folders now), full (also a full flag comparison) or rebuild (drop the cache
+// and run the initial sync from scratch, plan 3.3; see mail.WipeCache for what
+// stays). A rebuild is refused with ErrRebuildBlocked while sends are in
+// flight or operations wait for write-back.
 func (s *Service) RequestResync(ctx context.Context, userID, accountID int64, mode string) error {
 	switch mode {
-	case ResyncIncremental, ResyncFull:
-	case ResyncRebuild:
-		if err := s.checkAccount(ctx, s.pool, userID, accountID); err != nil {
-			return err
-		}
-		return ErrNotImplemented
+	case ResyncIncremental, ResyncFull, ResyncRebuild:
 	default:
 		return fmt.Errorf("%w: mode must be incremental, full or rebuild", ErrInvalid)
 	}
@@ -289,7 +286,51 @@ func (s *Service) RequestResync(ctx context.Context, userID, accountID int64, mo
 		if err := s.checkAccount(ctx, tx, userID, accountID); err != nil {
 			return err
 		}
+		if mode == ResyncRebuild {
+			if err := mail.LockAccount(ctx, tx, accountID); err != nil {
+				return err
+			}
+			if err := RequestRebuild(ctx, tx, accountID); err != nil {
+				return err
+			}
+		}
 		_, err := worker.Enqueue(ctx, tx, worker.NewJob{Kind: JobResync, AccountID: &accountID, Payload: map[string]string{"mode": mode}})
+		return err
+	})
+}
+
+// RequestRebuild records a cache rebuild of an account (the caller holds the
+// account lock and enqueues the job that wakes the worker; the CLI
+// rebuild-cache shares it): ErrRebuildBlocked while sends are in flight or
+// operations wait for write-back.
+func RequestRebuild(ctx context.Context, tx pgx.Tx, accountID int64) error {
+	why, err := mail.RebuildBlocker(ctx, tx, accountID)
+	if err != nil {
+		return err
+	}
+	if why != "" {
+		return fmt.Errorf("%w: %s", ErrRebuildBlocked, why)
+	}
+	return mail.RequestRebuild(ctx, tx, accountID)
+}
+
+// RebuildAccount is RequestResync rebuild without a user (CLI rebuild-cache).
+func RebuildAccount(ctx context.Context, pool *pgxpool.Pool, accountID int64) error {
+	return pgx.BeginFunc(ctx, pool, func(tx pgx.Tx) error {
+		var ok bool
+		if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM accounts WHERE id = $1)`, accountID).Scan(&ok); err != nil {
+			return err
+		}
+		if !ok {
+			return ErrNotFound
+		}
+		if err := mail.LockAccount(ctx, tx, accountID); err != nil {
+			return err
+		}
+		if err := RequestRebuild(ctx, tx, accountID); err != nil {
+			return err
+		}
+		_, err := worker.Enqueue(ctx, tx, worker.NewJob{Kind: JobResync, AccountID: &accountID, Payload: map[string]string{"mode": ResyncRebuild}})
 		return err
 	})
 }

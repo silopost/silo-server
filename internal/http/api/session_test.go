@@ -860,3 +860,10 @@ func tokenHash(token string) []byte {
 	sum := sha256.Sum256([]byte(token))
 	return sum[:]
 }
+
+func (e *env) exec(query string, args ...any) {
+	e.t.Helper()
+	if _, err := e.pool.Exec(context.Background(), query, args...); err != nil {
+		e.t.Fatal(err)
+	}
+}

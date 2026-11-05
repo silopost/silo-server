@@ -59,7 +59,7 @@ type syncStatusOutput struct{ Body SyncStatus }
 
 // Resync is the body of POST /accounts/{id}/resync.
 type Resync struct {
-	Mode string `json:"mode,omitempty" enum:"incremental,full,rebuild" default:"incremental" doc:"incremental: sync all folders now; full: also compare every flag; rebuild: drop and rebuild the cache (not implemented yet, 501)."`
+	Mode string `json:"mode,omitempty" enum:"incremental,full,rebuild" default:"incremental" doc:"incremental: sync all folders now; full: also compare every flag; rebuild: drop the cache of the account and run the initial sync from scratch (labels, filters, settings, search history and local drafts stay; snoozes and labels that are local only are re-attached by Message-ID and size; user labels come back from the IMAP keywords). Refused with 409 rebuild_blocked while a send is queued or operations wait for write-back."`
 }
 
 type resyncInput struct {
@@ -107,8 +107,9 @@ func syncError(err error) error {
 		return nil
 	case errors.Is(err, silosync.ErrNotFound):
 		return errNotFound()
-	case errors.Is(err, silosync.ErrNotImplemented):
-		return problem(http.StatusNotImplemented, CodeNotImplemented, "Rebuilding the cache is not implemented yet.")
+	case errors.Is(err, silosync.ErrRebuildBlocked):
+		return problem(http.StatusConflict, CodeRebuildBlocked, "The cache cannot be rebuilt while a send is queued or operations wait for the server ("+
+			strings.TrimPrefix(err.Error(), silosync.ErrRebuildBlocked.Error()+": ")+"); try again when they are done.")
 	case errors.Is(err, silosync.ErrInvalid):
 		return problem(http.StatusUnprocessableEntity, CodeValidation, strings.TrimPrefix(err.Error(), "sync: invalid request: "))
 	}
@@ -144,10 +145,11 @@ func (d *deps) registerSync(a huma.API) {
 
 	huma.Register(a, d.secured(huma.Operation{
 		OperationID: "resyncAccount", Method: http.MethodPost, Path: "/accounts/{id}/resync", Tags: []string{"accounts"},
-		Summary:       "Force a sync of the account",
-		Description:   "Queues the request for the account's sync worker and returns at once.",
+		Summary: "Force a sync of the account",
+		Description: "Queues the request for the account's sync worker and returns at once. rebuild wipes the cache when " +
+			"the worker gets to it (account.status, resync and label.counts events follow) and runs the initial sync from scratch.",
 		DefaultStatus: http.StatusAccepted,
-		Errors:        []int{http.StatusUnauthorized, http.StatusForbidden, http.StatusNotFound, http.StatusUnprocessableEntity, http.StatusNotImplemented},
+		Errors:        []int{http.StatusUnauthorized, http.StatusForbidden, http.StatusNotFound, http.StatusConflict, http.StatusUnprocessableEntity},
 	}), func(ctx context.Context, in *resyncInput) (*struct{}, error) {
 		id, ok := parseID("acc_", in.ID)
 		if !ok {

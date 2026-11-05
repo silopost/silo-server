@@ -78,7 +78,11 @@ func (m *Manager) RegisterJobs(jw *worker.Worker) {
 		}
 		_ = json.Unmarshal(j.Payload, &p)
 		if w := m.ensure(j.AccountID.Int64); w != nil {
-			w.RequestResync(p.Mode)
+			if p.Mode == ResyncRebuild {
+				w.RequestRebuild()
+			} else {
+				w.RequestResync(p.Mode)
+			}
 		}
 		return nil
 	})

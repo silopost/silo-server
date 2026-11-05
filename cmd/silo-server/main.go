@@ -42,6 +42,7 @@ var commands = map[string]func(ctx context.Context, args []string) error{
 	"migrate":        migrateCmd,
 	"rotate-secrets": rotateSecretsCmd,
 	"reconcile":      reconcileCmd,
+	"rebuild-cache":  rebuildCacheCmd,
 }
 
 func main() {
@@ -74,7 +75,7 @@ func main() {
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "usage: silo-server <command>\n\ncommands:\n  serve    run the HTTP server (--migrate=false skips migrations)\n  migrate  up, down --yes or version: manage the database schema\n  rotate-secrets  re-encrypt account secrets after a key change\n  version  print the version")
+	fmt.Fprintln(os.Stderr, "usage: silo-server <command>\n\ncommands:\n  serve    run the HTTP server (--migrate=false skips migrations)\n  migrate  up, down --yes or version: manage the database schema\n  rotate-secrets  re-encrypt account secrets after a key change\n  reconcile  compare derived mail data with its sources (--account ID)\n  rebuild-cache  --account ID [--yes]: drop the cached mail of an account and sync it again\n  version  print the version")
 }
 
 func serve(ctx context.Context, args []string) error {

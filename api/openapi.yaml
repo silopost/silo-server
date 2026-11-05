@@ -1279,7 +1279,7 @@ components:
       properties:
         mode:
           default: incremental
-          description: "incremental: sync all folders now; full: also compare every flag; rebuild: drop and rebuild the cache (not implemented yet, 501)."
+          description: "incremental: sync all folders now; full: also compare every flag; rebuild: drop the cache of the account and run the initial sync from scratch (labels, filters, settings, search history and local drafts stay; snoozes and labels that are local only are re-attached by Message-ID and size; user labels come back from the IMAP keywords). Refused with 409 rebuild_blocked while a send is queued or operations wait for write-back."
           enum:
             - incremental
             - full
@@ -2414,7 +2414,7 @@ paths:
         - accounts
   /accounts/{id}/resync:
     post:
-      description: Queues the request for the account's sync worker and returns at once.
+      description: Queues the request for the account's sync worker and returns at once. rebuild wipes the cache when the worker gets to it (account.status, resync and label.counts events follow) and runs the initial sync from scratch.
       operationId: resyncAccount
       parameters:
         - in: path
@@ -2451,6 +2451,12 @@ paths:
               schema:
                 $ref: "#/components/schemas/Problem"
           description: Not Found
+        "409":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Conflict
         "422":
           content:
             application/problem+json:
@@ -2463,12 +2469,6 @@ paths:
               schema:
                 $ref: "#/components/schemas/Problem"
           description: Internal Server Error
-        "501":
-          content:
-            application/problem+json:
-              schema:
-                $ref: "#/components/schemas/Problem"
-          description: Not Implemented
       security:
         - cookieAuth: []
           csrfHeader: []

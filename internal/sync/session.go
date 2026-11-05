@@ -40,6 +40,11 @@ type session struct {
 	quotaHit   bool
 	lastProg   time.Time
 
+	// restoring: the cache was rebuilt and account_rebuilds.restore is still
+	// to be re-attached (restoreStep, at most once per second).
+	restoring   bool
+	lastRestore time.Time
+
 	// Write-back: imap_op jobs arrive on opsReq from the account job loop and
 	// run on the ops connection, or on the sync connection (priority over
 	// incremental work and backfill) when the pool has only two connections.
@@ -282,6 +287,18 @@ func (s *session) run(ctx context.Context) error {
 			s.w.request(func(p *pending) { p.inbox = true })
 		default:
 		}
+		if s.w.takeRebuild() {
+			if ok, err := s.rebuildReady(ctx); err != nil {
+				return err
+			} else if ok {
+				return errRebuild
+			}
+		}
+		if s.restoring && time.Since(s.lastRestore) >= time.Second {
+			if err := s.restoreStep(ctx); err != nil {
+				return err
+			}
+		}
 		if p := s.w.take(); p.any() {
 			if err := s.incremental(ctx, p); err != nil {
 				return err
@@ -298,6 +315,9 @@ func (s *session) run(ctx context.Context) error {
 		var wait <-chan time.Time
 		if s.bodyWork && time.Now().Before(s.backfillAt) {
 			wait = time.After(time.Until(s.backfillAt))
+		}
+		if s.restoring && wait == nil {
+			wait = time.After(time.Second)
 		}
 		select {
 		case <-ctx.Done():

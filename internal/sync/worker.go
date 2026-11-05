@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/silopost/silo-server/internal/imapx"
+	"github.com/silopost/silo-server/internal/mail"
 )
 
 // AccountWorker is the supervisor of one account (plan 3.5.1-3.5.2). Run it
@@ -35,6 +36,7 @@ type AccountWorker struct {
 	connLimit int // connections this account may use (lowered on BYE/LIMIT)
 	state     string
 	live      *session // connected session that executes imap_op jobs
+	rebuild   bool     // a cache rebuild was requested (account_rebuilds)
 }
 
 // pending is the incremental work requested since the last scheduler pass.
@@ -116,6 +118,26 @@ func (w *AccountWorker) RequestResync(mode string) {
 	w.Reconnect()
 }
 
+// RequestRebuild asks the worker to rebuild the cache (plan 3.3; the request
+// itself is the account_rebuilds row): a live session ends as soon as no
+// write-back is pending, and the next connect wipes the cache and runs the
+// initial sync from scratch.
+func (w *AccountWorker) RequestRebuild() {
+	w.mu.Lock()
+	w.rebuild = true
+	w.mu.Unlock()
+	w.nudge()
+	w.Reconnect()
+}
+
+func (w *AccountWorker) takeRebuild() bool {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	r := w.rebuild
+	w.rebuild = false
+	return r
+}
+
 // State returns the last state the worker wrote.
 func (w *AccountWorker) State() string {
 	w.mu.Lock()
@@ -171,6 +193,8 @@ func (w *AccountWorker) Run(ctx context.Context) error {
 		case errors.Is(err, errAccountGone):
 			w.log.Info("account deleted or disabled; worker stops")
 			return nil
+		case errors.Is(err, errRebuild):
+			attempt = 0 // the next pass wipes the cache
 		case errors.Is(err, imapx.ErrAuthFailed):
 			w.log.Warn("authentication failed; waiting for new credentials", "err", err)
 			if e := w.setState(ctx, StateAuthFailed, ErrCodeAuthFailed, "authentication failed"); errors.Is(e, errAccountGone) {
@@ -260,6 +284,13 @@ func (w *AccountWorker) connectAndRun(ctx context.Context, attempt *int) error {
 	if acc.state == StateDisabled {
 		return errAccountGone
 	}
+	if wiped, err := w.wipeIfRequested(ctx); err != nil {
+		return err
+	} else if wiped {
+		if acc, err = loadAccount(ctx, w.d.Pool, w.id); err != nil {
+			return err
+		}
+	}
 	if err := w.setState(ctx, StateConnecting, "", ""); err != nil {
 		return err
 	}
@@ -279,6 +310,11 @@ func (w *AccountWorker) connectAndRun(ctx context.Context, attempt *int) error {
 	}
 	s := newSession(w, acc, sc)
 	defer s.close()
+	if st, err := mail.LoadRebuild(ctx, w.d.Pool, w.id); err != nil {
+		return err
+	} else {
+		s.restoring = st.Restoring
+	}
 	if err := s.saveCapabilities(ctx); err != nil {
 		return err
 	}

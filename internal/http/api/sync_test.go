@@ -103,9 +103,17 @@ SELECT id, user_id, $2, $2, $3, 1, 3 FROM accounts WHERE id = $1 RETURNING id`, 
 		t.Errorf("resync jobs = %d", n)
 	}
 	r = serve(h, as(req{method: "POST", path: "/accounts/" + accID + "/resync", body: map[string]string{"mode": "rebuild"}}))
-	if r.Code != http.StatusNotImplemented || r.code() != api.CodeNotImplemented {
+	if r.Code != http.StatusAccepted || e.count(`SELECT count(*) FROM account_rebuilds WHERE account_id = $1 AND started_at IS NULL`, id) != 1 ||
+		e.count(`SELECT count(*) FROM jobs WHERE account_id = $1 AND kind = 'account.resync' AND payload->>'mode' = 'rebuild'`, id) != 1 {
 		t.Errorf("rebuild: %d %s", r.Code, r.Body)
 	}
+	// An operation waiting for write-back blocks the rebuild.
+	e.exec(`INSERT INTO jobs (kind, account_id, payload) VALUES ('imap_op', $1, '{"op":"flags"}')`, id)
+	r = serve(h, as(req{method: "POST", path: "/accounts/" + accID + "/resync", body: map[string]string{"mode": "rebuild"}}))
+	if r.Code != http.StatusConflict || r.code() != api.CodeRebuildBlocked {
+		t.Errorf("rebuild with a pending operation: %d %s", r.Code, r.Body)
+	}
+	e.exec(`DELETE FROM jobs WHERE account_id = $1 AND kind = 'imap_op'`, id)
 	for _, c := range []req{
 		{method: "POST", path: "/accounts/acc_zzzz/resync", body: map[string]string{"mode": "full"}},
 		{method: "GET", path: "/accounts/acc_zzzz/folders"},
