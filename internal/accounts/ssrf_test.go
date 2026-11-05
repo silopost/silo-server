@@ -3,8 +3,13 @@ package accounts
 import (
 	"context"
 	"errors"
+	"net"
 	"net/netip"
+	"strings"
+	"sync/atomic"
 	"testing"
+
+	"github.com/silopost/silo-server/internal/config"
 )
 
 type fakeResolver map[string][]string
@@ -69,5 +74,59 @@ func TestHostPolicy(t *testing.T) {
 	// Resolution failures are not policy violations.
 	if err := p.check(context.Background(), "nx.example.com"); err == nil || errors.Is(err, ErrHostNotAllowed) {
 		t.Errorf("unresolvable host: err = %v", err)
+	}
+}
+
+// rebinder answers a public address to the first n lookups (the check) and
+// loopback afterwards (the connection): DNS rebinding.
+type rebinder struct {
+	n     int
+	calls atomic.Int32
+}
+
+func (r *rebinder) LookupNetIP(context.Context, string, string) ([]netip.Addr, error) {
+	if int(r.calls.Add(1)) <= r.n {
+		return []netip.Addr{netip.MustParseAddr("93.184.216.34")}, nil
+	}
+	return []netip.Addr{netip.MustParseAddr("127.0.0.1")}, nil
+}
+
+func TestTestRefusesRebindingHost(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	var accepted atomic.Int32
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			accepted.Add(1)
+			c.Close()
+		}
+	}()
+	port := ln.Addr().(*net.TCPAddr).Port
+	res := &rebinder{n: 2} // one check per protocol
+	s := New(Options{Resolver: res, Config: config.Config{
+		AllowCustomServers: true, AllowInsecureTransport: true,
+		DefaultIMAPHost: "mail.silo.test", DefaultIMAPPort: 993, DefaultIMAPTLS: "implicit",
+		DefaultSMTPHost: "mail.silo.test", DefaultSMTPPort: 587, DefaultSMTPTLS: "starttls",
+	}})
+	r, err := s.Test(context.Background(), Connection{Email: "a@rebind.example.com", Password: "x",
+		IMAPHost: "rebind.example.com", IMAPPort: port, IMAPTLS: "none",
+		SMTPHost: "rebind.example.com", SMTPPort: port, SMTPTLS: "none"})
+	if err != nil {
+		t.Fatalf("the check itself saw a public address: %v", err)
+	}
+	for _, p := range []ProtocolResult{r.IMAP, r.SMTP} {
+		if p.OK || len(p.Steps) == 0 || p.Steps[0].Step != "connect" || !strings.Contains(p.Steps[0].Detail, "host not allowed") {
+			t.Errorf("result %+v", p)
+		}
+	}
+	if n := accepted.Load(); n != 0 {
+		t.Fatalf("%d connections reached the loopback listener", n)
 	}
 }

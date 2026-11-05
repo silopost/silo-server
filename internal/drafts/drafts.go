@@ -17,6 +17,7 @@ import (
 	"io"
 	"log/slog"
 	"mime"
+	"net"
 	"path"
 	"slices"
 	"strings"
@@ -95,6 +96,9 @@ type Options struct {
 	// SMTPTimeout bounds one delivery attempt [2m].
 	SMTPTimeout time.Duration
 	Logger      *slog.Logger
+	// DialContext opens the SMTP connections (the anti-SSRF dialer of netx);
+	// net.Dialer when nil.
+	DialContext func(ctx context.Context, network, addr string) (net.Conn, error)
 }
 
 // Service implements the drafts and uploads endpoints.

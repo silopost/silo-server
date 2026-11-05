@@ -31,6 +31,7 @@ package sync
 import (
 	"context"
 	"log/slog"
+	"net"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -122,6 +123,9 @@ type Settings struct {
 	// limit; < 0 = no limit). A label keyword that would exceed it is not
 	// stored: the label is local in that folder (plan 3.7).
 	KeywordFolderLimit int
+	// DialContext opens the IMAP connections (the anti-SSRF dialer of netx);
+	// net.Dialer when nil.
+	DialContext func(ctx context.Context, network, addr string) (net.Conn, error)
 }
 
 func (s Settings) withDefaults() Settings {

@@ -27,6 +27,7 @@ import (
 	"github.com/silopost/silo-server/internal/http/api"
 	"github.com/silopost/silo-server/internal/mail"
 	"github.com/silopost/silo-server/internal/mailview"
+	"github.com/silopost/silo-server/internal/netx"
 	"github.com/silopost/silo-server/internal/ops"
 	"github.com/silopost/silo-server/internal/secrets"
 	"github.com/silopost/silo-server/internal/store"
@@ -140,6 +141,12 @@ func serve(ctx context.Context, args []string) error {
 	authSvc := auth.New(auth.Options{Pool: pool, Keys: ring, Config: cfg, Logger: logger, IPLimit: authLimit})
 	accountSvc := accounts.New(accounts.Options{Pool: pool, Keys: ring, Config: cfg, Logger: logger})
 
+	// One anti-SSRF dialer for the IMAP/SMTP connections of accounts: the
+	// default servers and hosts allowlisted by name are dialled unfiltered,
+	// other hosts only at public or allowlisted addresses, checked on the
+	// address actually dialled (DNS rebinding).
+	accountDialer := &netx.Dialer{Policy: netx.NewPolicy(append([]string{cfg.DefaultIMAPHost, cfg.DefaultSMTPHost}, cfg.CustomServerAllowlist...))}
+
 	// Job handlers are registered by the features that enqueue them.
 	jobs := worker.New(worker.Options{Pool: pool, Logger: logger, Concurrency: cfg.WorkerConcurrency})
 	// The sync engine: one AccountWorker per account that is not disabled. Its
@@ -156,6 +163,7 @@ func serve(ctx context.Context, args []string) error {
 			QuotaPerAccount:    int64(cfg.MirrorQuotaPerAccount),
 			InsecureTLS:        cfg.AllowInsecureTransport,
 			KeywordFolderLimit: keywordLimit(cfg.SyncKeywordFolderLimit),
+			DialContext:        accountDialer.DialContext,
 		},
 	})
 	syncMgr.RegisterJobs(jobs)
@@ -163,7 +171,7 @@ func serve(ctx context.Context, args []string) error {
 	view := mailview.New(pool, blobs, syncMgr)
 	draftSvc := drafts.New(drafts.Options{
 		Pool: pool, Blobs: blobs, MaxUploadBytes: int64(cfg.MaxAttachmentBytes), Logger: logger,
-		Keys: ring, InsecureTransport: cfg.AllowInsecureTransport,
+		Keys: ring, InsecureTransport: cfg.AllowInsecureTransport, DialContext: accountDialer.DialContext,
 		OpenRaw: func(ctx context.Context, userID, messageID int64) (io.ReadCloser, error) {
 			r, err := view.OpenRaw(ctx, userID, messageID)
 			if err != nil {

@@ -4,12 +4,14 @@ import (
 	"context"
 	"errors"
 	"net"
+	"net/netip"
 	"strconv"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/silopost/silo-server/internal/imapx"
+	"github.com/silopost/silo-server/internal/netx"
 	"github.com/silopost/silo-server/internal/testutil/imaptest"
 )
 
@@ -91,5 +93,46 @@ func TestDialGreetingTimeout(t *testing.T) {
 	_, err = imapx.Dial(context.Background(), host, port, imapx.TLSNone, false, imapx.WithDialTimeout(300*time.Millisecond))
 	if !errors.Is(err, imapx.ErrUnavailable) || time.Since(start) > 3*time.Second {
 		t.Fatalf("want fast ErrUnavailable, got %v after %v", err, time.Since(start))
+	}
+}
+
+type staticResolver map[string]string
+
+func (r staticResolver) LookupNetIP(_ context.Context, _, host string) ([]netip.Addr, error) {
+	if ip, ok := r[host]; ok {
+		return []netip.Addr{netip.MustParseAddr(ip)}, nil
+	}
+	return nil, errors.New("no such host")
+}
+
+// WithDialContext routes the connection through the anti-SSRF dialer: the host
+// name is resolved and checked there.
+func TestDialWithSafeDialer(t *testing.T) {
+	addr, user, pass := imaptest.Start(t, imaptest.Full)
+	host, port := hostPort(t, addr)
+	ips, err := net.DefaultResolver.LookupNetIP(context.Background(), "ip4", host)
+	if err != nil || len(ips) == 0 {
+		t.Fatalf("resolve %s: %v", host, err)
+	}
+	res := staticResolver{"mail.example.com": ips[0].String()}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	// The instance's own server (no policy): connects.
+	c, err := imapx.Dial(ctx, "mail.example.com", port, imapx.TLSNone, false,
+		imapx.WithDialContext((&netx.Dialer{Resolver: res}).DialContext))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Login(ctx, user, pass); err != nil {
+		t.Fatal(err)
+	}
+	c.Close()
+
+	// A custom server resolving to a loopback address: refused before connecting.
+	_, err = imapx.Dial(ctx, "mail.example.com", port, imapx.TLSNone, false,
+		imapx.WithDialContext((&netx.Dialer{Policy: netx.NewPolicy(nil), Resolver: res}).DialContext))
+	if !errors.Is(err, netx.ErrHostNotAllowed) {
+		t.Fatalf("want ErrHostNotAllowed, got %v", err)
 	}
 }

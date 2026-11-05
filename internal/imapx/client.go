@@ -36,6 +36,7 @@ type Option func(*dialOptions)
 type dialOptions struct {
 	imap        imapclient.Options
 	dialTimeout time.Duration
+	dial        func(ctx context.Context, network, addr string) (net.Conn, error)
 }
 
 // WithUnilateralDataHandler installs a handler for EXISTS, EXPUNGE, FETCH and
@@ -52,6 +53,12 @@ func WithDebugWriter(w io.Writer) Option {
 // WithDialTimeout overrides DefaultDialTimeout.
 func WithDialTimeout(d time.Duration) Option {
 	return func(o *dialOptions) { o.dialTimeout = d }
+}
+
+// WithDialContext replaces the TCP dial (net.Dialer) with dial, e.g. the
+// anti-SSRF dialer of netx. TLS still verifies the host name given to Dial.
+func WithDialContext(dial func(ctx context.Context, network, addr string) (net.Conn, error)) Option {
+	return func(o *dialOptions) { o.dial = dial }
 }
 
 // Client is a connected IMAP client. Use IMAP() for commands go-imap supports.
@@ -73,8 +80,11 @@ func Dial(ctx context.Context, host string, port int, mode TLSMode, insecureSkip
 	o.imap.TLSConfig = tlsCfg
 	addr := net.JoinHostPort(host, strconv.Itoa(port))
 
-	var d net.Dialer
-	conn, err := d.DialContext(ctx, "tcp", addr)
+	dial := o.dial
+	if dial == nil {
+		dial = (&net.Dialer{}).DialContext
+	}
+	conn, err := dial(ctx, "tcp", addr)
 	if err != nil {
 		return nil, wrapNetError(err)
 	}

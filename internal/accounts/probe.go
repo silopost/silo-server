@@ -14,6 +14,7 @@ import (
 	"github.com/emersion/go-imap/v2"
 
 	"github.com/silopost/silo-server/internal/imapx"
+	"github.com/silopost/silo-server/internal/netx"
 )
 
 // probeTimeout bounds each protocol check as a whole.
@@ -50,6 +51,18 @@ type endpoint struct {
 	Username string
 	Password string
 	Insecure bool // skip certificate verification (SILO_ALLOW_INSECURE_TRANSPORT)
+	// Dial opens the TCP connections: the anti-SSRF dialer of the host (set
+	// by resolve); net.Dialer when nil (tests).
+	Dial netx.DialFunc
+}
+
+// dial connects to e.Host:e.Port through e.Dial.
+func (e endpoint) dial(ctx context.Context) (net.Conn, error) {
+	d := e.Dial
+	if d == nil {
+		d = (&net.Dialer{}).DialContext
+	}
+	return d(ctx, "tcp", net.JoinHostPort(e.Host, strconv.Itoa(e.Port)))
 }
 
 // steps records stages in order and stops at the first failure.
@@ -89,10 +102,10 @@ func probeIMAP(ctx context.Context, e endpoint) ProtocolResult {
 		}
 	}()
 
-	st.run("connect", func() (string, error) { return "", tcpProbe(ctx, e.Host, e.Port) })
+	st.run("connect", func() (string, error) { return "", tcpProbe(ctx, e) })
 	st.run("tls", func() (string, error) {
 		var err error
-		cl, err = imapx.Dial(ctx, e.Host, e.Port, imapx.TLSMode(e.TLS), e.Insecure)
+		cl, err = imapx.Dial(ctx, e.Host, e.Port, imapx.TLSMode(e.TLS), e.Insecure, imapx.WithDialContext(e.Dial))
 		if err != nil {
 			return "", err
 		}
@@ -156,12 +169,9 @@ func probeSMTP(ctx context.Context, e endpoint) ProtocolResult {
 		}
 	}()
 	tlsCfg := &tls.Config{ServerName: e.Host, InsecureSkipVerify: e.Insecure} //nolint:gosec // opt-in via SILO_ALLOW_INSECURE_TRANSPORT
-	addr := net.JoinHostPort(e.Host, strconv.Itoa(e.Port))
-
 	st.run("connect", func() (string, error) {
-		var d net.Dialer
 		var err error
-		conn, err = d.DialContext(ctx, "tcp", addr)
+		conn, err = e.dial(ctx)
 		if err != nil {
 			return "", err
 		}
@@ -227,9 +237,8 @@ func hasMech(mechs, want string) bool {
 	return false
 }
 
-func tcpProbe(ctx context.Context, host string, port int) error {
-	var d net.Dialer
-	conn, err := d.DialContext(ctx, "tcp", net.JoinHostPort(host, strconv.Itoa(port)))
+func tcpProbe(ctx context.Context, e endpoint) error {
+	conn, err := e.dial(ctx)
 	if err != nil {
 		return err
 	}

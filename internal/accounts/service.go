@@ -17,6 +17,7 @@ import (
 
 	"github.com/silopost/silo-server/internal/auth"
 	"github.com/silopost/silo-server/internal/config"
+	"github.com/silopost/silo-server/internal/netx"
 	"github.com/silopost/silo-server/internal/secrets"
 	"github.com/silopost/silo-server/internal/store/sqlcgen"
 	"github.com/silopost/silo-server/internal/worker"
@@ -303,14 +304,21 @@ func (s *Service) resolve(ctx context.Context, c Connection) (imap, smtp endpoin
 			return imap, smtp, err
 		}
 	}
-	for _, h := range []struct{ got, def string }{{imap.Host, cfg.DefaultIMAPHost}, {smtp.Host, cfg.DefaultSMTPHost}} {
-		if strings.EqualFold(h.got, h.def) {
+	for _, h := range []struct {
+		e   *endpoint
+		def string
+	}{{&imap, cfg.DefaultIMAPHost}, {&smtp, cfg.DefaultSMTPHost}} {
+		// The instance's own servers are dialled unfiltered, custom ones under
+		// the anti-SSRF policy (also against DNS rebinding after the check).
+		h.e.Dial = (&netx.Dialer{Resolver: s.policy.resolver}).DialContext
+		if strings.EqualFold(h.e.Host, h.def) {
 			continue
 		}
+		h.e.Dial = s.policy.dialer().DialContext
 		if !cfg.AllowCustomServers {
 			return imap, smtp, ErrCustomServersDenied
 		}
-		if err := s.policy.check(ctx, h.got); err != nil {
+		if err := s.policy.check(ctx, h.e.Host); err != nil {
 			if errors.Is(err, ErrHostNotAllowed) {
 				return imap, smtp, err
 			}

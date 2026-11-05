@@ -66,6 +66,7 @@ type smtpAccount struct {
 	sentAppend     bool
 	password       string
 	insecureTransp bool
+	dialCtx        func(ctx context.Context, network, addr string) (net.Conn, error)
 }
 
 // delivery is a successful delivery.
@@ -83,8 +84,11 @@ func dial(ctx context.Context, a *smtpAccount) (*smtp.Client, error) {
 	addr := net.JoinHostPort(a.host, strconv.Itoa(a.port))
 	tlsCfg := &tls.Config{ServerName: a.host, InsecureSkipVerify: a.insecureTransp} //nolint:gosec // opt-in via SILO_ALLOW_INSECURE_TRANSPORT
 	open := func() (net.Conn, error) {
-		var d net.Dialer
-		conn, err := d.DialContext(ctx, "tcp", addr)
+		dialCtx := a.dialCtx
+		if dialCtx == nil {
+			dialCtx = (&net.Dialer{}).DialContext
+		}
+		conn, err := dialCtx(ctx, "tcp", addr)
 		if err != nil {
 			return nil, err
 		}
@@ -295,7 +299,7 @@ func (s *Service) requeue(ctx context.Context, outboundID int64, errText string)
 // loadSend reads the account (password decrypted), the envelope (the
 // draft's recipients) and the stored message of a send.
 func (s *Service) loadSend(ctx context.Context, accountID, msgID int64) (*smtpAccount, *mail.DraftMIME, []byte, error) {
-	a := &smtpAccount{id: accountID, insecureTransp: s.o.InsecureTransport}
+	a := &smtpAccount{id: accountID, insecureTransp: s.o.InsecureTransport, dialCtx: s.o.DialContext}
 	err := s.o.Pool.QueryRow(ctx, `
 SELECT user_id, email::text, smtp_host, smtp_port, smtp_tls, username, secret_enc, sent_append FROM accounts WHERE id = $1`, accountID).
 		Scan(&a.userID, &a.email, &a.host, &a.port, &a.tls, &a.username, &a.secret, &a.sentAppend)

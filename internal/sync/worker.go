@@ -254,6 +254,9 @@ func (w *AccountWorker) dial(ctx context.Context, acc *account, opts ...imapx.Op
 	if err != nil {
 		return nil, fmt.Errorf("%w: decrypt account secret: %v", imapx.ErrAuthFailed, err)
 	}
+	if dial := w.d.Settings.DialContext; dial != nil {
+		opts = append(opts, imapx.WithDialContext(dial))
+	}
 	cl, err := imapx.Dial(ctx, acc.host, acc.port, imapx.TLSMode(acc.tls), w.d.Settings.InsecureTLS, opts...)
 	if err != nil {
 		return nil, err
