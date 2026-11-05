@@ -23,13 +23,15 @@ type User struct {
 
 // Settings are the per-user preferences (stored in users.settings).
 type Settings struct {
-	Density                  string  `json:"density" enum:"default,comfortable,compact"`
-	UndoSendSeconds          int     `json:"undoSendSeconds" doc:"Delay before a sent message leaves, in seconds."`
-	Signature                string  `json:"signature"`
-	Timezone                 string  `json:"timezone" doc:"IANA time zone name." example:"Europe/Warsaw"`
-	KeyboardShortcutsEnabled bool    `json:"keyboardShortcutsEnabled"`
-	ConversationView         bool    `json:"conversationView"`
-	ActiveAccountID          *string `json:"activeAccountId" doc:"Account shown by default; the first account when unset."`
+	Density                  string     `json:"density" enum:"default,comfortable,compact"`
+	UndoSendSeconds          int        `json:"undoSendSeconds" doc:"Delay before a sent message leaves, in seconds."`
+	Signature                string     `json:"signature"`
+	Timezone                 string     `json:"timezone" doc:"IANA time zone name." example:"Europe/Warsaw"`
+	KeyboardShortcutsEnabled bool       `json:"keyboardShortcutsEnabled"`
+	ConversationView         bool       `json:"conversationView"`
+	ActiveAccountID          *string    `json:"activeAccountId" doc:"Account shown by default; the first account when unset."`
+	DesktopNotifications     bool       `json:"desktopNotifications" doc:"Whether the user wants desktop/system notifications of new mail; each client asks the system for its own permission."`
+	UpdatedAt                *time.Time `json:"updatedAt" doc:"Time of the last PATCH /settings; null before the first one."`
 }
 
 // SessionBody is the state of the signed-in user.
@@ -265,6 +267,8 @@ func settingsFrom(raw []byte, accs []sqlcgen.Account) Settings {
 		KeyboardShortcutsEnabled *bool   `json:"keyboard_shortcuts_enabled"`
 		ConversationView         *bool   `json:"conversation_view"`
 		ActiveAccountID          *int64  `json:"active_account_id"`
+		DesktopNotifications     *bool   `json:"desktop_notifications"`
+		UpdatedAt                *string `json:"updated_at"`
 	}
 	_ = json.Unmarshal(raw, &stored) // malformed settings fall back to defaults
 	if stored.Density != nil {
@@ -281,6 +285,14 @@ func settingsFrom(raw []byte, accs []sqlcgen.Account) Settings {
 	}
 	if stored.KeyboardShortcutsEnabled != nil {
 		s.KeyboardShortcutsEnabled = *stored.KeyboardShortcutsEnabled
+	}
+	if stored.DesktopNotifications != nil {
+		s.DesktopNotifications = *stored.DesktopNotifications
+	}
+	if stored.UpdatedAt != nil {
+		if t, err := time.Parse(time.RFC3339Nano, *stored.UpdatedAt); err == nil {
+			s.UpdatedAt = &t
+		}
 	}
 	if stored.ConversationView != nil {
 		s.ConversationView = *stored.ConversationView
