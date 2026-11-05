@@ -185,6 +185,8 @@ type Message struct {
 	RecipientsText  string
 	ReplyTo         []byte
 	Subject         string
+	SubjectNorm     string
+	ReplyPrefix     bool
 	Snippet         string
 	BodyText        string
 	HasAttachments  bool

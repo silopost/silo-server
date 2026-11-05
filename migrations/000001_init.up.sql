@@ -169,6 +169,8 @@ CREATE TABLE messages (
   recipients_text  text   NOT NULL DEFAULT '',
   reply_to         jsonb  NULL,
   subject          text   NOT NULL DEFAULT '',
+  subject_norm     text   NOT NULL DEFAULT '',     -- threading key (mail.NormalizeSubject)
+  reply_prefix     bool   NOT NULL DEFAULT false,   -- subject had a Re:/Fwd: style prefix
   snippet          text   NOT NULL DEFAULT '',
   body_text        text   NOT NULL DEFAULT '',
   has_attachments  bool   NOT NULL DEFAULT false,
