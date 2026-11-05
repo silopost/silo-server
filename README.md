@@ -47,6 +47,8 @@ curl localhost:8080/api/v1/meta
 
 Other targets: `make build`, `make test`, `make lint`, `make sqlc`, `make openapi`.
 
+Version: `GET /meta` reports `internal/version.Version`, set at link time. `make build` takes it from `git describe` (tag `v0.2.0` gives `v0.2.0`); a release image needs `--build-arg VERSION=v0.2.0` (CI builds `edge-<sha>`).
+
 Docker: `docker build --target prod -t silo-server .` (or `--target dev` for
 hot reload with air; mount the repo at `/src`).
 
@@ -79,6 +81,7 @@ accept `50MB` style values, rates `5MB/s`, durations `5m`. Worth knowing:
   `imap_op` jobs run by the account's worker. Folder moves wait `SILO_UNDO_WINDOW`
   (default `10s`), flags go at once; queued changes are coalesced, and jobs wait
   (up to 7 days) while the account is offline.
+- Sessions and accounts (`internal/auth`, `internal/accounts`): `POST/GET/DELETE /session`, `GET /sessions`, `DELETE /sessions/{id}`, `GET/POST /accounts`, `POST /accounts/test`, `GET/PATCH/DELETE /accounts/{id}`, `GET /accounts/{id}/folders`, `POST /accounts/{id}/resync`, `GET /accounts/{id}/sync-status`, `GET /meta`. The full list is `api/openapi.yaml`.
 - Reading the mailbox (`internal/mailview`): `GET /labels` (counters, pseudo label
   `UNREAD`), `POST /labels` (user label with an IMAP keyword, or a folder: `CREATE`
   queued as an `imap_op` job), `PATCH`/`DELETE /labels/{id}` (a rename moves the
