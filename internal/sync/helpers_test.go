@@ -165,6 +165,30 @@ type spec struct {
 // folder in parallel. It returns the number of messages per folder younger
 // than 30 days.
 func (mb *mailbox) populate(specs ...spec) map[string]int {
+	return mb.populateAged(shortAge, specs...)
+}
+
+// shortAge spreads messages evenly over the last 60 days (half within the phase A window).
+func shortAge(i, count int) time.Duration {
+	return time.Duration(float64(60*24*time.Hour) * float64(count-i) / float64(count+1))
+}
+
+// realisticAge spreads messages over 3 years with about 10% in the last 30
+// days (the rest evenly older), like a long-used mailbox: phase A of the
+// initial sync (last 30 days of INBOX) is then a small fraction of the mailbox.
+func realisticAge(i, count int) time.Duration {
+	const month = 30 * 24 * time.Hour
+	recent := count / 10
+	if k := count - i; k <= recent {
+		return time.Duration(float64(month) * float64(k) / float64(recent+1))
+	} else {
+		old := count - recent
+		return month + time.Duration(float64(3*365*24*time.Hour-month)*float64(k-recent)/float64(old+1))
+	}
+}
+
+// populateAged is populate with a custom age profile (age of message i of count).
+func (mb *mailbox) populateAged(ageOf func(i, count int) time.Duration, specs ...spec) map[string]int {
 	mb.t.Helper()
 	now := time.Now()
 	recent := map[string]int{}
@@ -180,7 +204,7 @@ func (mb *mailbox) populate(specs ...spec) map[string]int {
 			c := mb.client()
 			for i := 0; i < s.count; i++ {
 				id := first + i + 1
-				age := time.Duration(float64(60*24*time.Hour) * float64(s.count-i) / float64(s.count+1))
+				age := ageOf(i, s.count)
 				when := now.Add(-age).Truncate(time.Second)
 				reply := 0
 				if i%5 == 4 {

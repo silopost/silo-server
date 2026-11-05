@@ -32,7 +32,7 @@ func TestInitialSync(t *testing.T) {
 	mb.create("Projekty")
 	n := initialSize()
 	t0 := time.Now()
-	recent := mb.populate(splitSpecs(n)...)
+	recent := mb.populateAged(realisticAge, splitSpecs(n)...)
 	t.Logf("populated %d messages in %s", n, time.Since(t0).Round(time.Millisecond))
 
 	a := mb.account(mb.pass)
