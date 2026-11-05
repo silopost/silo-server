@@ -28,8 +28,14 @@ const Prefix = "/api/v1"
 // Version is the major version of the API, reported by GET /meta.
 const Version = "1"
 
-// MinWebVersion is the oldest silo-web release compatible with this server.
-const MinWebVersion = "0.0.0"
+// MinWebVersion is the oldest silo-web release compatible with this server
+// (GET /meta). A release that breaks the API contract for older web clients
+// (removes or changes an endpoint, field, error code or event they use)
+// raises it to the first silo-web release that handles the change; additive
+// changes leave it. It is a compatibility decision of the source, not build
+// metadata, so it is a constant and not set with -ldflags like
+// version.Version. 0.2.0: the first web release on the Phase 5 contract.
+const MinWebVersion = "0.2.0"
 
 // Options carries the instance settings the API exposes.
 type Options struct {
