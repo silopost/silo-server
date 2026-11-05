@@ -24,6 +24,18 @@ jobs:
       - run: go vet ./...
       - run: go test -race ./...
 
+  generated:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: sqlc output is up to date
+        run: |
+          go run github.com/sqlc-dev/sqlc/cmd/sqlc@v1.31.1 generate
+          git diff --exit-code internal/store/sqlcgen
+
   lint:
     runs-on: ubuntu-latest
     steps:
@@ -36,7 +48,7 @@ jobs:
           version: v2.1
 
   image:
-    needs: [test, lint]
+    needs: [test, lint, generated]
     runs-on: ubuntu-latest
     permissions:
       contents: read

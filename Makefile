@@ -1,7 +1,9 @@
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 LDFLAGS := -s -w -X github.com/silopost/silo-server/internal/version.Version=$(VERSION)
 
-.PHONY: build test lint run
+SQLC := github.com/sqlc-dev/sqlc/cmd/sqlc@v1.31.1
+
+.PHONY: build test lint run sqlc
 
 build:
 	CGO_ENABLED=0 go build -trimpath -ldflags "$(LDFLAGS)" -o bin/silo-server ./cmd/silo-server
@@ -14,3 +16,7 @@ lint:
 
 run:
 	SILO_LOG_FORMAT=text go run ./cmd/silo-server serve
+
+# Regenerate internal/store/sqlcgen from migrations/ and internal/store/queries/.
+sqlc:
+	go run $(SQLC) generate
