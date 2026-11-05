@@ -1,0 +1,1 @@
+{"description":"same Message-ID with a different RFC822.SIZE are two messages","shuffle":true,"messages":2,"locations":2,"distinct_ids":false,"threads":[["a.eml"],["b.eml"]]}

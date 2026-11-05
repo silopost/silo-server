@@ -1,0 +1,1 @@
+{"description":"fallback gives the same result whichever of the pair arrives first","shuffle":true,"order":["reply.eml","orig.eml"],"threads":[["orig.eml","reply.eml"]]}

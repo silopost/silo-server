@@ -1,0 +1,11 @@
+From: Anna <anna@example.com>
+To: Dev <dev@silo.test>
+Subject: Re: Zapytanie o termin
+Date: Mon, 02 Nov 2026 10:00:00 +0000
+Message-ID: <r5@example.com>
+In-Reply-To: <m5@silo.test>
+References: <o5@example.com> <m5@silo.test>
+MIME-Version: 1.0
+Content-Type: text/plain; charset=utf-8
+
+Tresc wiadomosci reply.eml w scenariuszu 05-inbox-and-sent.

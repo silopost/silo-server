@@ -1,0 +1,1 @@
+{"description":"synthetic Message-ID, distinct messages stay distinct","shuffle":true,"threads":[["a.eml"],["b.eml"]],"synthetic":["a.eml","b.eml"]}

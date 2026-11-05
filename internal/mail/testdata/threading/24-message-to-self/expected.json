@@ -1,0 +1,1 @@
+{"description":"message sent to ourselves lives in Sent and INBOX: SENT and INBOX labels on one message","shuffle":true,"folders":{"a.eml":"Sent"},"also":{"a.eml":["INBOX"]},"messages":1,"locations":2,"threads":[["a.eml"]],"thread_labels":{"a.eml":["INBOX","SENT"]}}

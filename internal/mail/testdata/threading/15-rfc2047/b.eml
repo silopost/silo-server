@@ -1,0 +1,11 @@
+From: Dev <dev@silo.test>
+To: Anna <anna@example.com>
+Subject: Re: Zamówienie ofert
+Date: Mon, 02 Nov 2026 10:00:00 +0000
+Message-ID: <b15@silo.test>
+In-Reply-To: <a15@example.com>
+References: <a15@example.com>
+MIME-Version: 1.0
+Content-Type: text/plain; charset=utf-8
+
+Tresc wiadomosci b.eml w scenariuszu 15-rfc2047.

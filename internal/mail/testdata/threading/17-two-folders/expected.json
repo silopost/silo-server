@@ -1,0 +1,1 @@
+{"description":"one message present in INBOX and in a user folder: one row, two locations, labels are the union","shuffle":true,"also":{"a.eml":["Faktury"]},"messages":2,"locations":3,"threads":[["a.eml","b.eml"]],"thread_labels":{"a.eml":["INBOX","Faktury"]}}
