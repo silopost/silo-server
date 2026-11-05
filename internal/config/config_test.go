@@ -184,3 +184,21 @@ func TestParseSize(t *testing.T) {
 		}
 	}
 }
+
+func TestHardeningSettings(t *testing.T) {
+	c := Config{TrustedProxies: []string{"10.0.0.1", " 172.16.0.0/12 ", "::ffff:192.168.1.1", ""}}
+	got, err := c.TrustedProxyPrefixes()
+	if err != nil || len(got) != 3 || got[0].String() != "10.0.0.1/32" || got[1].String() != "172.16.0.0/12" || got[2].String() != "192.168.1.1/32" {
+		t.Fatalf("TrustedProxyPrefixes = %v, %v", got, err)
+	}
+	api, err1 := c.APIRateLimit()
+	auth, err2 := c.AuthRateLimit()
+	if err1 != nil || err2 != nil || api.Burst != 600 || auth.Burst != 20 || auth.Every != 3*time.Second {
+		t.Fatalf("defaults: api=%+v auth=%+v %v %v", api, auth, err1, err2)
+	}
+	var errs []error
+	Config{TrustedProxies: []string{"proxy.local"}, RateLimitAPI: "lots", RateLimitAuth: "5/x"}.validateHardening(&errs)
+	if len(errs) != 3 {
+		t.Fatalf("errors = %v", errs)
+	}
+}

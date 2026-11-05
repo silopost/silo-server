@@ -125,6 +125,10 @@ func serve(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
+	proxies, err := cfg.TrustedProxyPrefixes()
+	if err != nil {
+		return err
+	}
 	authSvc := auth.New(auth.Options{Pool: pool, Keys: ring, Config: cfg, Logger: logger})
 	accountSvc := accounts.New(accounts.Options{Pool: pool, Keys: ring, Config: cfg, Logger: logger})
 
@@ -213,6 +217,7 @@ func serve(ctx context.Context, args []string) error {
 				PublicURL:          cfg.PublicURL,
 				Logger:             logger,
 			},
+			TrustedProxies: proxies,
 		}),
 		ReadHeaderTimeout: 10 * time.Second,
 	}

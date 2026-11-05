@@ -97,6 +97,12 @@ type Config struct {
 	BlobS3Prefix    string `env:"SILO_BLOB_S3_PREFIX"`
 	BlobS3UseSSL    bool   `env:"SILO_BLOB_S3_USE_SSL" envDefault:"true"`
 	BlobS3PathStyle bool   `env:"SILO_BLOB_S3_PATH_STYLE" envDefault:"true"`
+
+	// Hardening (plan 3.15): see hardening.go and the README.
+	TrustedProxies []string `env:"SILO_TRUSTED_PROXIES" envSeparator:","`
+	RateLimitAPI   string   `env:"SILO_RATE_LIMIT_API" envDefault:"600/m"`
+	RateLimitAuth  string   `env:"SILO_RATE_LIMIT_AUTH" envDefault:"20/m"`
+	HSTS           bool     `env:"SILO_HSTS" envDefault:"true"`
 }
 
 // Load parses the process environment, applies derived defaults and checks the
@@ -195,6 +201,7 @@ func (c Config) ValidateServe() error {
 		add("SILO_MAX_ATTACHMENT_BYTES must be > 0")
 	}
 
+	c.validateHardening(&errs)
 	if c.WorkerConcurrency < 1 {
 		add("SILO_WORKER_CONCURRENCY must be >= 1")
 	}

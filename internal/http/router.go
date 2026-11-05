@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net/http"
+	"net/netip"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -22,6 +23,8 @@ type Deps struct {
 	DB    *pgxpool.Pool
 	Blobs blob.BlobStore
 	API   api.Options
+	// TrustedProxies is SILO_TRUSTED_PROXIES (see RealIP).
+	TrustedProxies []netip.Prefix
 }
 
 // NewRouter returns the root handler with the common middleware stack.
@@ -32,7 +35,7 @@ func NewRouter(d Deps) http.Handler {
 	}
 	r := chi.NewRouter()
 	r.Use(middleware.RequestID)
-	r.Use(middleware.RealIP)
+	r.Use(RealIP(d.TrustedProxies))
 	r.Use(requestLogger(logger))
 	r.Use(middleware.Recoverer)
 
