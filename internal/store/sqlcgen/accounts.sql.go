@@ -7,6 +7,8 @@ package sqlcgen
 
 import (
 	"context"
+
+	"github.com/jackc/pgx/v5/pgtype"
 )
 
 const countAccountsByUser = `-- name: CountAccountsByUser :one
@@ -18,6 +20,23 @@ func (q *Queries) CountAccountsByUser(ctx context.Context, userID int64) (int64,
 	var count int64
 	err := row.Scan(&count)
 	return count, err
+}
+
+const deleteAccount = `-- name: DeleteAccount :execrows
+DELETE FROM accounts WHERE id = $1 AND user_id = $2
+`
+
+type DeleteAccountParams struct {
+	ID     int64
+	UserID int64
+}
+
+func (q *Queries) DeleteAccount(ctx context.Context, arg DeleteAccountParams) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteAccount, arg.ID, arg.UserID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const getAccount = `-- name: GetAccount :one
@@ -32,6 +51,51 @@ type GetAccountParams struct {
 
 func (q *Queries) GetAccount(ctx context.Context, arg GetAccountParams) (Account, error) {
 	row := q.db.QueryRow(ctx, getAccount, arg.ID, arg.UserID)
+	var i Account
+	err := row.Scan(
+		&i.ID,
+		&i.UserID,
+		&i.Email,
+		&i.DisplayName,
+		&i.Provider,
+		&i.ImapHost,
+		&i.ImapPort,
+		&i.ImapTls,
+		&i.SmtpHost,
+		&i.SmtpPort,
+		&i.SmtpTls,
+		&i.Username,
+		&i.AuthType,
+		&i.SecretEnc,
+		&i.FolderMapping,
+		&i.Capabilities,
+		&i.KeywordsSupported,
+		&i.KeywordPrefix,
+		&i.SentAppend,
+		&i.SyncState,
+		&i.SyncError,
+		&i.LastSyncAt,
+		&i.InitialSyncDoneAt,
+		&i.FiltersSince,
+		&i.Position,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
+const getAccountByLogin = `-- name: GetAccountByLogin :one
+SELECT id, user_id, email, display_name, provider, imap_host, imap_port, imap_tls, smtp_host, smtp_port, smtp_tls, username, auth_type, secret_enc, folder_mapping, capabilities, keywords_supported, keyword_prefix, sent_append, sync_state, sync_error, last_sync_at, initial_sync_done_at, filters_since, position, created_at FROM accounts
+WHERE user_id = $1 AND imap_host = $2 AND username = $3
+`
+
+type GetAccountByLoginParams struct {
+	UserID   int64
+	ImapHost string
+	Username string
+}
+
+func (q *Queries) GetAccountByLogin(ctx context.Context, arg GetAccountByLoginParams) (Account, error) {
+	row := q.db.QueryRow(ctx, getAccountByLogin, arg.UserID, arg.ImapHost, arg.Username)
 	var i Account
 	err := row.Scan(
 		&i.ID,
@@ -231,6 +295,105 @@ func (q *Queries) LockAccountSecret(ctx context.Context, id int64) ([]byte, erro
 	var secret_enc []byte
 	err := row.Scan(&secret_enc)
 	return secret_enc, err
+}
+
+const nextAccountPosition = `-- name: NextAccountPosition :one
+SELECT (COALESCE(MAX(position) + 1, 0))::int FROM accounts WHERE user_id = $1
+`
+
+func (q *Queries) NextAccountPosition(ctx context.Context, userID int64) (int32, error) {
+	row := q.db.QueryRow(ctx, nextAccountPosition, userID)
+	var column_1 int32
+	err := row.Scan(&column_1)
+	return column_1, err
+}
+
+const setAccountSyncState = `-- name: SetAccountSyncState :exec
+UPDATE accounts SET sync_state = $3, sync_error = $4
+WHERE id = $1 AND user_id = $2
+`
+
+type SetAccountSyncStateParams struct {
+	ID        int64
+	UserID    int64
+	SyncState string
+	SyncError pgtype.Text
+}
+
+func (q *Queries) SetAccountSyncState(ctx context.Context, arg SetAccountSyncStateParams) error {
+	_, err := q.db.Exec(ctx, setAccountSyncState,
+		arg.ID,
+		arg.UserID,
+		arg.SyncState,
+		arg.SyncError,
+	)
+	return err
+}
+
+const updateAccount = `-- name: UpdateAccount :one
+UPDATE accounts SET
+  display_name = COALESCE($1, display_name),
+  imap_port    = COALESCE($2, imap_port),
+  imap_tls     = COALESCE($3, imap_tls),
+  smtp_port    = COALESCE($4, smtp_port),
+  smtp_tls     = COALESCE($5, smtp_tls),
+  sent_append  = COALESCE($6, sent_append)
+WHERE id = $7 AND user_id = $8
+RETURNING id, user_id, email, display_name, provider, imap_host, imap_port, imap_tls, smtp_host, smtp_port, smtp_tls, username, auth_type, secret_enc, folder_mapping, capabilities, keywords_supported, keyword_prefix, sent_append, sync_state, sync_error, last_sync_at, initial_sync_done_at, filters_since, position, created_at
+`
+
+type UpdateAccountParams struct {
+	DisplayName pgtype.Text
+	ImapPort    pgtype.Int4
+	ImapTls     pgtype.Text
+	SmtpPort    pgtype.Int4
+	SmtpTls     pgtype.Text
+	SentAppend  pgtype.Bool
+	ID          int64
+	UserID      int64
+}
+
+func (q *Queries) UpdateAccount(ctx context.Context, arg UpdateAccountParams) (Account, error) {
+	row := q.db.QueryRow(ctx, updateAccount,
+		arg.DisplayName,
+		arg.ImapPort,
+		arg.ImapTls,
+		arg.SmtpPort,
+		arg.SmtpTls,
+		arg.SentAppend,
+		arg.ID,
+		arg.UserID,
+	)
+	var i Account
+	err := row.Scan(
+		&i.ID,
+		&i.UserID,
+		&i.Email,
+		&i.DisplayName,
+		&i.Provider,
+		&i.ImapHost,
+		&i.ImapPort,
+		&i.ImapTls,
+		&i.SmtpHost,
+		&i.SmtpPort,
+		&i.SmtpTls,
+		&i.Username,
+		&i.AuthType,
+		&i.SecretEnc,
+		&i.FolderMapping,
+		&i.Capabilities,
+		&i.KeywordsSupported,
+		&i.KeywordPrefix,
+		&i.SentAppend,
+		&i.SyncState,
+		&i.SyncError,
+		&i.LastSyncAt,
+		&i.InitialSyncDoneAt,
+		&i.FiltersSince,
+		&i.Position,
+		&i.CreatedAt,
+	)
+	return i, err
 }
 
 const updateAccountSecret = `-- name: UpdateAccountSecret :exec

@@ -33,3 +33,28 @@ SELECT secret_enc FROM accounts WHERE id = $1 FOR UPDATE;
 -- name: UpdateAccountSecret :exec
 -- tenancy: exempt key rotation touches every tenant
 UPDATE accounts SET secret_enc = $2 WHERE id = $1;
+
+-- name: GetAccountByLogin :one
+SELECT * FROM accounts
+WHERE user_id = $1 AND imap_host = $2 AND username = $3;
+
+-- name: SetAccountSyncState :exec
+UPDATE accounts SET sync_state = $3, sync_error = $4
+WHERE id = $1 AND user_id = $2;
+
+-- name: NextAccountPosition :one
+SELECT (COALESCE(MAX(position) + 1, 0))::int FROM accounts WHERE user_id = $1;
+
+-- name: UpdateAccount :one
+UPDATE accounts SET
+  display_name = COALESCE(sqlc.narg('display_name'), display_name),
+  imap_port    = COALESCE(sqlc.narg('imap_port'), imap_port),
+  imap_tls     = COALESCE(sqlc.narg('imap_tls'), imap_tls),
+  smtp_port    = COALESCE(sqlc.narg('smtp_port'), smtp_port),
+  smtp_tls     = COALESCE(sqlc.narg('smtp_tls'), smtp_tls),
+  sent_append  = COALESCE(sqlc.narg('sent_append'), sent_append)
+WHERE id = @id AND user_id = @user_id
+RETURNING *;
+
+-- name: DeleteAccount :execrows
+DELETE FROM accounts WHERE id = $1 AND user_id = $2;
