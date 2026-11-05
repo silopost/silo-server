@@ -303,6 +303,10 @@ accept `50MB` style values, rates `5MB/s`, durations `5m`. Worth knowing:
   `operation.failed` carries `kind` (`move`, `flags`, `labels`, `expunge`, `append`,
   `delete_draft`, `create_folder`, `delete_folder`) so the client can name the action.
   `filter.applied` ends `POST /filters/{id}/apply`; `settings.updated` follows `PATCH /settings`.
+  The session is checked with every `: ping`: once it is signed out (`DELETE /session`),
+  revoked (`DELETE /sessions/{id}`), expired or its user disabled, the stream sends
+  `event: session.expired` (`data: {}`) and closes; sign in again. At most 8 streams
+  per user are open at once, more answer `429 rate_limited` (use `/events/poll`).
 - Benchmark (nightly workflow): `SILO_BENCH_INBOX=true go test ./internal/mailview
   -run TestInboxListBenchmark -v` loads 100k threads / 300k messages and checks
   p95 < 50 ms and the `thread_labels_list` plan of the inbox query.
@@ -311,7 +315,8 @@ accept `50MB` style values, rates `5MB/s`, durations `5m`. Worth knowing:
 - Sessions: the `silo_session` cookie is `Secure` when `SILO_PUBLIC_URL` is `https://`
   (plain `http://` is for local development only). Mutating requests need the
   `X-Silo-CSRF` header and an `Origin` equal to `SILO_PUBLIC_URL` or the served host.
-  Sign-in rate limits and the constant answer time are built in (per IP and per login).
+  Sign-in is throttled per client IP (`SILO_RATE_LIMIT_AUTH`, see [Hardening](#hardening))
+  and per login (burst 8, one more every 15 s), and answers after a constant minimum time.
   Browser sessions last 30 days idle / 90 days at most.
 - Bearer sessions (native clients, ADR 0007 in `silo`): `POST /session` with
   `"client": {"kind": "bearer", "name": "Pixel 8"}` returns `token` in the body (shown
@@ -322,8 +327,112 @@ accept `50MB` style values, rates `5MB/s`, durations `5m`. Worth knowing:
   365 days at most, and are listed with `kind` and `clientName` in `GET /sessions`.
 - Custom mail servers (`SILO_ALLOW_CUSTOM_SERVERS=true`) must resolve to public
   addresses unless listed in `SILO_CUSTOM_SERVER_ALLOWLIST` (host names, IPs or CIDRs).
+  The check is repeated on the address actually dialled (IMAP, SMTP, connection test):
+  a host that resolves to an internal address later (DNS rebinding) is not contacted.
   In `SILO_AUTH_MODE=local` custom servers are always allowed (see below).
 - Logging: `SILO_LOG_FORMAT` (`json`/`text`), `SILO_LOG_LEVEL`; listen address: `SILO_HTTP_ADDR`.
+- Reverse proxy, rate limits, headers: `SILO_TRUSTED_PROXIES`, `SILO_RATE_LIMIT_API`,
+  `SILO_RATE_LIMIT_AUTH`, `SILO_HSTS`; see [Hardening](#hardening).
+
+## Hardening
+
+### Reverse proxy and client IP
+
+The client IP feeds the sign-in throttling, the rate limits and the logs.
+`X-Forwarded-For` and `X-Real-IP` are honoured only when the connection comes
+from a proxy listed in `SILO_TRUSTED_PROXIES` (comma-separated IPs or CIDRs,
+e.g. `172.18.0.0/16` for a Docker network, `127.0.0.1` for a proxy on the host).
+The client is then the right-most `X-Forwarded-For` address that is not a
+trusted proxy; an unparsable entry falls back to the proxy's address. With
+the default (empty), the headers are ignored: set the variable whenever
+Silo runs behind Caddy, nginx, Traefik or a load balancer, otherwise every
+request counts against the proxy's own IP.
+
+### Rate limits
+
+Token buckets per client IP, in memory (per process):
+
+| Variable | Default | Applies to |
+|---|---|---|
+| `SILO_RATE_LIMIT_API` | `600/m` | `/api/v1/*` except the endpoints below |
+| `SILO_RATE_LIMIT_AUTH` | `20/m` | `POST /session`, `POST /session/password`, `/totp/*` |
+
+The format is `N/s`, `N/m`, `N/h` or `N/<duration>` (`20/90s`): `N` requests at
+once, refilled evenly over the period; `off` disables a limit. `20/m` is the
+sign-in throttling of earlier releases (burst 20, one more every 3 s); the
+per-login limit of sign-in stays as it was. `/healthz` is not limited and
+`GET /events` (a long-lived stream) is limited to 8 open streams per user
+instead. Over the limit the answer is `429` `application/problem+json` with
+`code: "rate_limited"` and `Retry-After` in seconds.
+
+### Response headers
+
+Every response carries `X-Content-Type-Options: nosniff`, `X-Frame-Options:
+DENY`, `Referrer-Policy: no-referrer`, `Permissions-Policy: camera=(),
+microphone=(), geolocation=()`, `Cross-Origin-Resource-Policy: same-origin`,
+`Cache-Control: no-store` and `Content-Security-Policy: default-src 'none';
+frame-ancestors 'none'`. Exceptions: `GET /messages/{id}/html`,
+`/messages/{id}/raw` and `/attachments/{id}` stay `private, immutable`
+(their content never changes); the message HTML has its own policy
+`default-src 'none'; img-src data: https: http: cid:; style-src 'unsafe-inline';
+form-action 'none'; frame-ancestors 'self' <SILO_PUBLIC_URL origin>` (the web
+app shows it through `srcdoc` in a sandboxed iframe and blocks remote images
+itself) and attachments `default-src 'none'; sandbox`.
+`Strict-Transport-Security: max-age=31536000; includeSubDomains` is sent when
+`SILO_PUBLIC_URL` is `https://`; set `SILO_HSTS=false` when the proxy already
+sends it or other services on subdomains are not on HTTPS yet.
+
+### Security log and fail2ban
+
+Each failed sign-in or re-authentication, rejected TOTP code, CSRF/Origin
+rejection, other `403` and every `429` writes one `WARN` line with the message
+`security event` and the fields `event` (`auth_failed`, `totp_failed`,
+`csrf_rejected`, `forbidden`, `rate_limited`), `ip` (the client after
+`SILO_TRUSTED_PROXIES`), `path` and `login` (masked: `j***@example.com`;
+passwords and tokens are never logged), in this order:
+
+```
+time=2026-11-05T10:00:00.000Z level=WARN msg="security event" event=auth_failed ip=203.0.113.7 path=/api/v1/session login=j***@example.com
+{"time":"2026-11-05T10:00:00Z","level":"WARN","msg":"security event","event":"auth_failed","ip":"203.0.113.7","path":"/api/v1/session","login":"j***@example.com"}
+```
+
+A missing or expired session (`401 unauthenticated`) is not logged. A fail2ban
+filter (`/etc/fail2ban/filter.d/silo.conf`) for `SILO_LOG_FORMAT=text`:
+
+```ini
+[Definition]
+failregex = ^.*msg="security event" event=(?:auth_failed|totp_failed|csrf_rejected) ip=<ADDR>
+```
+
+and for `SILO_LOG_FORMAT=json` (the default):
+
+```ini
+[Definition]
+failregex = ^.*"msg":"security event","event":"(?:auth_failed|totp_failed|csrf_rejected)","ip":"<ADDR>"
+```
+
+Point the jail at the container log (e.g. `logpath =
+/var/lib/docker/containers/*/*-json.log` for the `json-file` driver, or
+`backend = systemd` with `journalmatch = CONTAINER_NAME=silo-server` for
+journald). Add `rate_limited` to the alternatives for a stricter jail; a
+client behind a shared NAT may hit the API limit legitimately.
+
+### Upgrades
+
+`scripts/upgrade-test.sh` checks the upgrade path end to end with Docker:
+the previous release (`PREVIOUS_TAG`, default the last `v*` tag on `main`) is
+built from `git archive`, migrated, started against Postgres 17 and Dovecot,
+seeded through the API (sign-in, three messages, a user label on a thread);
+then the image of the working tree migrates the same database (the schema
+version must grow), starts, signs the same user in, must list the same INBOX
+with the label, report its own version in `/meta` and pass `reconcile`.
+Containers, volume, network and images are named `silo-upg-*` and removed at
+the end (`KEEP=1` keeps them). It runs in CI as `.github/workflows/upgrade.yml`
+(also by hand with a `previous_tag` input).
+
+```sh
+PREVIOUS_TAG=v0.3.0 scripts/upgrade-test.sh
+```
 
 ## Labels and IMAP keywords
 
