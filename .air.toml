@@ -1,0 +1,9 @@
+root = "."
+tmp_dir = "tmp"
+
+[build]
+  cmd = "go build -o ./tmp/silo-server ./cmd/silo-server"
+  entrypoint = ["./tmp/silo-server", "serve"]
+  include_ext = ["go"]
+  exclude_dir = ["tmp", "bin", ".git"]
+  delay = 500
