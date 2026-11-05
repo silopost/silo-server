@@ -141,8 +141,10 @@ type Draft struct {
 }
 
 // LastSend is the outcome of a failed send of a draft (the outbound row; the
-// same data as the outbound.status event).
+// same data as the outbound.status event). The schema is nullable: Draft.lastSend
+// is null without a failed send.
 type LastSend struct {
+	_                struct{}  `nullable:"true"`
 	OutboundID       string    `json:"outboundId" example:"ob_9"`
 	Status           string    `json:"status" enum:"failed" doc:"Only failed for now; a cancelled send (undo send) is not reported."`
 	Error            string    `json:"error" doc:"Reply of the SMTP server or the connection error; interrupted: the server restarted during delivery (the message may have left; send it again only after checking Sent)."`

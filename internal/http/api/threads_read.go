@@ -36,11 +36,14 @@ type Address struct {
 	Name  string `json:"name"`
 }
 
-// MessageFolder is where a message is on the server.
+// MessageFolder is where a message is on the server. The schema is nullable:
+// Message.folder is null for a message that is only local (a draft not yet
+// in the Drafts folder).
 type MessageFolder struct {
-	ID   string `json:"id" example:"f_3"`
-	Name string `json:"name"`
-	Role string `json:"role"`
+	_    struct{} `nullable:"true"`
+	ID   string   `json:"id" example:"f_3"`
+	Name string   `json:"name"`
+	Role string   `json:"role"`
 }
 
 // MessageAttachment of a message.
@@ -60,7 +63,7 @@ type Message struct {
 	To              []Address           `json:"to"`
 	Cc              []Address           `json:"cc"`
 	Bcc             []Address           `json:"bcc"`
-	ReplyTo         *Address            `json:"replyTo"`
+	ReplyTo         *Address            `json:"replyTo,omitempty" doc:"Reply-To of the message; absent without one."`
 	Date            time.Time           `json:"date"`
 	Subject         string              `json:"subject"`
 	Snippet         string              `json:"snippet"`

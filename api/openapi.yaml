@@ -609,7 +609,9 @@ components:
         - error
         - failedRecipients
         - updatedAt
-      type: object
+      type:
+        - object
+        - "null"
     LoginClient:
       additionalProperties: false
       properties:
@@ -711,6 +713,7 @@ components:
           type: boolean
         replyTo:
           $ref: "#/components/schemas/Address"
+          description: Reply-To of the message; absent without one.
         snippet:
           type: string
         subject:
@@ -727,7 +730,6 @@ components:
         - to
         - cc
         - bcc
-        - replyTo
         - date
         - subject
         - snippet
@@ -783,7 +785,9 @@ components:
         - id
         - name
         - role
-      type: object
+      type:
+        - object
+        - "null"
     Meta:
       additionalProperties: false
       properties:
