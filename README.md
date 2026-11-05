@@ -61,6 +61,9 @@ accept `50MB` style values, rates `5MB/s`, durations `5m`. Worth knowing:
   `SILO_DEFAULT_IMAP_HOST`.
 - `*_TLS=none` is only accepted with `SILO_ALLOW_INSECURE_TRANSPORT=true`.
 - `SILO_BLOB_BACKEND=s3` is not supported yet; `fs` stores under `SILO_BLOB_FS_DIR`.
+- Background jobs: `serve` runs a Postgres-backed job queue; `SILO_WORKER_CONCURRENCY`
+  (default 4) sets the size of the general worker pool. Jobs are woken by
+  `LISTEN/NOTIFY` with a 5 s polling fallback.
 - Logging: `SILO_LOG_FORMAT` (`json`/`text`), `SILO_LOG_LEVEL`; listen address: `SILO_HTTP_ADDR`.
 
 ## Development

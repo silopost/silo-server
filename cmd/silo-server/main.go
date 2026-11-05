@@ -13,11 +13,13 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/silopost/silo-server/internal/blob"
 	"github.com/silopost/silo-server/internal/config"
 	siloHTTP "github.com/silopost/silo-server/internal/http"
 	"github.com/silopost/silo-server/internal/http/api"
 	"github.com/silopost/silo-server/internal/store"
 	"github.com/silopost/silo-server/internal/version"
+	"github.com/silopost/silo-server/internal/worker"
 )
 
 const shutdownTimeout = 15 * time.Second
@@ -89,10 +91,29 @@ func serve(ctx context.Context, args []string) error {
 		}
 	}
 
+	pool, err := store.Connect(ctx, cfg.DatabaseURL)
+	if err != nil {
+		return err
+	}
+	defer pool.Close()
+	blobs, err := blob.NewFSStore(cfg.BlobFSDir)
+	if err != nil {
+		return err
+	}
+
+	// Job handlers are registered by the features that enqueue them.
+	jobs := worker.New(worker.Options{Pool: pool, Logger: logger, Concurrency: cfg.WorkerConcurrency})
+	workerCtx, stopWorker := context.WithCancel(ctx)
+	workerDone := make(chan struct{})
+	go func() { defer close(workerDone); _ = jobs.Run(workerCtx) }()
+	defer func() { stopWorker(); <-workerDone }()
+
 	srv := &http.Server{
 		Addr: cfg.HTTPAddr,
 		Handler: siloHTTP.NewRouter(siloHTTP.Deps{
 			Logger: logger,
+			DB:     pool,
+			Blobs:  blobs,
 			API: api.Options{
 				ServerVersion:      version.Version,
 				AuthMode:           cfg.AuthMode,

@@ -9,14 +9,19 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
+	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/silopost/silo-server/internal/blob"
 	"github.com/silopost/silo-server/internal/http/api"
 )
 
 // Deps are the dependencies the router needs.
 type Deps struct {
 	Logger *slog.Logger
-	API    api.Options
+	// DB and Blobs are the shared stores; no handler uses them yet.
+	DB    *pgxpool.Pool
+	Blobs blob.BlobStore
+	API   api.Options
 }
 
 // NewRouter returns the root handler with the common middleware stack.
