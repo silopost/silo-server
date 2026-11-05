@@ -63,6 +63,12 @@ func serve(ctx context.Context, _ []string) error {
 	if err != nil {
 		return fmt.Errorf("config: %w", err)
 	}
+	if err := cfg.ValidateServe(); err != nil {
+		return fmt.Errorf("config: %w", err)
+	}
+	if err := cfg.ValidateServe(); err != nil {
+		return fmt.Errorf("config: %w", err)
+	}
 	logger, err := newLogger(cfg)
 	if err != nil {
 		return err
