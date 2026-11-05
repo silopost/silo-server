@@ -302,3 +302,32 @@ func TestEnqueueInTransactionRollsBack(t *testing.T) {
 		t.Fatalf("%d jobs survived rollback", n)
 	}
 }
+
+func TestDeferAndPermanent(t *testing.T) {
+	ctx := context.Background()
+	pool := newPool(t)
+	var mu sync.Mutex
+	runs := 0
+	w := New(Options{Pool: pool, PollInterval: 50 * time.Millisecond, Backoff: func(int) time.Duration { return 20 * time.Millisecond }})
+	w.Register("waiting", func(_ context.Context, j Job) error {
+		mu.Lock()
+		defer mu.Unlock()
+		runs++
+		if runs < 4 { // more deferrals than max_attempts: they are not attempts
+			return Defer(10*time.Millisecond, "resource offline")
+		}
+		return nil
+	})
+	w.Register("hopeless", func(context.Context, Job) error { return Permanent(errors.New("cannot ever work")) })
+	if _, err := pool.Exec(ctx, `INSERT INTO jobs (kind, max_attempts) VALUES ('waiting', 2), ('hopeless', 5)`); err != nil {
+		t.Fatal(err)
+	}
+	start(t, w)
+	waitFor(t, 15*time.Second, "jobs to settle", func() bool { return countJobs(t, pool, "status = 'pending'") == 0 })
+	if n := countJobs(t, pool, "kind = 'waiting'"); n != 0 {
+		t.Errorf("deferred job did not finish")
+	}
+	if n := countJobs(t, pool, "kind = 'hopeless' AND status = 'dead' AND attempts = 1"); n != 1 {
+		t.Errorf("permanent error not buried after one attempt")
+	}
+}

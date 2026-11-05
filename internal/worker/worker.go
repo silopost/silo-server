@@ -209,7 +209,13 @@ func (w *Worker) execute(ctx context.Context, job Job) {
 		if err := db.ReleaseJob(bg, job.ID); err != nil {
 			log.Error("release job", "err", err)
 		}
-	case job.Attempts >= job.MaxAttempts:
+	case isDeferred(err):
+		d, _ := asDefer(err)
+		log.Debug("job deferred", "reason", d.Reason, "until", d.Until)
+		if err := db.DeferJob(bg, sqlcgen.DeferJobParams{ID: job.ID, RunAt: pgTime(d.Until), LastError: pgText(d.Error())}); err != nil {
+			log.Error("defer job", "err", err)
+		}
+	case isPermanent(err) || job.Attempts >= job.MaxAttempts:
 		log.Error("job failed for good", "err", err)
 		w.bury(bg, db, job, err.Error())
 	default:
