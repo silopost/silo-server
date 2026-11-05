@@ -227,6 +227,7 @@ func serve(ctx context.Context, args []string) error {
 			},
 			TrustedProxies: proxies,
 			RateLimits:     siloHTTP.RateLimits{API: apiLimit, Auth: authLimit},
+			HSTS:           cfg.HSTS,
 		}),
 		ReadHeaderTimeout: 10 * time.Second,
 	}

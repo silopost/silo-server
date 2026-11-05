@@ -97,6 +97,13 @@ func TestSecurityLogAndHeaders(t *testing.T) {
 
 	l := he.login(he.h, imaptest.User, imaptest.Pass)
 
+	// JSON answers with user data (and their problems): not cacheable, not
+	// frameable. (Before the first sync INBOX is still unknown: 404.)
+	for _, path := range []string{"/session", "/threads?labelId=INBOX"} {
+		r = serve(he.h, req{method: "GET", path: path, cookie: l.cookie})
+		checkHeaders(t, path, r.Header())
+	}
+
 	// A cookie request without the CSRF token.
 	r = serve(he.h, req{method: "DELETE", path: "/session", cookie: l.cookie})
 	if r.Code != http.StatusForbidden || r.code() != "csrf_failed" {
@@ -156,4 +163,18 @@ func TestEventStreamLimit(t *testing.T) {
 		defer res.Body.Close()
 		return res.StatusCode == http.StatusOK
 	})
+}
+
+// checkHeaders asserts the security headers of a JSON (or problem) answer.
+func checkHeaders(t *testing.T, what string, h http.Header) {
+	t.Helper()
+	for k, want := range map[string]string{
+		"Cache-Control": "no-store", "Content-Security-Policy": "default-src 'none'; frame-ancestors 'none'",
+		"X-Frame-Options": "DENY", "X-Content-Type-Options": "nosniff", "Referrer-Policy": "no-referrer",
+		"Cross-Origin-Resource-Policy": "same-origin", "Permissions-Policy": "camera=(), microphone=(), geolocation=()",
+	} {
+		if got := h.Get(k); got != want {
+			t.Errorf("%s: %s = %q, want %q", what, k, got, want)
+		}
+	}
 }

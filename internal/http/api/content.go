@@ -15,6 +15,21 @@ import (
 // network requests). The web app also shows it in a sandboxed iframe.
 const htmlCSP = "default-src 'none'; img-src data: https: http: cid:; style-src 'unsafe-inline'"
 
+// messageCSP is htmlCSP plus what the document itself must never do: submit a
+// form (the sanitiser removes forms; this is the second line) or be framed by
+// another site. The web app fetches the HTML and shows it through srcdoc in a
+// sandboxed iframe, where this header does not apply; it protects the URL when
+// opened or framed directly. img-src stays wide (https: http:) on purpose:
+// remote images are blocked or allowed by the client per message,
+// and cid: images are rewritten to /attachments URLs on this origin.
+func (d *deps) messageCSP() string {
+	ancestors := "'self'"
+	if d.publicOrigin != "" {
+		ancestors += " " + d.publicOrigin
+	}
+	return htmlCSP + "; form-action 'none'; frame-ancestors " + ancestors
+}
+
 // attachmentCSP locks down attachment bytes served from the API origin.
 const attachmentCSP = "default-src 'none'; sandbox"
 
@@ -64,7 +79,8 @@ func (d *deps) registerContent(a huma.API) {
 		}
 		return &huma.StreamResponse{Body: func(c huma.Context) {
 			c.SetHeader("Content-Type", "text/html; charset=utf-8")
-			c.SetHeader("Content-Security-Policy", htmlCSP)
+			c.SetHeader("Content-Security-Policy", d.messageCSP())
+			c.SetHeader("X-Frame-Options", "SAMEORIGIN")
 			c.SetHeader("Cache-Control", "private, max-age=31536000, immutable")
 			c.SetHeader("ETag", h.ETag)
 			c.SetHeader("X-Content-Type-Options", "nosniff")

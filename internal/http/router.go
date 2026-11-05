@@ -27,6 +27,8 @@ type Deps struct {
 	TrustedProxies []netip.Prefix
 	// RateLimits are the per-IP limits of /api/v1 (zero: unlimited).
 	RateLimits RateLimits
+	// HSTS is SILO_HSTS; the PublicURL of API decides whether it applies.
+	HSTS bool
 }
 
 // NewRouter returns the root handler with the common middleware stack.
@@ -38,6 +40,7 @@ func NewRouter(d Deps) http.Handler {
 	r := chi.NewRouter()
 	r.Use(middleware.RequestID)
 	r.Use(RealIP(d.TrustedProxies))
+	r.Use(SecurityHeaders(HeaderOptions{PublicURL: d.API.PublicURL, HSTS: d.HSTS}))
 	r.Use(requestLogger(logger))
 	r.Use(middleware.Recoverer)
 	r.Use(rateLimit(d.RateLimits, logger))

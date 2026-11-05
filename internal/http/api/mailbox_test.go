@@ -27,6 +27,7 @@ import (
 	"github.com/silopost/silo-server/internal/drafts"
 	"github.com/silopost/silo-server/internal/events"
 	"github.com/silopost/silo-server/internal/filters"
+	siloHTTP "github.com/silopost/silo-server/internal/http"
 	"github.com/silopost/silo-server/internal/http/api"
 	"github.com/silopost/silo-server/internal/imapx"
 	"github.com/silopost/silo-server/internal/mailview"
@@ -567,12 +568,19 @@ func TestMailboxAPI(t *testing.T) {
 			}
 		}
 		h := r.Header()
-		if csp := h.Get("Content-Security-Policy"); csp != "default-src 'none'; img-src data: https: http: cid:; style-src 'unsafe-inline'" {
+		if csp := h.Get("Content-Security-Policy"); csp != "default-src 'none'; img-src data: https: http: cid:; style-src 'unsafe-inline'; form-action 'none'; frame-ancestors 'self' "+publicURL {
 			t.Errorf("CSP %q", csp)
 		}
 		if cc := h.Get("Cache-Control"); !strings.Contains(cc, "immutable") || h.Get("ETag") == "" ||
 			!strings.HasPrefix(h.Get("Content-Type"), "text/html") || h.Get("X-Content-Type-Options") != "nosniff" {
 			t.Errorf("headers: %v", h)
+		}
+		// Behind the router's SecurityHeaders the handler's caching and CSP win.
+		sh := siloHTTP.SecurityHeaders(siloHTTP.HeaderOptions{PublicURL: publicURL})(s.h)
+		if hh := get(sh, "/messages/"+evilMsg.ID+"/html").Header(); hh.Get("X-Frame-Options") != "SAMEORIGIN" ||
+			hh.Get("Content-Security-Policy") != h.Get("Content-Security-Policy") || !strings.Contains(hh.Get("Cache-Control"), "immutable") ||
+			hh.Get("Referrer-Policy") != "no-referrer" || hh.Get("Cross-Origin-Resource-Policy") != "same-origin" {
+			t.Errorf("html behind SecurityHeaders: %v", hh)
 		}
 		// The cid image resolves to a servable attachment.
 		i := strings.Index(out, "/api/v1/attachments/")
