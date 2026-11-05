@@ -6,7 +6,7 @@ these files into the container before it starts:
 | File | Container path | Purpose |
 |---|---|---|
 | `dovecot.conf` | `/etc/dovecot/dovecot.conf` | replaces the image config: IMAP only, no TLS, cleartext auth, maildir under `/tmp/home/%{user}` (lost with the container), special-use folders |
-| `users` | `/etc/dovecot/users` | passwd-file with the test account `silo` / `silopass` |
+| `users` | `/etc/dovecot/users` | passwd-file with the test accounts `silo` / `silopass` and `silo2` / `silopass2` (a second mailbox: two Silo users, or a second account of one user) |
 | `profile-<name>.conf` | `/etc/dovecot/profile.conf` | per-profile capability overrides, included last |
 
 Notes for Dovecot 2.4 (new settings syntax, `dovecot_config_version`):

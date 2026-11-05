@@ -25,6 +25,7 @@ const (
 	CodeDraftVersionConflict = "draft_version_conflict"
 	CodeUploadTooLarge       = "upload_too_large"
 	CodeInlineNotImage       = "inline_not_image"
+	CodeDraftAccountLocked   = "draft_account_locked"
 )
 
 // ---- uploads -----------------------------------------------------------------
@@ -238,6 +239,8 @@ func draftsError(err error) error {
 		return nil
 	case errors.Is(err, drafts.ErrNotFound):
 		return errNotFound()
+	case errors.Is(err, drafts.ErrAccountLocked):
+		return problem(http.StatusConflict, CodeDraftAccountLocked, "The account of a reply or forward cannot be changed; start a new message from the other account.")
 	case errors.Is(err, drafts.ErrConflict):
 		return problem(http.StatusConflict, CodeDraftVersionConflict, "The draft was saved meanwhile (another window or device); reload it.")
 	case errors.Is(err, drafts.ErrInvalid):
@@ -282,6 +285,7 @@ type UpdateDraftBody struct {
 	BodyHTML      string          `json:"bodyHtml" maxLength:"5000000"`
 	BodyJSON      json.RawMessage `json:"bodyJson,omitempty" doc:"Editor document (TipTap JSON), stored as given."`
 	AttachmentIDs []string        `json:"attachmentIds,omitempty" maxItems:"100" doc:"u_ ids of uploads to attach, inline pictures included (and the attachments a forward carries); uploads left out are detached."`
+	AccountID     string          `json:"accountId,omitempty" doc:"acc_ id: send the draft from another account of the user (the From choice). Only for a new message: a reply or forward is 409 draft_account_locked; another user's or an unknown account is 404. The draft then gets new ids (id, messageId, threadId: a new thread of that account; the old ones are gone, thread.deleted) and its copy in the old account's Drafts folder is removed; use the ids of the response from now on. draft.updated carries previousDraftId."`
 	SyncNow       bool            `json:"syncNow,omitempty" doc:"Save the copy in the server's Drafts folder right away instead of 30 s after the last change: the last save when the compose window closes (plan 3.8 step 2)."`
 }
 
@@ -399,7 +403,8 @@ func (d *deps) registerDrafts(a huma.API) {
 			"draft_version_conflict (another window saved meanwhile). The draft and its thread are updated at once " +
 			"(thread.updated, draft.updated); the copy in the server's Drafts folder follows at least 30 s after the " +
 			"last save (right away with syncNow, when the compose window closes), always as exactly one message. " +
-			"The 409 carries currentVersion and current (the draft as saved meanwhile). An invalid address is 400 " +
+			"The 409 carries currentVersion and current (the draft as saved meanwhile). With accountId of another account the " +
+			"draft moves there and the response has new ids (see accountId). An invalid address is 400 " +
 			"validation_failed with address and field.",
 		Errors: append(errs[:len(errs):len(errs)], http.StatusConflict),
 	}), func(ctx context.Context, in *updateDraftInput) (*draftOutput, error) {
@@ -411,12 +416,18 @@ func (d *deps) registerDrafts(a huma.API) {
 		if err != nil {
 			return nil, err
 		}
+		var accountID int64
+		if in.Body.AccountID != "" {
+			if accountID, ok = parseID("acc_", in.Body.AccountID); !ok {
+				return nil, errNotFound()
+			}
+		}
 		userID := sessionFrom(ctx).UserID
 		x, err := d.drafts.Update(ctx, drafts.UpdateParams{
 			UserID: userID, ID: id, Version: in.Body.Version,
 			To: addrsIn(in.Body.To), Cc: addrsIn(in.Body.Cc), Bcc: addrsIn(in.Body.Bcc), Subject: in.Body.Subject,
 			BodyHTML: in.Body.BodyHTML, BodyJSON: in.Body.BodyJSON, AttachmentIDs: atts, Origin: in.Client,
-			SyncNow: in.Body.SyncNow,
+			SyncNow: in.Body.SyncNow, AccountID: accountID,
 		})
 		if errors.Is(err, drafts.ErrConflict) {
 			p := draftsError(err).(*Problem)

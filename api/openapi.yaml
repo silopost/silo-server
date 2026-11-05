@@ -1907,6 +1907,9 @@ components:
     UpdateDraftBody:
       additionalProperties: false
       properties:
+        accountId:
+          description: "acc_ id: send the draft from another account of the user (the From choice). Only for a new message: a reply or forward is 409 draft_account_locked; another user's or an unknown account is 404. The draft then gets new ids (id, messageId, threadId: a new thread of that account; the old ones are gone, thread.deleted) and its copy in the old account's Drafts folder is removed; use the ids of the response from now on. draft.updated carries previousDraftId."
+          type: string
         attachmentIds:
           description: u_ ids of uploads to attach, inline pictures included (and the attachments a forward carries); uploads left out are detached.
           items:
@@ -2911,7 +2914,7 @@ paths:
       tags:
         - drafts
     put:
-      description: Replaces the editable fields. version must be the version the client edited, else 409 draft_version_conflict (another window saved meanwhile). The draft and its thread are updated at once (thread.updated, draft.updated); the copy in the server's Drafts folder follows at least 30 s after the last save (right away with syncNow, when the compose window closes), always as exactly one message. The 409 carries currentVersion and current (the draft as saved meanwhile). An invalid address is 400 validation_failed with address and field.
+      description: Replaces the editable fields. version must be the version the client edited, else 409 draft_version_conflict (another window saved meanwhile). The draft and its thread are updated at once (thread.updated, draft.updated); the copy in the server's Drafts folder follows at least 30 s after the last save (right away with syncNow, when the compose window closes), always as exactly one message. The 409 carries currentVersion and current (the draft as saved meanwhile). With accountId of another account the draft moves there and the response has new ids (see accountId). An invalid address is 400 validation_failed with address and field.
       operationId: updateDraft
       parameters:
         - in: path

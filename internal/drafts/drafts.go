@@ -639,6 +639,9 @@ type UpdateParams struct {
 	// SyncNow saves the copy in the Drafts folder right away instead of
 	// SyncDelay later (the compose window is closing; plan 3.8 step 2).
 	SyncNow bool
+	// AccountID moves a new-message draft to another account of the user
+	// (the "From" choice; see moveDraft); 0 keeps the account.
+	AccountID int64
 }
 
 func cleanAddrs(field string, l []mail.Address) ([]mail.Address, error) {
@@ -687,6 +690,9 @@ func (s *Service) Update(ctx context.Context, p UpdateParams) (*Draft, error) {
 	}
 	if err != nil {
 		return nil, err
+	}
+	if p.AccountID != 0 && p.AccountID != accountID {
+		return s.moveDraft(ctx, p, accountID)
 	}
 	err = s.inTx(ctx, func(tx pgx.Tx) error {
 		if err := mail.LockAccount(ctx, tx, accountID); err != nil {

@@ -19,10 +19,17 @@ import (
 // Image is the pinned Dovecot image used by all profiles.
 const Image = "dovecot/dovecot:2.4.5"
 
-// Credentials of the single test account every profile provides.
+// Credentials of the test account every profile provides.
 const (
 	User = "silo"
 	Pass = "silopass"
+)
+
+// Credentials of a second mailbox on the same server (another Silo user, or
+// a second account of one user).
+const (
+	User2 = "silo2"
+	Pass2 = "silopass2"
 )
 
 // Profile selects which IMAP extensions the server advertises.
