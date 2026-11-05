@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/danielgtaylor/huma/v2"
+	"github.com/danielgtaylor/huma/v2/adapters/humachi"
 
 	"github.com/silopost/silo-server/internal/drafts"
 	"github.com/silopost/silo-server/internal/mail"
@@ -42,12 +43,16 @@ func uploadOf(u drafts.Upload) UploadInfo {
 // handler, never buffered by huma.
 type uploadInput struct {
 	contentType string
+	length      int64 // Content-Length, -1 when not sent
 	body        io.Reader
 }
 
 // Resolve captures the request body and its content type.
 func (i *uploadInput) Resolve(ctx huma.Context) []error {
 	i.contentType, i.body = ctx.Header("Content-Type"), ctx.BodyReader()
+	// net/http moves Content-Length out of the header map.
+	r, _ := humachi.Unwrap(ctx)
+	i.length = r.ContentLength
 	return nil
 }
 
@@ -57,7 +62,7 @@ type uploadOutput struct {
 }
 
 // uploadFile streams the first file part of a multipart/form-data body.
-func (d *deps) uploadFile(ctx context.Context, userID int64, ct string, body io.Reader) (*drafts.Upload, error) {
+func (d *deps) uploadFile(ctx context.Context, userID int64, ct string, length int64, body io.Reader) (*drafts.Upload, error) {
 	mt, params, err := mime.ParseMediaType(ct)
 	if err != nil || mt != "multipart/form-data" || params["boundary"] == "" {
 		return nil, problem(http.StatusBadRequest, CodeValidation, "Expected a multipart/form-data body with one file.")
@@ -70,7 +75,7 @@ func (d *deps) uploadFile(ctx context.Context, userID int64, ct string, body io.
 		var mbe *http.MaxBytesError
 		switch {
 		case errors.As(err, &mbe):
-			return nil, errUploadTooLarge(d.drafts.MaxUploadBytes())
+			return nil, errUploadTooLarge(d.drafts.MaxUploadBytes(), length)
 		case errors.Is(err, io.EOF):
 			return nil, problem(http.StatusBadRequest, CodeValidation, "The form has no file part.")
 		case err != nil:
@@ -83,7 +88,7 @@ func (d *deps) uploadFile(ctx context.Context, userID int64, ct string, body io.
 		u, err := d.drafts.Upload(ctx, userID, part.FileName(), part.Header.Get("Content-Type"), part)
 		_ = part.Close()
 		if errors.Is(err, drafts.ErrTooLarge) || errors.As(err, &mbe) {
-			return nil, errUploadTooLarge(d.drafts.MaxUploadBytes())
+			return nil, errUploadTooLarge(d.drafts.MaxUploadBytes(), length)
 		}
 		if err != nil {
 			return nil, errInternal(err)
@@ -92,9 +97,14 @@ func (d *deps) uploadFile(ctx context.Context, userID int64, ct string, body io.
 	}
 }
 
-func errUploadTooLarge(limit int64) error {
-	return problem(http.StatusRequestEntityTooLarge, CodeUploadTooLarge,
+func errUploadTooLarge(limit, size int64) error {
+	p := problem(http.StatusRequestEntityTooLarge, CodeUploadTooLarge,
 		"The file is larger than the attachment limit of "+formatBytes(limit)+".")
+	p.Limit = &limit
+	if size >= 0 {
+		p.Size = &size
+	}
+	return p
 }
 
 func formatBytes(n int64) string {
@@ -127,6 +137,17 @@ type Draft struct {
 	UpdatedAt          time.Time       `json:"updatedAt"`
 	SyncedVersion      int32           `json:"syncedVersion" doc:"Version saved in the Drafts folder of the mail server (0: not yet). Saves reach the server at least 30 s after the last change."`
 	ServerChanged      bool            `json:"serverChanged" doc:"The copy in the server's Drafts folder was changed or removed by another program since Silo saved it."`
+	LastSend           *LastSend       `json:"lastSend" doc:"The last send of this draft when it failed (it is a draft again); null otherwise. Kept until the next send, so a failure is still visible after a reload."`
+}
+
+// LastSend is the outcome of a failed send of a draft (the outbound row; the
+// same data as the outbound.status event).
+type LastSend struct {
+	OutboundID       string    `json:"outboundId" example:"ob_9"`
+	Status           string    `json:"status" enum:"failed" doc:"Only failed for now; a cancelled send (undo send) is not reported."`
+	Error            string    `json:"error" doc:"Reply of the SMTP server or the connection error; interrupted: the server restarted during delivery (the message may have left; send it again only after checking Sent)."`
+	FailedRecipients []string  `json:"failedRecipients" doc:"Recipients refused by the SMTP server."`
+	UpdatedAt        time.Time `json:"updatedAt"`
 }
 
 func addrsOut(l []mail.Address) []Address {
@@ -168,6 +189,13 @@ func draftOf(x *drafts.Draft) Draft {
 	for _, u := range x.Attachments {
 		out.Attachments = append(out.Attachments, uploadOf(u))
 	}
+	if ls := x.LastSend; ls != nil {
+		out.LastSend = &LastSend{OutboundID: formatID("ob_", ls.OutboundID), Status: ls.Status, Error: ls.Error,
+			FailedRecipients: ls.FailedRecipients, UpdatedAt: ls.UpdatedAt}
+		if out.LastSend.FailedRecipients == nil {
+			out.LastSend.FailedRecipients = []string{}
+		}
+	}
 	return out
 }
 
@@ -180,9 +208,23 @@ func draftsError(err error) error {
 	case errors.Is(err, drafts.ErrConflict):
 		return problem(http.StatusConflict, CodeDraftVersionConflict, "The draft was saved meanwhile (another window or device); reload it.")
 	case errors.Is(err, drafts.ErrInvalid):
-		return problem(http.StatusBadRequest, CodeValidation, strings.TrimPrefix(err.Error(), "drafts: invalid request: "))
+		p := problem(http.StatusBadRequest, CodeValidation, strings.TrimPrefix(err.Error(), "drafts: invalid request: "))
+		if withAddress(p, err) {
+			p.Detail = "Invalid recipient address."
+		}
+		return p
 	}
 	return viewError(err)
+}
+
+// withAddress sets address and field of a problem from a drafts.AddressError.
+func withAddress(p *Problem, err error) bool {
+	var ae *drafts.AddressError
+	if !errors.As(err, &ae) {
+		return false
+	}
+	p.Address, p.Field = &ae.Address, &ae.Field
+	return true
 }
 
 // CreateDraftBody is the body of POST /drafts.
@@ -207,6 +249,7 @@ type UpdateDraftBody struct {
 	BodyHTML      string          `json:"bodyHtml" maxLength:"5000000"`
 	BodyJSON      json.RawMessage `json:"bodyJson,omitempty" doc:"Editor document (TipTap JSON), stored as given."`
 	AttachmentIDs []string        `json:"attachmentIds,omitempty" maxItems:"100" doc:"u_ ids of uploads to attach; uploads left out are detached."`
+	SyncNow       bool            `json:"syncNow,omitempty" doc:"Save the copy in the server's Drafts folder right away instead of 30 s after the last change: the last save when the compose window closes (plan 3.8 step 2)."`
 }
 
 type draftIDInput struct {
@@ -238,7 +281,7 @@ func (d *deps) registerDrafts(a huma.API) {
 		Errors:        append(errs[:len(errs):len(errs)], http.StatusRequestEntityTooLarge),
 	})
 	huma.Register(a, op, func(ctx context.Context, in *uploadInput) (*uploadOutput, error) {
-		u, err := d.uploadFile(ctx, sessionFrom(ctx).UserID, in.contentType, in.body)
+		u, err := d.uploadFile(ctx, sessionFrom(ctx).UserID, in.contentType, in.length, in.body)
 		if err != nil {
 			return nil, err
 		}
@@ -309,7 +352,9 @@ func (d *deps) registerDrafts(a huma.API) {
 		Description: "Replaces the editable fields. version must be the version the client edited, else 409 " +
 			"draft_version_conflict (another window saved meanwhile). The draft and its thread are updated at once " +
 			"(thread.updated, draft.updated); the copy in the server's Drafts folder follows at least 30 s after the " +
-			"last save, always as exactly one message.",
+			"last save (right away with syncNow, when the compose window closes), always as exactly one message. " +
+			"The 409 carries currentVersion and current (the draft as saved meanwhile). An invalid address is 400 " +
+			"validation_failed with address and field.",
 		Errors: append(errs[:len(errs):len(errs)], http.StatusConflict),
 	}), func(ctx context.Context, in *updateDraftInput) (*draftOutput, error) {
 		id, ok := parseID("d_", in.ID)
@@ -320,11 +365,21 @@ func (d *deps) registerDrafts(a huma.API) {
 		if err != nil {
 			return nil, err
 		}
+		userID := sessionFrom(ctx).UserID
 		x, err := d.drafts.Update(ctx, drafts.UpdateParams{
-			UserID: sessionFrom(ctx).UserID, ID: id, Version: in.Body.Version,
+			UserID: userID, ID: id, Version: in.Body.Version,
 			To: addrsIn(in.Body.To), Cc: addrsIn(in.Body.Cc), Bcc: addrsIn(in.Body.Bcc), Subject: in.Body.Subject,
 			BodyHTML: in.Body.BodyHTML, BodyJSON: in.Body.BodyJSON, AttachmentIDs: atts, Origin: in.Client,
+			SyncNow: in.Body.SyncNow,
 		})
+		if errors.Is(err, drafts.ErrConflict) {
+			p := draftsError(err).(*Problem)
+			if cur, e := d.drafts.Get(ctx, userID, id); e == nil {
+				c := draftOf(cur)
+				p.Current, p.CurrentVersion = &c, &c.Version
+			}
+			return nil, p
+		}
 		if err != nil {
 			return nil, draftsError(err)
 		}

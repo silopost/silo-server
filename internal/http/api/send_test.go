@@ -124,6 +124,16 @@ func TestSendAndUndo(t *testing.T) {
 	bad := s.draft(0, "", recipients([]string{"jan@@firma.pl"}, nil, nil))
 	if r, _ := s.send(bad.ID, nil); r.Code != http.StatusUnprocessableEntity || r.code() != api.CodeInvalidAddress {
 		t.Errorf("invalid address: %d %s", r.Code, r.Body)
+	} else {
+		var p api.Problem
+		r.json(&p)
+		if p.Address == nil || *p.Address != "jan@@firma.pl" || p.Field == nil || *p.Field != "to" {
+			t.Errorf("invalid address fields: %s", r.Body)
+		}
+	}
+	badBcc := s.draft(0, "", recipients([]string{"jan@firma.pl"}, nil, []string{"x@y@z"}))
+	if r, _ := s.send(badBcc.ID, nil); !strings.Contains(r.Body.String(), `"field":"bcc"`) || !strings.Contains(r.Body.String(), `"address":"x@y@z"`) {
+		t.Errorf("invalid bcc address: %d %s", r.Code, r.Body)
 	}
 	var up api.UploadInfo
 	upload(s.web, s.l, "big.bin", bytes.Repeat([]byte{3}, testMaxUpload)).json(&up)
@@ -132,6 +142,12 @@ func TestSendAndUndo(t *testing.T) {
 	big := s.draft(0, "", bigBody)
 	if r, _ := s.send(big.ID, nil); r.Code != http.StatusRequestEntityTooLarge || r.code() != api.CodeMessageTooLarge {
 		t.Errorf("too large: %d %s", r.Code, r.Body)
+	} else {
+		var p api.Problem
+		r.json(&p)
+		if p.Limit == nil || *p.Limit != testMaxUpload || p.Size == nil || *p.Size <= testMaxUpload {
+			t.Errorf("too large: limit/size: %s", r.Body)
+		}
 	}
 	if n := s.count(`SELECT count(*) FROM outbound`); n != 0 {
 		t.Errorf("outbound rows after refused sends: %d", n)
@@ -321,8 +337,12 @@ func TestSendFailures(t *testing.T) {
 	if l := s.labels(msgID); !slices.Equal(l, []string{"DRAFT"}) {
 		t.Errorf("5xx: labels = %v", l)
 	}
+	var back api.Draft
 	if r := serve(s.web, s.as(req{method: "GET", path: "/drafts/" + id36("d_", msgID)})); r.Code != http.StatusOK {
 		t.Errorf("5xx: draft not back: %d", r.Code)
+	} else if r.json(&back); back.LastSend == nil || back.LastSend.Status != "failed" || back.LastSend.OutboundID != id36("ob_", obID) ||
+		!strings.Contains(back.LastSend.Error, "554") || back.LastSend.FailedRecipients == nil {
+		t.Errorf("5xx: lastSend = %+v", back.LastSend)
 	}
 	if n := s.count(`SELECT count(*) FROM events WHERE type = 'outbound.status' AND payload->>'status' = 'failed' AND payload->>'error' LIKE '%554%'`); n != 1 {
 		t.Error("5xx: no outbound.status failed event")

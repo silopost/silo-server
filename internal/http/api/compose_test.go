@@ -57,6 +57,12 @@ func TestDraftsAndUploads(t *testing.T) {
 	r = upload(m.web, m.l, "big.bin", bytes.Repeat([]byte{1}, testMaxUpload+1))
 	if r.Code != http.StatusRequestEntityTooLarge || r.code() != api.CodeUploadTooLarge {
 		t.Errorf("too large: %d %s", r.Code, r.Body)
+	} else {
+		var p api.Problem
+		r.json(&p)
+		if p.Limit == nil || *p.Limit != testMaxUpload || p.Size == nil || *p.Size <= testMaxUpload {
+			t.Errorf("too large: limit/size: %s", r.Body)
+		}
 	}
 	if n := m.count(`SELECT count(*) FROM attachments`); n != before {
 		t.Error("a too large upload left a row")
@@ -95,6 +101,17 @@ func TestDraftsAndUploads(t *testing.T) {
 	if !hasLabel("message_labels", "message_id", draftMsg, "DRAFT") || !hasLabel("thread_labels", "thread_id", origThread, "DRAFT") ||
 		!hasLabel("thread_labels", "thread_id", origThread, "INBOX") {
 		t.Error("draft not labelled DRAFT in the thread of the original")
+	}
+	// The draft is found in the thread and in the list without mapping ids.
+	var td api.ThreadDetail
+	serve(m.web, m.as(req{method: "GET", path: "/threads/" + id36("t_", origThread)})).json(&td)
+	if len(td.Messages) != 2 || td.Messages[0].DraftID != nil || td.Messages[1].DraftID == nil || *td.Messages[1].DraftID != dr.ID {
+		t.Errorf("thread messages draftId: %+v", td.Messages)
+	}
+	var list api.ThreadList
+	serve(m.web, m.as(req{method: "GET", path: "/threads?labelId=DRAFT"})).json(&list)
+	if len(list.Threads) != 1 || list.Threads[0].DraftID == nil || *list.Threads[0].DraftID != dr.ID {
+		t.Errorf("thread list draftId: %+v", list.Threads)
 	}
 	if n := m.count(`SELECT count(*) FROM messages WHERE id = $1 AND in_reply_to_hdr = 'orig@firma.pl' AND NOT is_unread AND body_state = 'local'`, draftMsg); n != 1 {
 		t.Error("draft message not a read local reply")
@@ -150,6 +167,13 @@ func TestDraftsAndUploads(t *testing.T) {
 	r = put(m.as, dr.ID, body)
 	if r.Code != http.StatusConflict || r.code() != api.CodeDraftVersionConflict {
 		t.Errorf("stale version: %d %s", r.Code, r.Body)
+	} else {
+		var p api.Problem
+		r.json(&p)
+		if p.CurrentVersion == nil || *p.CurrentVersion != 2 || p.Current == nil || p.Current.ID != dr.ID || p.Current.Version != 2 ||
+			p.Current.Subject != "Re: Oferta (v2)" || len(p.Current.Attachments) != 1 {
+			t.Errorf("conflict without the current draft: %s", r.Body)
+		}
 	}
 	body["version"], body["subject"], body["attachmentIds"] = 2, "Re: Oferta (v3)", []string{}
 	r = put(m.as, dr.ID, body)
@@ -174,10 +198,13 @@ func TestDraftsAndUploads(t *testing.T) {
 		}
 	}
 	body["version"], body["attachmentIds"] = 4, []string{up.ID}
-	body["to"] = []map[string]string{{"email": "not-an-address"}}
-	if r := put(m.as, dr.ID, body); r.Code != http.StatusBadRequest {
+	body["to"] = []map[string]string{{"email": "jan@firma.pl"}}
+	body["cc"] = []map[string]string{{"email": "not-an-address"}}
+	if r := put(m.as, dr.ID, body); r.Code != http.StatusBadRequest || r.code() != api.CodeValidation ||
+		!strings.Contains(r.Body.String(), `"address":"not-an-address"`) || !strings.Contains(r.Body.String(), `"field":"cc"`) {
 		t.Errorf("bad address: %d %s", r.Code, r.Body)
 	}
+	delete(body, "cc")
 
 	var got api.Draft
 	r = serve(m.web, m.as(req{method: "GET", path: "/drafts/" + dr.ID}))

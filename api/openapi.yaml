@@ -31,6 +31,10 @@ components:
           type:
             - string
             - "null"
+        position:
+          description: Order of the account among the user's accounts (0 first); account lists are sorted by it. silo-web maps /u/<n> to the n-th account.
+          format: int64
+          type: integer
         provider:
           enum:
             - generic
@@ -68,6 +72,7 @@ components:
         - id
         - email
         - displayName
+        - position
         - provider
         - username
         - imapHost
@@ -307,6 +312,9 @@ components:
           type:
             - string
             - "null"
+        lastSend:
+          $ref: "#/components/schemas/LastSend"
+          description: The last send of this draft when it failed (it is a draft again); null otherwise. Kept until the next send, so a failure is still visible after a reload.
         messageId:
           examples:
             - m_4k2
@@ -354,6 +362,7 @@ components:
         - updatedAt
         - syncedVersion
         - serverChanged
+        - lastSend
       type: object
     ErrorDetail:
       additionalProperties: false
@@ -569,6 +578,38 @@ components:
       required:
         - labels
       type: object
+    LastSend:
+      additionalProperties: false
+      properties:
+        error:
+          description: "Reply of the SMTP server or the connection error; interrupted: the server restarted during delivery (the message may have left; send it again only after checking Sent)."
+          type: string
+        failedRecipients:
+          description: Recipients refused by the SMTP server.
+          items:
+            type: string
+          type:
+            - array
+            - "null"
+        outboundId:
+          examples:
+            - ob_9
+          type: string
+        status:
+          description: Only failed for now; a cancelled send (undo send) is not reported.
+          enum:
+            - failed
+          type: string
+        updatedAt:
+          format: date-time
+          type: string
+      required:
+        - outboundId
+        - status
+        - error
+        - failedRecipients
+        - updatedAt
+      type: object
     LoginClient:
       additionalProperties: false
       properties:
@@ -638,6 +679,13 @@ components:
         date:
           format: date-time
           type: string
+        draftId:
+          description: d_ id for GET/PUT /drafts/{id} when the message is a draft (DRAFT label; also one written in another program); null otherwise.
+          examples:
+            - d_1x9
+          type:
+            - string
+            - "null"
         folder:
           $ref: "#/components/schemas/MessageFolder"
         from:
@@ -691,6 +739,7 @@ components:
         - attachments
         - listUnsubscribe
         - pendingSync
+        - draftId
       type: object
     MessageAttachment:
       additionalProperties: false
@@ -752,6 +801,12 @@ components:
             - imap
             - local
           type: string
+        maxAttachmentBytes:
+          description: Limit in bytes of one upload and of a sent message with its attachments (SILO_MAX_ATTACHMENT_BYTES); larger ones are 413 upload_too_large / message_too_large.
+          examples:
+            - 26214400
+          format: int64
+          type: integer
         minWebVersion:
           description: Oldest silo-web release this server supports.
           examples:
@@ -768,6 +823,7 @@ components:
         - minWebVersion
         - authMode
         - allowCustomServers
+        - maxAttachmentBytes
       type: object
     ModifyBody:
       additionalProperties: false
@@ -909,9 +965,19 @@ components:
     Problem:
       additionalProperties: false
       properties:
+        address:
+          description: "invalid_address (and validation_failed of a draft save): the refused address as given."
+          type: string
         code:
           description: Stable machine-readable error code.
           type: string
+        current:
+          $ref: "#/components/schemas/Draft"
+          description: "draft_version_conflict: the draft as saved meanwhile (as GET /drafts/{id}), so that the client needs no extra request."
+        currentVersion:
+          description: "draft_version_conflict: the version saved meanwhile."
+          format: int32
+          type: integer
         detail:
           description: Explanation specific to this occurrence.
           type: string
@@ -922,6 +988,21 @@ components:
           type:
             - array
             - "null"
+        field:
+          description: "invalid_address (and validation_failed of a draft save): the recipient field of address."
+          enum:
+            - to
+            - cc
+            - bcc
+          type: string
+        limit:
+          description: "upload_too_large, message_too_large: the limit in bytes (SILO_MAX_ATTACHMENT_BYTES)."
+          format: int64
+          type: integer
+        size:
+          description: "upload_too_large, message_too_large: size in bytes of what was refused (for an upload: the request's Content-Length when sent, including the multipart framing)."
+          format: int64
+          type: integer
         status:
           description: HTTP status code.
           format: int64
@@ -1295,6 +1376,13 @@ components:
           examples:
             - acc_1
           type: string
+        draftId:
+          description: d_ id of the newest draft in the thread (a message with the DRAFT label), for opening it in compose; null without one.
+          examples:
+            - d_4k2
+          type:
+            - string
+            - "null"
         hasAttachments:
           type: boolean
         id:
@@ -1348,6 +1436,7 @@ components:
         - participants
         - snoozedUntil
         - pendingSync
+        - draftId
       type: object
     ThreadDetail:
       additionalProperties: false
@@ -1435,6 +1524,9 @@ components:
         subject:
           maxLength: 998
           type: string
+        syncNow:
+          description: "Save the copy in the server's Drafts folder right away instead of 30 s after the last change: the last save when the compose window closes (plan 3.8 step 2)."
+          type: boolean
         to:
           items:
             $ref: "#/components/schemas/Recipient"
@@ -2298,7 +2390,7 @@ paths:
       tags:
         - drafts
     put:
-      description: Replaces the editable fields. version must be the version the client edited, else 409 draft_version_conflict (another window saved meanwhile). The draft and its thread are updated at once (thread.updated, draft.updated); the copy in the server's Drafts folder follows at least 30 s after the last save, always as exactly one message.
+      description: Replaces the editable fields. version must be the version the client edited, else 409 draft_version_conflict (another window saved meanwhile). The draft and its thread are updated at once (thread.updated, draft.updated); the copy in the server's Drafts folder follows at least 30 s after the last save (right away with syncNow, when the compose window closes), always as exactly one message. The 409 carries currentVersion and current (the draft as saved meanwhile). An invalid address is 400 validation_failed with address and field.
       operationId: updateDraft
       parameters:
         - in: path

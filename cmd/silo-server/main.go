@@ -180,6 +180,7 @@ func serve(ctx context.Context, args []string) error {
 				ServerVersion:      version.Version,
 				AuthMode:           cfg.AuthMode,
 				AllowCustomServers: cfg.AllowCustomServers,
+				MaxAttachmentBytes: int64(cfg.MaxAttachmentBytes),
 				Auth:               authSvc,
 				Accounts:           accountSvc,
 				Sync:               silosync.NewService(pool),

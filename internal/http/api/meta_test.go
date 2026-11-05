@@ -17,7 +17,7 @@ func newTestRouter(o Options) http.Handler {
 }
 
 func TestMeta(t *testing.T) {
-	h := newTestRouter(Options{ServerVersion: "0.3.0", AuthMode: "imap", AllowCustomServers: false})
+	h := newTestRouter(Options{ServerVersion: "0.3.0", AuthMode: "imap", AllowCustomServers: false, MaxAttachmentBytes: 25 << 20})
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/meta", nil))
 
@@ -38,6 +38,7 @@ func TestMeta(t *testing.T) {
 		"minWebVersion":      MinWebVersion,
 		"authMode":           "imap",
 		"allowCustomServers": false,
+		"maxAttachmentBytes": float64(25 << 20),
 	}
 	if len(got) != len(want) {
 		t.Fatalf("got %v, want %v", got, want)

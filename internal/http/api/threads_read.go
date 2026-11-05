@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"net/http"
+	"slices"
 	"strings"
 	"time"
 
@@ -71,6 +72,7 @@ type Message struct {
 	Attachments     []MessageAttachment `json:"attachments"`
 	ListUnsubscribe *string             `json:"listUnsubscribe"`
 	PendingSync     bool                `json:"pendingSync"`
+	DraftID         *string             `json:"draftId" example:"d_1x9" doc:"d_ id for GET/PUT /drafts/{id} when the message is a draft (DRAFT label; also one written in another program); null otherwise."`
 }
 
 // ThreadDetail is the answer of GET /threads/{id}.
@@ -106,6 +108,10 @@ func messageOf(m mailview.Message) Message {
 	if m.ReplyTo != nil {
 		r := Address(*m.ReplyTo)
 		out.ReplyTo = &r
+	}
+	if slices.Contains(m.SystemLabels, "DRAFT") {
+		s := formatID("d_", m.ID)
+		out.DraftID = &s
 	}
 	for _, id := range m.LabelIDs {
 		out.LabelIDs = append(out.LabelIDs, formatID("l_", id))

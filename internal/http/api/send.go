@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"net/http"
-	"strings"
 	"time"
 
 	"github.com/danielgtaylor/huma/v2"
@@ -25,11 +24,18 @@ func sendError(err error, limit int64) error {
 	case errors.Is(err, drafts.ErrNoRecipients):
 		return problem(http.StatusUnprocessableEntity, CodeNoRecipients, "Add at least one recipient.")
 	case errors.Is(err, drafts.ErrInvalidAddress):
-		return problem(http.StatusUnprocessableEntity, CodeInvalidAddress, "Invalid recipient address "+
-			strings.TrimPrefix(err.Error(), drafts.ErrInvalidAddress.Error()+": ")+".")
+		p := problem(http.StatusUnprocessableEntity, CodeInvalidAddress, "Invalid recipient address.")
+		withAddress(p, err)
+		return p
 	case errors.Is(err, drafts.ErrMessageTooLarge):
-		return problem(http.StatusRequestEntityTooLarge, CodeMessageTooLarge,
+		p := problem(http.StatusRequestEntityTooLarge, CodeMessageTooLarge,
 			"The message with its attachments is larger than the limit of "+formatBytes(limit)+".")
+		p.Limit = &limit
+		var se *drafts.SizeError
+		if errors.As(err, &se) {
+			p.Size = &se.Size
+		}
+		return p
 	case errors.Is(err, drafts.ErrSendInProgress):
 		return problem(http.StatusConflict, CodeSendInProgress, "The message is already being sent.")
 	}

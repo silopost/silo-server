@@ -33,6 +33,7 @@ type Thread struct {
 	Participants   []Participant `json:"participants"`
 	SnoozedUntil   *time.Time    `json:"snoozedUntil"`
 	PendingSync    bool          `json:"pendingSync" doc:"Local changes still waiting for the mail server."`
+	DraftID        *string       `json:"draftId" example:"d_4k2" doc:"d_ id of the newest draft in the thread (a message with the DRAFT label), for opening it in compose; null without one."`
 }
 
 // threadOf maps a thread of the ops/mail layer to the API shape; GET /threads
@@ -49,6 +50,10 @@ func threadOf(t ops.Thread) Thread {
 	}
 	for _, p := range t.Participants {
 		out.Participants = append(out.Participants, Participant(p))
+	}
+	if t.DraftID != 0 {
+		s := formatID("d_", t.DraftID)
+		out.DraftID = &s
 	}
 	return out
 }

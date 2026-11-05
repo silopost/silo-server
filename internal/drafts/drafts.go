@@ -130,6 +130,17 @@ type Draft struct {
 	// ServerChanged: the copy in the server's Drafts folder was changed or
 	// removed by another program since Silo saved it (plan 3.8 step 3).
 	ServerChanged bool
+	// LastSend is the last send of the draft when it failed (nil otherwise).
+	LastSend *LastSend
+}
+
+// LastSend is a failed send of a draft (its outbound row).
+type LastSend struct {
+	OutboundID       int64
+	Status           string
+	Error            string
+	FailedRecipients []string
+	UpdatedAt        time.Time
 }
 
 func (s *Service) inTx(ctx context.Context, fn func(tx pgx.Tx) error) error {
@@ -444,19 +455,32 @@ func (s *Service) load(ctx context.Context, db querier, userID, id int64) (*Draf
 	d := &Draft{ID: id}
 	var to, cc, bcc []byte
 	var ids []int64
+	var obID *int64
+	var obStatus, obErr *string
+	var obFailed []string
+	var obAt *time.Time
 	err := db.QueryRow(ctx, `
 SELECT d.account_id, m.thread_id, d.to_addrs, d.cc_addrs, d.bcc_addrs, d.subject, d.body_html, d.body_json,
        d.in_reply_to_message_id, d.attachment_ids, d.version, d.updated_at, d.server_synced_version,
        d.server_synced_version > 0 AND NOT EXISTS (
-         SELECT 1 FROM message_locations l WHERE l.message_id = d.message_id AND NOT l.flags @> ARRAY['\Deleted'])
+         SELECT 1 FROM message_locations l WHERE l.message_id = d.message_id AND NOT l.flags @> ARRAY['\Deleted']),
+       o.id, o.status, o.last_error, o.failed_recipients, o.updated_at
 FROM drafts d JOIN messages m ON m.id = d.message_id
+LEFT JOIN outbound o ON o.message_id = d.message_id AND o.status = 'failed'
 WHERE d.message_id = $1 AND d.user_id = $2 AND `+notSending, id, userID).Scan(&d.AccountID, &d.ThreadID, &to, &cc, &bcc, &d.Subject,
-		&d.BodyHTML, &d.BodyJSON, &d.InReplyTo, &ids, &d.Version, &d.UpdatedAt, &d.SyncedVersion, &d.ServerChanged)
+		&d.BodyHTML, &d.BodyJSON, &d.InReplyTo, &ids, &d.Version, &d.UpdatedAt, &d.SyncedVersion, &d.ServerChanged,
+		&obID, &obStatus, &obErr, &obFailed, &obAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNotFound
 	}
 	if err != nil {
 		return nil, err
+	}
+	if obID != nil {
+		d.LastSend = &LastSend{OutboundID: *obID, Status: *obStatus, FailedRecipients: obFailed, UpdatedAt: *obAt}
+		if obErr != nil {
+			d.LastSend.Error = *obErr
+		}
 	}
 	for _, p := range []struct {
 		raw []byte
@@ -551,14 +575,17 @@ type UpdateParams struct {
 	BodyJSON      json.RawMessage
 	AttachmentIDs []int64
 	Origin        string
+	// SyncNow saves the copy in the Drafts folder right away instead of
+	// SyncDelay later (the compose window is closing; plan 3.8 step 2).
+	SyncNow bool
 }
 
-func cleanAddrs(l []mail.Address) ([]mail.Address, error) {
+func cleanAddrs(field string, l []mail.Address) ([]mail.Address, error) {
 	out := make([]mail.Address, 0, len(l))
 	for _, a := range l {
 		e := strings.ToLower(strings.TrimSpace(a.Email))
 		if i := strings.IndexByte(e, '@'); i <= 0 || i == len(e)-1 || strings.ContainsAny(e, " <>,;\"\r\n") {
-			return nil, invalid("invalid email address %q", a.Email)
+			return nil, &AddressError{Field: field, Address: a.Email, base: ErrInvalid}
 		}
 		out = append(out, mail.Address{Name: strings.TrimSpace(strings.NewReplacer("\r", "", "\n", "").Replace(a.Name)), Email: e})
 	}
@@ -573,13 +600,13 @@ func cleanAddrs(l []mail.Address) ([]mail.Address, error) {
 // last change (one pending append job per draft, postponed by every save).
 func (s *Service) Update(ctx context.Context, p UpdateParams) (*Draft, error) {
 	var err error
-	if p.To, err = cleanAddrs(p.To); err != nil {
+	if p.To, err = cleanAddrs("to", p.To); err != nil {
 		return nil, err
 	}
-	if p.Cc, err = cleanAddrs(p.Cc); err != nil {
+	if p.Cc, err = cleanAddrs("cc", p.Cc); err != nil {
 		return nil, err
 	}
-	if p.Bcc, err = cleanAddrs(p.Bcc); err != nil {
+	if p.Bcc, err = cleanAddrs("bcc", p.Bcc); err != nil {
 		return nil, err
 	}
 	p.Subject = strings.NewReplacer("\r", "", "\n", " ").Replace(p.Subject)
@@ -660,7 +687,11 @@ WHERE message_id = $1 RETURNING version`, p.ID, addrJSON(p.To), addrJSON(p.Cc), 
 		if err := mail.WriteEvent(ctx, tx, p.UserID, EventDraftUpdated, ev); err != nil {
 			return err
 		}
-		return s.scheduleAppend(ctx, tx, accountID, p.UserID, p.ID)
+		delay := s.o.SyncDelay
+		if p.SyncNow {
+			delay = 0
+		}
+		return s.scheduleAppend(ctx, tx, accountID, p.UserID, p.ID, delay)
 	})
 	if err != nil {
 		return nil, err
@@ -679,11 +710,11 @@ SELECT j.id FROM jobs j JOIN op_messages om ON om.job_id = j.id
 WHERE om.message_id = $1 AND j.kind = 'imap_op' AND j.status = 'pending' AND j.payload->>'op' = 'append'
   AND (j.locked_until IS NULL OR j.locked_until < now())`
 
-// scheduleAppend postpones the pending append job of the draft to SyncDelay
-// from now, or enqueues one.
-func (s *Service) scheduleAppend(ctx context.Context, tx pgx.Tx, accountID, userID, msgID int64) error {
+// scheduleAppend moves the pending append job of the draft to delay from
+// now, or enqueues one.
+func (s *Service) scheduleAppend(ctx context.Context, tx pgx.Tx, accountID, userID, msgID int64, delay time.Duration) error {
 	tag, err := tx.Exec(ctx, `UPDATE jobs SET run_at = now() + make_interval(secs => $2) WHERE id IN (`+unclaimedAppend+`)`,
-		msgID, s.o.SyncDelay.Seconds())
+		msgID, delay.Seconds())
 	if err != nil || tag.RowsAffected() > 0 {
 		return err
 	}
@@ -692,7 +723,7 @@ func (s *Service) scheduleAppend(ctx context.Context, tx pgx.Tx, accountID, user
 	if err := tx.QueryRow(ctx, `
 INSERT INTO jobs (kind, account_id, payload, run_at, max_attempts)
 VALUES ($1, $2, $3, now() + make_interval(secs => $4), $5) RETURNING id`,
-		ops.JobKind, accountID, payload, s.o.SyncDelay.Seconds(), ops.MaxAttempts).Scan(&jobID); err != nil {
+		ops.JobKind, accountID, payload, delay.Seconds(), ops.MaxAttempts).Scan(&jobID); err != nil {
 		return fmt.Errorf("drafts: enqueue append: %w", err)
 	}
 	_, err = tx.Exec(ctx, `INSERT INTO op_messages (job_id, message_id, account_id, user_id) VALUES ($1, $2, $3, $4)`, jobID, msgID, accountID, userID)

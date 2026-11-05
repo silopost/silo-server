@@ -98,25 +98,38 @@ accept `50MB` style values, rates `5MB/s`, durations `5m`. Worth knowing:
   writes exactly one copy to the Drafts folder (`X-Silo-Draft-Id`, `\Draft \Seen`,
   older copies expunged; the folder is created if missing); sync recognises the copy by
   that header. Drafts written by other programs open via `GET /drafts/{id}`.
+  `PUT` with `"syncNow": true` (the save when the compose window closes) makes that job
+  due at once. A `409 draft_version_conflict` carries `currentVersion` and `current`
+  (the draft as saved meanwhile); an invalid address is `400 validation_failed` with
+  `address` and `field` (`to`/`cc`/`bcc`). Messages and threads carry `draftId`
+  (`d_…`, the newest draft of a thread) for opening them in compose. Drafts never
+  saved and still empty (version 1, no recipients, subject, body or attachments, no
+  server copy) are deleted after 24 h by `blob_gc`. The limit is `maxAttachmentBytes`
+  in `GET /meta`; `413 upload_too_large` carries `limit` and `size`.
 - Sending (`internal/drafts`, plan 3.9): `POST /drafts/{id}/send` (`{sendAt?}`) builds
   the message at once (Bcc only in the envelope), stores it and queues it: the message
   is `SCHEDULED`, an `outbound` row (`ob_…`) is `queued` and a `send` job runs at
   `undoUntil` = now + `undo_send_seconds` (5/10/20/30, default 5) or `sendAt`. Errors:
-  `422 no_recipients` / `invalid_address`, `413 message_too_large` (over
-  `SILO_MAX_ATTACHMENT_BYTES`), `409 send_in_progress`. `POST /outbound/{id}/cancel`
+  `422 no_recipients` / `invalid_address` (with `address` and `field`),
+  `413 message_too_large` (over `SILO_MAX_ATTACHMENT_BYTES`; with `limit` and `size`),
+  `409 send_in_progress`. `POST /outbound/{id}/cancel`
   (undo send) deletes the unclaimed job and returns the draft unchanged (same
   `version`); once the job is claimed it is `409 send_in_progress`. The job submits
   over SMTP (`go-smtp`; 465 implicit TLS or STARTTLS, required unless
   `SILO_ALLOW_INSECURE_TRANSPORT`; AUTH PLAIN, else LOGIN; the server's `SIZE` is
   checked): 4xx/network errors retry after 30 s, 2 min, 10 min, 30 min, 5xx fails at
   once, recipients refused at `RCPT` go to `failed_recipients`. A failed send is a draft
-  again (`outbound.status` event with `error`). After sending the message is `SENT`,
+  again (`outbound.status` event with `error`; the draft's `lastSend` keeps
+  `{outboundId, status, error, failedRecipients, updatedAt}` until the next send). A
+  send left in `sending` by a crash (no update for 2 × the SMTP timeout, its job not
+  running) is failed by `blob_gc` with `error: "interrupted"` and is **not** retried
+  automatically (it may have left; the user decides). After sending the message is `SENT`,
   its Drafts copy is removed, the original gets `\Answered` (reply) or `$Forwarded`
   (forward), `contacts.sent_count` grows and, when the account's `sentAppend` is on
   (default for generic servers), an `imap_op` `append` saves it in Sent with `\Seen`;
   otherwise the server's own copy in Sent is attached by `Message-ID`.
   `GET /contacts/autocomplete?q=` suggests up to 8 recipients.
-- Sessions and accounts (`internal/auth`, `internal/accounts`): `POST/GET/DELETE /session`, `GET /sessions`, `DELETE /sessions/{id}`, `GET/POST /accounts`, `POST /accounts/test`, `GET/PATCH/DELETE /accounts/{id}`, `GET /accounts/{id}/folders`, `POST /accounts/{id}/resync`, `GET /accounts/{id}/sync-status`, `GET /meta`. The full list is `api/openapi.yaml`.
+- Sessions and accounts (`internal/auth`, `internal/accounts`): `POST/GET/DELETE /session`, `GET /sessions`, `DELETE /sessions/{id}`, `GET/POST /accounts`, `POST /accounts/test`, `GET/PATCH/DELETE /accounts/{id}`, `GET /accounts/{id}/folders`, `POST /accounts/{id}/resync`, `GET /accounts/{id}/sync-status`, `GET /meta`. Accounts carry `position` and are listed in that order (`GET /session`, `GET /accounts`). Migration `000005` turns `sent_append` on for generic accounts created before sending existed. The full list is `api/openapi.yaml`.
 - Reading the mailbox (`internal/mailview`): `GET /labels` (counters, pseudo label
   `UNREAD`), `POST /labels` (user label with an IMAP keyword, or a folder: `CREATE`
   queued as an `imap_op` job), `PATCH`/`DELETE /labels/{id}` (a rename moves the
@@ -129,6 +142,8 @@ accept `50MB` style values, rates `5MB/s`, durations `5m`. Worth knowing:
   `Last-Event-ID`, `: ping` every 25 s, `resync` when the id is too old), and
   `GET /events/poll?after=` the polling fallback. Rows of the `events` table are
   announced by `NOTIFY silo_events` at commit; `X-Silo-Client` is echoed as `origin`.
+  `operation.failed` carries `kind` (`move`, `flags`, `labels`, `expunge`, `append`,
+  `delete_draft`, `create_folder`, `delete_folder`) so the client can name the action.
 - Benchmark (nightly workflow): `SILO_BENCH_INBOX=true go test ./internal/mailview
   -run TestInboxListBenchmark -v` loads 100k threads / 300k messages and checks
   p95 < 50 ms and the `thread_labels_list` plan of the inbox query.

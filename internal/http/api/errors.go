@@ -48,7 +48,14 @@ type Problem struct {
 	Code   string               `json:"code,omitempty" doc:"Stable machine-readable error code."`
 	Errors []*huma.ErrorDetail  `json:"errors,omitempty" doc:"Individual validation errors."`
 	Test   *accounts.TestResult `json:"test,omitempty" doc:"Per-step result, present for account_test_failed."`
-	header http.Header          `json:"-"`
+	// Extension members of single codes (RFC 9457 section 3.2); absent elsewhere.
+	Limit          *int64      `json:"limit,omitempty" doc:"upload_too_large, message_too_large: the limit in bytes (SILO_MAX_ATTACHMENT_BYTES)."`
+	Size           *int64      `json:"size,omitempty" doc:"upload_too_large, message_too_large: size in bytes of what was refused (for an upload: the request's Content-Length when sent, including the multipart framing)."`
+	CurrentVersion *int32      `json:"currentVersion,omitempty" doc:"draft_version_conflict: the version saved meanwhile."`
+	Current        *Draft      `json:"current,omitempty" doc:"draft_version_conflict: the draft as saved meanwhile (as GET /drafts/{id}), so that the client needs no extra request."`
+	Address        *string     `json:"address,omitempty" doc:"invalid_address (and validation_failed of a draft save): the refused address as given."`
+	Field          *string     `json:"field,omitempty" enum:"to,cc,bcc" doc:"invalid_address (and validation_failed of a draft save): the recipient field of address."`
+	header         http.Header `json:"-"`
 }
 
 // Error implements error.

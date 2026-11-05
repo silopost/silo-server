@@ -34,6 +34,9 @@ type Options struct {
 	ServerVersion      string
 	AuthMode           string
 	AllowCustomServers bool
+	// MaxAttachmentBytes is SILO_MAX_ATTACHMENT_BYTES (GET /meta); when 0, the
+	// limit of Drafts.
+	MaxAttachmentBytes int64
 
 	// Auth and Accounts back the session and account endpoints. They may be nil
 	// when only the OpenAPI document is needed (cmd/silo-openapi).

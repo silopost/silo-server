@@ -25,6 +25,31 @@ var (
 	ErrSendInProgress  = errors.New("drafts: the message is being sent")
 )
 
+// AddressError is an invalid recipient address; it matches ErrInvalidAddress
+// (send) or ErrInvalid (save) with errors.Is.
+type AddressError struct {
+	Field   string // to, cc or bcc
+	Address string // as given
+	base    error
+}
+
+func (e *AddressError) Error() string { return fmt.Sprintf("%v: %s %q", e.base, e.Field, e.Address) }
+
+// Unwrap returns ErrInvalidAddress or ErrInvalid.
+func (e *AddressError) Unwrap() error { return e.base }
+
+// SizeError is a message larger than the limit; it matches ErrMessageTooLarge.
+type SizeError struct {
+	Size, Limit int64
+}
+
+func (e *SizeError) Error() string {
+	return fmt.Sprintf("%v: %d bytes over the limit of %d", ErrMessageTooLarge, e.Size, e.Limit)
+}
+
+// Unwrap returns ErrMessageTooLarge.
+func (e *SizeError) Unwrap() error { return ErrMessageTooLarge }
+
 // JobSend is the general job that delivers one outbound message (plan 3.9
 // step 4); its payload is {"outboundId": id}.
 const JobSend = "send"
@@ -131,17 +156,21 @@ WHERE d.message_id = $1 AND d.user_id = $2 FOR UPDATE OF d`, p.ID, p.UserID).Sca
 		if err != nil {
 			return err
 		}
-		rcpts := m.Recipients()
-		if len(rcpts) == 0 {
+		if len(m.Recipients()) == 0 {
 			return ErrNoRecipients
 		}
-		for _, r := range rcpts {
-			if !validRecipient(r) {
-				return fmt.Errorf("%w: %q", ErrInvalidAddress, r)
+		for _, f := range []struct {
+			name string
+			l    []mail.Address
+		}{{"to", m.To}, {"cc", m.Cc}, {"bcc", m.Bcc}} {
+			for _, a := range f.l {
+				if a.Email != "" && !validRecipient(strings.ToLower(a.Email)) {
+					return &AddressError{Field: f.name, Address: a.Email, base: ErrInvalidAddress}
+				}
 			}
 		}
 		if s.o.MaxUploadBytes > 0 && int64(len(m.Raw)) > s.o.MaxUploadBytes {
-			return ErrMessageTooLarge
+			return &SizeError{Size: int64(len(m.Raw)), Limit: s.o.MaxUploadBytes}
 		}
 		sum, size, err := s.o.Blobs.Put(ctx, bytes.NewReader(m.Raw))
 		if err != nil {
@@ -283,7 +312,7 @@ func (s *Service) backToDraft(ctx context.Context, tx pgx.Tx, accountID, userID,
 		return err
 	}
 	if stale {
-		if err := s.scheduleAppend(ctx, tx, accountID, userID, msgID); err != nil {
+		if err := s.scheduleAppend(ctx, tx, accountID, userID, msgID, s.o.SyncDelay); err != nil {
 			return err
 		}
 	}
