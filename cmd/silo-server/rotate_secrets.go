@@ -43,5 +43,10 @@ func rotateSecretsCmd(ctx context.Context, _ []string) error {
 		return fmt.Errorf("rotated %d accounts before failing: %w", n, err)
 	}
 	fmt.Printf("re-encrypted secrets of %d accounts (active key id %s)\n", n, ring.ActiveKeyID())
+	n, err = store.RotateUserTOTPSecrets(ctx, pool, ring)
+	if err != nil {
+		return fmt.Errorf("rotated TOTP secrets of %d users before failing: %w", n, err)
+	}
+	fmt.Printf("re-encrypted TOTP secrets of %d users\n", n)
 	return nil
 }

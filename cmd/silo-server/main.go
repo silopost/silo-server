@@ -195,7 +195,7 @@ func serve(ctx context.Context, args []string) error {
 			API: api.Options{
 				ServerVersion:      version.Version,
 				AuthMode:           cfg.AuthMode,
-				AllowCustomServers: cfg.AllowCustomServers,
+				AllowCustomServers: cfg.AllowCustomServers || cfg.AuthMode == config.AuthModeLocal,
 				MaxAttachmentBytes: int64(cfg.MaxAttachmentBytes),
 				Auth:               authSvc,
 				Accounts:           accountSvc,

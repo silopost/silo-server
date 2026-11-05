@@ -19,6 +19,7 @@ type User struct {
 	Email       string `json:"email"`
 	DisplayName string `json:"displayName"`
 	IsAdmin     bool   `json:"isAdmin"`
+	TOTPEnabled bool   `json:"totpEnabled" doc:"Whether sign-in asks for a TOTP code (mode local)."`
 }
 
 // Settings are the per-user preferences (stored in users.settings).
@@ -61,6 +62,7 @@ type loginInput struct {
 		Email    string       `json:"email" minLength:"1" maxLength:"254" doc:"Mailbox address (or local part, per SILO_DEFAULT_LOGIN_FORMAT)."`
 		Password string       `json:"password" minLength:"1" maxLength:"1024"`
 		Client   *LoginClient `json:"client,omitempty" doc:"Kind of session to open; a browser cookie session when omitted."`
+		TOTPCode string       `json:"totpCode,omitempty" maxLength:"32" doc:"Mode local: 6-digit TOTP code or a backup code, for users with TOTP enabled (send it after a 401 totp_required)."`
 	}
 	remote, userAgent string
 }
@@ -126,6 +128,9 @@ func (d *deps) registerSession(a huma.API) {
 		Description: "In imap mode the credentials are verified with LOGIN on the default mail server. " +
 			"A new user and first account are created on first success. When the mail server is " +
 			"unreachable, a known user with the right password is let in and the account reports state `backoff`. " +
+			"In local mode the Silo password is checked (no mail server, no user or account is created); a user with TOTP " +
+			"enabled must also send totpCode: without it a correct password answers 401 totp_required, with a wrong code " +
+			"401 invalid_credentials (a backup code works once). " +
 			"Every failure answers 401 invalid_credentials after a constant minimum time. " +
 			"Browsers get the silo_session cookie; with client.kind=bearer (native clients) no cookie is set and the " +
 			"body carries a token for the Authorization: Bearer header instead (shown once).",
@@ -136,13 +141,15 @@ func (d *deps) registerSession(a huma.API) {
 		if c := in.Body.Client; c != nil {
 			client.Kind, client.Name = c.Kind, c.Name
 		}
-		res, err := d.auth.Login(ctx, in.Body.Email, in.Body.Password, client)
+		res, err := d.auth.SignIn(ctx, auth.Credentials{Email: in.Body.Email, Password: in.Body.Password, TOTPCode: in.Body.TOTPCode}, client)
 		var rl *auth.RateLimitError
 		switch {
 		case errors.As(err, &rl):
 			return nil, errRateLimited(rl.RetryAfter)
 		case errors.Is(err, auth.ErrInvalidCredentials):
 			return nil, errInvalidCredentials()
+		case errors.Is(err, auth.ErrTOTPRequired):
+			return nil, errTOTPRequired()
 		case errors.Is(err, auth.ErrUpstream):
 			return nil, problem(http.StatusBadGateway, CodeUpstreamIMAP, "The mail server could not be reached.")
 		case err != nil:
@@ -246,7 +253,7 @@ func (d *deps) sessionBody(ctx context.Context, user sqlcgen.User, sess sqlcgen.
 		return SessionBody{}, errInternal(err)
 	}
 	return SessionBody{
-		User:      User{ID: formatID("u_", user.ID), Email: user.Email, DisplayName: user.DisplayName, IsAdmin: user.IsAdmin},
+		User:      User{ID: formatID("u_", user.ID), Email: user.Email, DisplayName: user.DisplayName, IsAdmin: user.IsAdmin, TOTPEnabled: user.TotpEnabledAt.Valid},
 		CSRFToken: sess.CsrfToken,
 		Settings:  settingsFrom(user.Settings, accs),
 		Accounts:  accountList(accs),

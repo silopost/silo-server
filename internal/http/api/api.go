@@ -134,6 +134,7 @@ func Mount(root chi.Router, o Options) huma.API {
 		d.registerFilters(a)
 		d.registerSettings(a)
 		d.registerEvents(a)
+		d.registerLocalAuth(a)
 	})
 	return a
 }

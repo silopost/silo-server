@@ -109,6 +109,35 @@ components:
         - email
         - name
       type: object
+    BackupCodesBody:
+      additionalProperties: false
+      properties:
+        backupCodes:
+          description: 10 single-use codes of 10 characters; only their hashes are stored.
+          items:
+            type: string
+          type:
+            - array
+            - "null"
+      required:
+        - backupCodes
+      type: object
+    ChangePasswordInputBody:
+      additionalProperties: false
+      properties:
+        currentPassword:
+          maxLength: 1024
+          minLength: 1
+          type: string
+        newPassword:
+          description: At least 10 characters.
+          maxLength: 1024
+          minLength: 10
+          type: string
+      required:
+        - currentPassword
+        - newPassword
+      type: object
     ConnectionParams:
       additionalProperties: false
       properties:
@@ -850,6 +879,10 @@ components:
           maxLength: 1024
           minLength: 1
           type: string
+        totpCode:
+          description: "Mode local: 6-digit TOTP code or a backup code, for users with TOTP enabled (send it after a 401 totp_required)."
+          maxLength: 32
+          type: string
       required:
         - email
         - password
@@ -1324,6 +1357,22 @@ components:
       required:
         - suggestions
       type: object
+    SecondFactorInputBody:
+      additionalProperties: false
+      properties:
+        code:
+          description: TOTP code or a backup code (consumed).
+          maxLength: 32
+          minLength: 1
+          type: string
+        password:
+          maxLength: 1024
+          minLength: 1
+          type: string
+      required:
+        - password
+        - code
+      type: object
     SendDraftBody:
       additionalProperties: false
       properties:
@@ -1729,6 +1778,23 @@ components:
         - missingRoles
         - folders
       type: object
+    TOTPSetupBody:
+      additionalProperties: false
+      properties:
+        otpauthUrl:
+          description: otpauth:// URI to show as a QR code.
+          examples:
+            - otpauth://totp/Silo:ala@example.com?secret=JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP&issuer=Silo&algorithm=SHA1&digits=6&period=30
+          type: string
+        secret:
+          description: Base32 secret (no padding) for manual entry.
+          examples:
+            - JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP
+          type: string
+      required:
+        - secret
+        - otpauthUrl
+      type: object
     TestResult:
       additionalProperties: false
       properties:
@@ -1904,6 +1970,18 @@ components:
         - nextCursor
         - resultSizeEstimate
       type: object
+    TotpEnableInputBody:
+      additionalProperties: false
+      properties:
+        code:
+          description: Current code of the authenticator app.
+          maxLength: 6
+          minLength: 6
+          pattern: ^[0-9]{6}$
+          type: string
+      required:
+        - code
+      type: object
     UpdateDraftBody:
       additionalProperties: false
       properties:
@@ -2045,11 +2123,15 @@ components:
           type: string
         isAdmin:
           type: boolean
+        totpEnabled:
+          description: Whether sign-in asks for a TOTP code (mode local).
+          type: boolean
       required:
         - id
         - email
         - displayName
         - isAdmin
+        - totpEnabled
       type: object
   securitySchemes:
     bearerAuth:
@@ -4326,7 +4408,7 @@ paths:
       tags:
         - session
     post:
-      description: "In imap mode the credentials are verified with LOGIN on the default mail server. A new user and first account are created on first success. When the mail server is unreachable, a known user with the right password is let in and the account reports state `backoff`. Every failure answers 401 invalid_credentials after a constant minimum time. Browsers get the silo_session cookie; with client.kind=bearer (native clients) no cookie is set and the body carries a token for the Authorization: Bearer header instead (shown once)."
+      description: "In imap mode the credentials are verified with LOGIN on the default mail server. A new user and first account are created on first success. When the mail server is unreachable, a known user with the right password is let in and the account reports state `backoff`. In local mode the Silo password is checked (no mail server, no user or account is created); a user with TOTP enabled must also send totpCode: without it a correct password answers 401 totp_required, with a wrong code 401 invalid_credentials (a backup code works once). Every failure answers 401 invalid_credentials after a constant minimum time. Browsers get the silo_session cookie; with client.kind=bearer (native clients) no cookie is set and the body carries a token for the Authorization: Bearer header instead (shown once)."
       operationId: login
       requestBody:
         content:
@@ -4382,6 +4464,68 @@ paths:
                 $ref: "#/components/schemas/Problem"
           description: Bad Gateway
       summary: Sign in
+      tags:
+        - session
+  /session/password:
+    post:
+      description: Mode local only (409 not_available in mode imap, where the mailbox password is used). A wrong currentPassword is 403 invalid_credentials (throttled like sign-in). Every other session of the user is signed out; the current one stays.
+      operationId: changePassword
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ChangePasswordInputBody"
+        required: true
+      responses:
+        "204":
+          description: No Content
+        "400":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Bad Request
+        "401":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Unauthorized
+        "403":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Forbidden
+        "409":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Conflict
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Unprocessable Entity
+        "429":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Too Many Requests
+        "500":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Internal Server Error
+      security:
+        - cookieAuth: []
+          csrfHeader: []
+        - bearerAuth: []
+      summary: Change the Silo password
       tags:
         - session
   /sessions:
@@ -5145,6 +5289,236 @@ paths:
       summary: Snooze a thread until a time
       tags:
         - threads
+  /totp:
+    delete:
+      description: Needs the password and a TOTP or backup code; a wrong one is 403 invalid_credentials.
+      operationId: disableTotp
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SecondFactorInputBody"
+        required: true
+      responses:
+        "204":
+          description: No Content
+        "400":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Bad Request
+        "401":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Unauthorized
+        "403":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Forbidden
+        "409":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Conflict
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Unprocessable Entity
+        "429":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Too Many Requests
+        "500":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Internal Server Error
+      security:
+        - cookieAuth: []
+          csrfHeader: []
+        - bearerAuth: []
+      summary: Disable TOTP
+      tags:
+        - totp
+  /totp/backup-codes:
+    post:
+      description: Needs the password and a TOTP or backup code; the previous backup codes stop working. The new ones are shown only this once.
+      operationId: regenerateTotpBackupCodes
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SecondFactorInputBody"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BackupCodesBody"
+          description: OK
+        "400":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Bad Request
+        "401":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Unauthorized
+        "403":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Forbidden
+        "409":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Conflict
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Unprocessable Entity
+        "429":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Too Many Requests
+        "500":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Internal Server Error
+      security:
+        - cookieAuth: []
+          csrfHeader: []
+        - bearerAuth: []
+      summary: Replace the TOTP backup codes
+      tags:
+        - totp
+  /totp/enable:
+    post:
+      description: Confirms the secret of POST /totp/setup with a current code and turns TOTP on. Returns the backup codes, shown only this once. A wrong code is 422 invalid_totp_code.
+      operationId: enableTotp
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TotpEnableInputBody"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BackupCodesBody"
+          description: OK
+        "400":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Bad Request
+        "401":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Unauthorized
+        "403":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Forbidden
+        "409":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Conflict
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Unprocessable Entity
+        "500":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Internal Server Error
+      security:
+        - cookieAuth: []
+          csrfHeader: []
+        - bearerAuth: []
+      summary: Enable TOTP
+      tags:
+        - totp
+  /totp/setup:
+    post:
+      description: Mode local only. Generates a new secret (replacing one whose setup was not finished); TOTP is enforced only after POST /totp/enable. 409 totp_enabled when it is already on.
+      operationId: setupTotp
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TOTPSetupBody"
+          description: OK
+        "401":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Unauthorized
+        "403":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Forbidden
+        "409":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Conflict
+        "500":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Internal Server Error
+      security:
+        - cookieAuth: []
+          csrfHeader: []
+        - bearerAuth: []
+      summary: Start TOTP setup
+      tags:
+        - totp
   /uploads:
     post:
       description: "multipart/form-data with one file part (any field name). The file is streamed to the blob store; its id goes to attachmentIds of PUT /drafts/{id}. Uploads not attached to a draft are deleted after 24 h. A file over the instance limit (SILO_MAX_ATTACHMENT_BYTES, 25 MB by default) is 413 upload_too_large. A picture pasted into the editor is uploaded with inline=true (a form field before the file, or the query parameter): the answer carries its cid, which the client puts in bodyHtml as <img src=\"cid:<cid>\">; the server sends it in multipart/related with that Content-ID. Only image/* can be inline (422 inline_not_image)."

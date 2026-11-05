@@ -59,6 +59,12 @@ func New(o Options) *Service {
 	if log == nil {
 		log = slog.Default()
 	}
+	// Mode local has no implied mail server: users add accounts on any host,
+	// each checked by the anti-SSRF policy (the default host, when configured,
+	// stays trusted as in mode imap).
+	if o.Config.AuthMode == config.AuthModeLocal {
+		o.Config.AllowCustomServers = true
+	}
 	return &Service{o: o, policy: newHostPolicy(o.Config.CustomServerAllowlist, o.Resolver), log: log.With("component", "accounts")}
 }
 
