@@ -4,6 +4,7 @@ package main
 import (
 	"context"
 	"errors"
+	"flag"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -14,6 +15,7 @@ import (
 
 	"github.com/silopost/silo-server/internal/config"
 	siloHTTP "github.com/silopost/silo-server/internal/http"
+	"github.com/silopost/silo-server/internal/store"
 	"github.com/silopost/silo-server/internal/version"
 )
 
@@ -22,7 +24,8 @@ const shutdownTimeout = 15 * time.Second
 // commands maps subcommand names to their implementations. New subcommands
 // (migrate, user add, ...) are registered here.
 var commands = map[string]func(ctx context.Context, args []string) error{
-	"serve": serve,
+	"serve":   serve,
+	"migrate": migrateCmd,
 }
 
 func main() {
@@ -55,15 +58,17 @@ func main() {
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "usage: silo-server <command>\n\ncommands:\n  serve    run the HTTP server\n  version  print the version")
+	fmt.Fprintln(os.Stderr, "usage: silo-server <command>\n\ncommands:\n  serve    run the HTTP server (--migrate=false skips migrations)\n  migrate  up, down --yes or version: manage the database schema\n  version  print the version")
 }
 
-func serve(ctx context.Context, _ []string) error {
+func serve(ctx context.Context, args []string) error {
+	fs := flag.NewFlagSet("serve", flag.ContinueOnError)
+	migrateOnStart := fs.Bool("migrate", true, "apply pending database migrations before starting")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
 	cfg, err := config.Load()
 	if err != nil {
-		return fmt.Errorf("config: %w", err)
-	}
-	if err := cfg.ValidateServe(); err != nil {
 		return fmt.Errorf("config: %w", err)
 	}
 	if err := cfg.ValidateServe(); err != nil {
@@ -74,6 +79,13 @@ func serve(ctx context.Context, _ []string) error {
 		return err
 	}
 	slog.SetDefault(logger)
+
+	if *migrateOnStart {
+		logger.Info("applying database migrations")
+		if err := store.MigrateUp(ctx, cfg.DatabaseURL); err != nil {
+			return fmt.Errorf("migrate: %w", err)
+		}
+	}
 
 	srv := &http.Server{
 		Addr:              cfg.HTTPAddr,
