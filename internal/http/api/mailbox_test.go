@@ -25,6 +25,7 @@ import (
 	"github.com/silopost/silo-server/internal/auth"
 	"github.com/silopost/silo-server/internal/blob"
 	"github.com/silopost/silo-server/internal/events"
+	"github.com/silopost/silo-server/internal/filters"
 	"github.com/silopost/silo-server/internal/http/api"
 	"github.com/silopost/silo-server/internal/imapx"
 	"github.com/silopost/silo-server/internal/mailview"
@@ -67,6 +68,8 @@ func newStack(t *testing.T, o stackOpts) *stack {
 		Backoff: []time.Duration{100 * time.Millisecond, 200 * time.Millisecond},
 	})
 	mgr.RegisterJobs(jobs)
+	filterSvc := filters.New(filters.Options{Pool: e.pool, Ops: ops.NewService(e.pool, 100*time.Millisecond), Bodies: mgr, Forward: e.drafts, Logger: logger})
+	filterSvc.RegisterJobs(jobs)
 	hub := events.New(events.Options{Pool: e.pool, Logger: logger, Buffer: o.buffer, PollInterval: time.Minute})
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{}, 3)
@@ -87,7 +90,7 @@ func newStack(t *testing.T, o stackOpts) *stack {
 		api.Mount(r, api.Options{
 			Auth: auth.New(ao), Accounts: accounts.New(accounts.Options{Pool: e.pool, Keys: e.ring, Config: e.cfg}),
 			Sync: silosync.NewService(e.pool), Ops: ops.NewService(e.pool, 100*time.Millisecond),
-			View: mailview.New(e.pool, blobs, fetcher), Events: hub, SSEHeartbeat: o.heartbeat, PublicURL: publicURL,
+			View: mailview.New(e.pool, blobs, fetcher), Events: hub, Filters: filterSvc, SSEHeartbeat: o.heartbeat, PublicURL: publicURL,
 		})
 		return r
 	}

@@ -35,8 +35,14 @@ const (
 // names), and the user's time zone (users.settings.timezone, UTC without
 // one).
 func (v *View) SearchScope(ctx context.Context, userID, accountID int64) (search.Scope, error) {
+	return LoadSearchScope(ctx, v.pool, userID, accountID)
+}
+
+// LoadSearchScope is SearchScope over any connection (filters use it for
+// the matcher and for POST /filters/{id}/apply).
+func LoadSearchScope(ctx context.Context, db mail.DB, userID, accountID int64) (search.Scope, error) {
 	s := search.Scope{UserID: userID, AccountID: accountID, SystemLabels: map[string]int64{}, Location: time.UTC}
-	rows, err := v.pool.Query(ctx, `SELECT id, name, COALESCE(system_key, '') FROM labels WHERE account_id = $1 AND user_id = $2`, accountID, userID)
+	rows, err := db.Query(ctx, `SELECT id, name, COALESCE(system_key, '') FROM labels WHERE account_id = $1 AND user_id = $2`, accountID, userID)
 	if err != nil {
 		return s, err
 	}
@@ -60,7 +66,7 @@ func (v *View) SearchScope(ctx context.Context, userID, accountID int64) (search
 	}
 	s.ResolveLabel = func(name string) []int64 { return names[name] }
 	var tz string
-	if err := v.pool.QueryRow(ctx, `SELECT COALESCE(settings->>'timezone', '') FROM users WHERE id = $1`, userID).Scan(&tz); err != nil {
+	if err := db.QueryRow(ctx, `SELECT COALESCE(settings->>'timezone', '') FROM users WHERE id = $1`, userID).Scan(&tz); err != nil {
 		return s, err
 	}
 	if tz != "" {

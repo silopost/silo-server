@@ -3,7 +3,6 @@ package mailview_test
 import (
 	"context"
 	"encoding/base64"
-	"encoding/json"
 	"fmt"
 	"math/rand"
 	"mime"
@@ -239,36 +238,29 @@ ON CONFLICT DO NOTHING`, c.acc); err != nil {
 	}
 }
 
-// views loads every message of the account as the matcher sees it.
+// views loads every message of the account as the matcher sees it, with
+// the loader filters use (mail.LoadMessageViews), so that the property test
+// also checks that the filters' MessageView agrees with SQL.
 func (c *corpus) views(t *testing.T) map[int64]search.MessageView {
 	t.Helper()
-	rows, err := c.pool.Query(c.ctx, `
-SELECT m.id, m.subject, m.from_text, m.recipients_text, m.cc_addrs, m.bcc_addrs, COALESCE(m.list_id, ''), m.message_id_hdr,
-       m.internal_date, m.size_bytes, m.has_attachments, m.is_unread, m.body_text,
-       ARRAY(SELECT a.filename FROM attachments a WHERE a.message_id = m.id ORDER BY a.id)::text[],
-       ARRAY(SELECT l.system_key FROM message_labels ml JOIN labels l ON l.id = ml.label_id WHERE ml.message_id = m.id AND l.type = 'system')::text[],
-       ARRAY(SELECT l.name FROM message_labels ml JOIN labels l ON l.id = ml.label_id WHERE ml.message_id = m.id AND l.type = 'folder')::text[],
-       ARRAY(SELECT l.name FROM message_labels ml JOIN labels l ON l.id = ml.label_id WHERE ml.message_id = m.id AND l.type = 'user')::text[]
-FROM messages m WHERE m.account_id = $1 AND m.orphaned_at IS NULL`, c.acc)
+	rows, err := c.pool.Query(c.ctx, `SELECT id FROM messages WHERE account_id = $1 AND orphaned_at IS NULL`, c.acc)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer rows.Close()
-	out := map[int64]search.MessageView{}
-	for rows.Next() {
-		var id int64
-		var v search.MessageView
-		var cc, bcc []byte
-		if err := rows.Scan(&id, &v.Subject, &v.FromText, &v.RecipientsText, &cc, &bcc, &v.ListID, &v.MessageIDHdr, &v.Date, &v.Size,
-			&v.HasAttachments, &v.Unread, &v.Body, &v.Attachments, &v.SystemLabels, &v.FolderLabels, &v.UserLabels); err != nil {
-			t.Fatal(err)
-		}
-		_ = json.Unmarshal(cc, &v.Cc)
-		_ = json.Unmarshal(bcc, &v.Bcc)
-		out[id] = v
-	}
-	if err := rows.Err(); err != nil {
+	ids, err := pgx.CollectRows(rows, pgx.RowTo[int64])
+	if err != nil {
 		t.Fatal(err)
+	}
+	list, err := mail.LoadMessageViews(c.ctx, c.pool, ids)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := map[int64]search.MessageView{}
+	for _, v := range list {
+		out[v.ID] = v.View
+	}
+	if len(out) != len(ids) {
+		t.Fatalf("loaded %d views of %d messages", len(out), len(ids))
 	}
 	return out
 }

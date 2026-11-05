@@ -41,7 +41,8 @@ type pollOutput struct{ Body PollResult }
 var eventStreamDoc = map[string]*huma.Response{"200": {
 	Description: "A Server-Sent Events stream. Each event has id (sequence number), event (type) and data (JSON); " +
 		"types: message.new, thread.updated, thread.deleted, thread.merged, label.counts, label.changed, operation.failed, " +
-		"account.status, account.sync_progress, account.error, resync. Events caused by a request that carried " +
+		"filter.applied ({filterId, accountId, messages, threads}: POST /filters/{id}/apply is done), settings.updated " +
+		"({updatedAt}: reload GET /settings), account.status, account.sync_progress, account.error, resync. Events caused by a request that carried " +
 		"X-Silo-Client have origin set to that id.",
 	Content: map[string]*huma.MediaType{"text/event-stream": {Schema: &huma.Schema{Type: huma.TypeString}}},
 }}

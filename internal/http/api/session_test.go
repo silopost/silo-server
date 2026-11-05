@@ -21,6 +21,7 @@ import (
 	"github.com/silopost/silo-server/internal/blob"
 	"github.com/silopost/silo-server/internal/config"
 	"github.com/silopost/silo-server/internal/drafts"
+	"github.com/silopost/silo-server/internal/filters"
 	"github.com/silopost/silo-server/internal/http/api"
 	"github.com/silopost/silo-server/internal/mailview"
 	"github.com/silopost/silo-server/internal/ops"
@@ -45,6 +46,9 @@ type env struct {
 	cfg    config.Config
 	web    http.Handler // normal service: Dovecot reachable
 	drafts *drafts.Service
+	// filters is the filter service of the last router built (jobs are run by
+	// tests with Run).
+	filters *filters.Service
 }
 
 type resp struct {
@@ -127,12 +131,15 @@ func newEnv(t *testing.T) *env {
 // router builds the API over cfg with the given auth options.
 func (e *env) router(cfg config.Config, ao auth.Options) http.Handler {
 	ao.Pool, ao.Keys, ao.Config = e.pool, e.ring, cfg
+	opsSvc := ops.NewService(e.pool, 10*time.Second)
+	e.filters = filters.New(filters.Options{Pool: e.pool, Ops: opsSvc, Forward: e.drafts})
 	r := chi.NewRouter()
 	api.Mount(r, api.Options{
+		Filters:   e.filters,
 		Auth:      auth.New(ao),
 		Accounts:  accounts.New(accounts.Options{Pool: e.pool, Keys: e.ring, Config: cfg}),
 		Sync:      silosync.NewService(e.pool),
-		Ops:       ops.NewService(e.pool, 10*time.Second),
+		Ops:       opsSvc,
 		View:      mailview.New(e.pool, nil, nil),
 		Drafts:    e.drafts,
 		PublicURL: publicURL,

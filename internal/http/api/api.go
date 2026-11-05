@@ -15,6 +15,7 @@ import (
 	"github.com/silopost/silo-server/internal/auth"
 	"github.com/silopost/silo-server/internal/drafts"
 	"github.com/silopost/silo-server/internal/events"
+	"github.com/silopost/silo-server/internal/filters"
 	"github.com/silopost/silo-server/internal/mailview"
 	"github.com/silopost/silo-server/internal/ops"
 	silosync "github.com/silopost/silo-server/internal/sync"
@@ -50,6 +51,8 @@ type Options struct {
 	View *mailview.View
 	// Drafts backs /drafts and /uploads.
 	Drafts *drafts.Service
+	// Filters backs /filters.
+	Filters *filters.Service
 	// Events backs GET /events and /events/poll.
 	Events *events.Hub
 	// SSEHeartbeat is the interval of the ": ping" comment on /events (25 s when 0).
@@ -69,6 +72,7 @@ type deps struct {
 	view         *mailview.View
 	drafts       *drafts.Service
 	events       *events.Hub
+	filters      *filters.Service
 	heartbeat    time.Duration
 	log          *slog.Logger
 	publicOrigin string
@@ -76,7 +80,7 @@ type deps struct {
 }
 
 func newDeps(o Options) *deps {
-	d := &deps{auth: o.Auth, accts: o.Accounts, sync: o.Sync, ops: o.Ops, view: o.View, drafts: o.Drafts, events: o.Events, heartbeat: o.SSEHeartbeat, log: o.Logger}
+	d := &deps{auth: o.Auth, accts: o.Accounts, sync: o.Sync, ops: o.Ops, view: o.View, drafts: o.Drafts, events: o.Events, filters: o.Filters, heartbeat: o.SSEHeartbeat, log: o.Logger}
 	if d.heartbeat <= 0 {
 		d.heartbeat = 25 * time.Second
 	}
@@ -127,6 +131,7 @@ func Mount(root chi.Router, o Options) huma.API {
 		d.registerThreadViews(a)
 		d.registerContent(a)
 		d.registerSearch(a)
+		d.registerFilters(a)
 		d.registerSettings(a)
 		d.registerEvents(a)
 	})

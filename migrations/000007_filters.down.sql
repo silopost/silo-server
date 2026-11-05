@@ -1,0 +1,5 @@
+DROP INDEX IF EXISTS filters_user;
+ALTER TABLE filters
+  DROP COLUMN IF EXISTS updated_at,
+  DROP COLUMN IF EXISTS enabled,
+  DROP COLUMN IF EXISTS name;

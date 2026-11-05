@@ -106,6 +106,9 @@ type Filter struct {
 	Actions   []byte
 	Position  int32
 	CreatedAt pgtype.Timestamptz
+	Name      string
+	Enabled   bool
+	UpdatedAt pgtype.Timestamptz
 }
 
 type Job struct {

@@ -20,6 +20,7 @@ import (
 	"github.com/silopost/silo-server/internal/config"
 	"github.com/silopost/silo-server/internal/drafts"
 	"github.com/silopost/silo-server/internal/events"
+	"github.com/silopost/silo-server/internal/filters"
 	siloHTTP "github.com/silopost/silo-server/internal/http"
 	"github.com/silopost/silo-server/internal/http/api"
 	"github.com/silopost/silo-server/internal/mail"
@@ -156,6 +157,9 @@ func serve(ctx context.Context, args []string) error {
 	opsSvc := ops.NewService(pool, cfg.UndoWindow)
 	// Snoozed threads are woken by snooze_wake, queued every 30 s (plan 3.10).
 	opsSvc.RegisterJobs(jobs)
+	// Filters (plan 3.11): filter_eval (queued by ingest) and filter_apply.
+	filterSvc := filters.New(filters.Options{Pool: pool, Ops: opsSvc, Bodies: syncMgr, Forward: draftSvc, Logger: logger})
+	filterSvc.RegisterJobs(jobs)
 	draftSvc.RegisterJobs(jobs, func(ctx context.Context, now time.Time) error {
 		_, err := opsSvc.PurgeOperations(ctx, now)
 		return err
@@ -197,6 +201,7 @@ func serve(ctx context.Context, args []string) error {
 				Ops:                opsSvc,
 				View:               view,
 				Drafts:             draftSvc,
+				Filters:            filterSvc,
 				Events:             hub,
 				PublicURL:          cfg.PublicURL,
 				Logger:             logger,

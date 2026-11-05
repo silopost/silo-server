@@ -19,6 +19,10 @@ type Modify struct {
 	Add        []LabelRef
 	Remove     []LabelRef
 	Origin     string // X-Silo-Client, echoed in the events
+	// Immediate runs folder moves at once (no undo window) and records no
+	// undoable operation (OperationID stays empty): the actions of filters
+	// (plan 3.11). A job given up still writes operation.failed.
+	Immediate bool
 }
 
 type location struct {
@@ -64,6 +68,7 @@ func (s *Service) ModifyLabels(ctx context.Context, m Modify) (*Result, error) {
 		}
 	}
 	return s.run(ctx, m.UserID, m.ThreadIDs, m.MessageIDs, m.Origin, func(ctx context.Context, tx pgx.Tx, b *builder) error {
+		b.immediate, b.noUndo = m.Immediate, b.noUndo || m.Immediate
 		return b.modify(ctx, tx, m.Add, m.Remove)
 	})
 }
@@ -117,6 +122,8 @@ type builder struct {
 	// noUndo: the change is not an undoable operation (waking a snoozed
 	// thread); no operations row is written and OperationID stays empty.
 	noUndo bool
+	// immediate: folder moves without the undo window (filters).
+	immediate bool
 }
 
 func (b *builder) add(p mail.OpPayload, msgID, from int64, delay time.Duration) {
@@ -354,6 +361,9 @@ func (b *builder) modify(ctx context.Context, tx pgx.Tx, add, remove []LabelRef)
 		return err
 	}
 	window := b.s.undoWindow
+	if b.immediate {
+		window = 0
+	}
 	move := func(m *msgInfo, from location, role string, folderID int64, extraAdd, extraRemove []string) {
 		b.add(mail.OpPayload{Op: mail.OpMove, ToRole: role, ToFolderID: folderID, Add: extraAdd, Remove: extraRemove}, m.id, from.folderID, window)
 		b.inv = append(b.inv, invItem{MessageID: m.id, MoveTo: from.folderID, ExpectFolder: folderID, ExpectRole: role,

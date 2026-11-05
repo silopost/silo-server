@@ -19,8 +19,8 @@
 // publishes them after commit is a separate component.
 //
 // Step 6 of 3.5.7 (waking a snoozed thread) queues snooze_wake (run by the ops
-// package); step 7 (filters) is not implemented yet; IngestBatch marks the
-// place for it.
+// package); step 7 (filters) queues filter_eval (run by the filters
+// package).
 package mail
 
 import (

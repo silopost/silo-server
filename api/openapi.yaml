@@ -376,6 +376,178 @@ components:
         value:
           description: The value at the given location
       type: object
+    Filter:
+      additionalProperties: false
+      properties:
+        accountId:
+          examples:
+            - acc_1
+          type: string
+        actions:
+          $ref: "#/components/schemas/FilterActions"
+        createdAt:
+          format: date-time
+          type: string
+        criteria:
+          description: Query in the search syntax, as written.
+          examples:
+            - from:newsletter@x.com has:attachment
+          type: string
+        criteriaNormalized:
+          description: The criteria as the server parsed them (AST.String()).
+          type: string
+        enabled:
+          type: boolean
+        id:
+          examples:
+            - f_7
+          type: string
+        name:
+          description: Optional name given by the user (may be empty).
+          type: string
+        position:
+          description: 0-based order of evaluation within the account.
+          format: int64
+          type: integer
+        updatedAt:
+          format: date-time
+          type: string
+      required:
+        - id
+        - accountId
+        - name
+        - criteria
+        - criteriaNormalized
+        - actions
+        - enabled
+        - position
+        - createdAt
+        - updatedAt
+      type: object
+    FilterActions:
+      additionalProperties: false
+      properties:
+        addLabelIds:
+          description: l_ ids of user labels of the filter's account (IMAP keywords on the server).
+          items:
+            type: string
+          type:
+            - array
+            - "null"
+        archive:
+          description: "Skip the inbox: -INBOX, a move to Archive on the server."
+          type: boolean
+        forwardTo:
+          description: Send a copy to this address at once (no undo-send window); new mail only, never the account's own mail.
+          format: email
+          type:
+            - string
+            - "null"
+        important:
+          description: Mark as important (IMPORTANT, $Important).
+          type: boolean
+        markRead:
+          description: Mark as read (\Seen).
+          type: boolean
+        star:
+          description: Star (\Flagged).
+          type: boolean
+        trash:
+          description: Move to Trash; cannot be combined with archive.
+          type: boolean
+      required:
+        - archive
+        - markRead
+        - star
+        - important
+        - addLabelIds
+        - trash
+        - forwardTo
+      type: object
+    FilterActionsInput:
+      additionalProperties: false
+      properties:
+        addLabelIds:
+          items:
+            type: string
+          maxItems: 20
+          type:
+            - array
+            - "null"
+        archive:
+          type: boolean
+        forwardTo:
+          description: "null or absent: no forward."
+          maxLength: 254
+          type: string
+        important:
+          type: boolean
+        markRead:
+          type: boolean
+        star:
+          type: boolean
+        trash:
+          type: boolean
+      type: object
+    FilterApplyResult:
+      additionalProperties: false
+      properties:
+        jobId:
+          description: The background job; filter.applied is sent when it is done.
+          examples:
+            - j_k2
+          type: string
+        matchedEstimate:
+          description: Conversations the criteria match now; null when counting took too long.
+          format: int64
+          type:
+            - integer
+            - "null"
+      required:
+        - jobId
+        - matchedEstimate
+      type: object
+    FilterBody:
+      additionalProperties: false
+      properties:
+        accountId:
+          description: "POST: the account (the active one when omitted). PUT: ignored, a filter keeps its account."
+          type: string
+        actions:
+          $ref: "#/components/schemas/FilterActionsInput"
+          description: At least one action.
+        criteria:
+          description: Query in the search syntax; 422 invalid_query as in search, 422 invalid_filter when it matches everything (only in:anywhere).
+          maxLength: 1000
+          minLength: 1
+          type: string
+        enabled:
+          description: Default true.
+          type: boolean
+        name:
+          maxLength: 100
+          type: string
+        position:
+          description: "0-based place in the account's list (the others shift); POST: the end when omitted, PUT: unchanged when omitted. This is how filters are reordered."
+          format: int64
+          minimum: 0
+          type: integer
+      required:
+        - criteria
+        - actions
+      type: object
+    FiltersOutputBody:
+      additionalProperties: false
+      properties:
+        filters:
+          items:
+            $ref: "#/components/schemas/Filter"
+          type:
+            - array
+            - "null"
+      required:
+        - filters
+      type: object
     Folder:
       additionalProperties: false
       properties:
@@ -2791,7 +2963,7 @@ paths:
             text/event-stream:
               schema:
                 type: string
-          description: "A Server-Sent Events stream. Each event has id (sequence number), event (type) and data (JSON); types: message.new, thread.updated, thread.deleted, thread.merged, label.counts, label.changed, operation.failed, account.status, account.sync_progress, account.error, resync. Events caused by a request that carried X-Silo-Client have origin set to that id."
+          description: "A Server-Sent Events stream. Each event has id (sequence number), event (type) and data (JSON); types: message.new, thread.updated, thread.deleted, thread.merged, label.counts, label.changed, operation.failed, filter.applied ({filterId, accountId, messages, threads}: POST /filters/{id}/apply is done), settings.updated ({updatedAt}: reload GET /settings), account.status, account.sync_progress, account.error, resync. Events caused by a request that carried X-Silo-Client have origin set to that id."
         "401":
           content:
             application/problem+json:
@@ -2876,6 +3048,353 @@ paths:
       summary: Events after a sequence number (fallback for /events)
       tags:
         - events
+  /filters:
+    get:
+      description: In the order they are evaluated (position).
+      operationId: listFilters
+      parameters:
+        - description: Account; the active account when omitted.
+          explode: false
+          in: query
+          name: accountId
+          schema:
+            description: Account; the active account when omitted.
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FiltersOutputBody"
+          description: OK
+        "401":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Unauthorized
+        "404":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Not Found
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Unprocessable Entity
+        "500":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Internal Server Error
+      security:
+        - cookieAuth: []
+        - bearerAuth: []
+      summary: List the filters of an account
+      tags:
+        - filters
+    post:
+      description: "Criteria are a query of the search syntax, evaluated on the server only (plan 2.6, 3.11) on new mail arriving in INBOX after the account went live; POST /filters/{id}/apply runs it on existing mail. Actions run as write-back operations without the undo window. 422: invalid_query (criteria), invalid_filter (no action, archive with trash, criteria matching everything, bad forwardTo), invalid_label (addLabelIds not user labels of the account)."
+      operationId: createFilter
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/FilterBody"
+        required: true
+      responses:
+        "201":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Filter"
+          description: Created
+        "400":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Bad Request
+        "401":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Unauthorized
+        "403":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Forbidden
+        "404":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Not Found
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Unprocessable Entity
+        "500":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Internal Server Error
+      security:
+        - cookieAuth: []
+          csrfHeader: []
+        - bearerAuth: []
+      summary: Create a filter
+      tags:
+        - filters
+  /filters/{id}:
+    delete:
+      operationId: deleteFilter
+      parameters:
+        - description: f_ id of the filter.
+          in: path
+          name: id
+          required: true
+          schema:
+            description: f_ id of the filter.
+            type: string
+        - description: Client id, echoed as origin in the events it causes.
+          in: header
+          name: X-Silo-Client
+          schema:
+            description: Client id, echoed as origin in the events it causes.
+            type: string
+      responses:
+        "204":
+          description: No Content
+        "401":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Unauthorized
+        "403":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Forbidden
+        "404":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Not Found
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Unprocessable Entity
+        "500":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Internal Server Error
+      security:
+        - cookieAuth: []
+          csrfHeader: []
+        - bearerAuth: []
+      summary: Delete a filter
+      tags:
+        - filters
+    get:
+      operationId: getFilter
+      parameters:
+        - description: f_ id of the filter.
+          in: path
+          name: id
+          required: true
+          schema:
+            description: f_ id of the filter.
+            type: string
+        - description: Client id, echoed as origin in the events it causes.
+          in: header
+          name: X-Silo-Client
+          schema:
+            description: Client id, echoed as origin in the events it causes.
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Filter"
+          description: OK
+        "401":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Unauthorized
+        "404":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Not Found
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Unprocessable Entity
+        "500":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Internal Server Error
+      security:
+        - cookieAuth: []
+        - bearerAuth: []
+      summary: Get a filter
+      tags:
+        - filters
+    put:
+      description: A full replacement (absent actions are off); position moves the filter within its account. Errors as in POST.
+      operationId: updateFilter
+      parameters:
+        - description: f_ id of the filter.
+          in: path
+          name: id
+          required: true
+          schema:
+            description: f_ id of the filter.
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/FilterBody"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Filter"
+          description: OK
+        "400":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Bad Request
+        "401":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Unauthorized
+        "403":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Forbidden
+        "404":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Not Found
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Unprocessable Entity
+        "500":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Internal Server Error
+      security:
+        - cookieAuth: []
+          csrfHeader: []
+        - bearerAuth: []
+      summary: Replace a filter
+      tags:
+        - filters
+  /filters/{id}/apply:
+    post:
+      description: "Queues the job filter_apply: the messages of the account matching the criteria now (the same AST as search, as SQL; Spam and Trash left out unless the criteria name in:spam, in:trash or in:anywhere; drafts left out) get the actions in batches of 500, as operations without undo (thread.updated and label.counts as for modify). forwardTo is not applied to existing mail. When done, the event filter.applied {filterId, accountId, messages, threads} is sent. A disabled filter can be applied too."
+      operationId: applyFilter
+      parameters:
+        - description: f_ id of the filter.
+          in: path
+          name: id
+          required: true
+          schema:
+            description: f_ id of the filter.
+            type: string
+        - description: Client id, echoed as origin in the events it causes.
+          in: header
+          name: X-Silo-Client
+          schema:
+            description: Client id, echoed as origin in the events it causes.
+            type: string
+      responses:
+        "202":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FilterApplyResult"
+          description: Accepted
+        "401":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Unauthorized
+        "403":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Forbidden
+        "404":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Not Found
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Unprocessable Entity
+        "500":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Internal Server Error
+      security:
+        - cookieAuth: []
+          csrfHeader: []
+        - bearerAuth: []
+      summary: Apply a filter to existing mail
+      tags:
+        - filters
   /labels:
     get:
       description: System labels (plus the pseudo label UNREAD), folder labels and user labels, with threadsTotal and threadsUnread (threads with unread mail).

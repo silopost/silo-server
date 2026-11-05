@@ -80,7 +80,10 @@ type SendParams struct {
 	// SendAt schedules the send; a time before the end of the undo window
 	// (or nil) sends when the window ends.
 	SendAt *time.Time
-	Origin string
+	// Immediate sends without the undo-send window (send_at = now): the
+	// forward action of a filter (plan 3.11).
+	Immediate bool
+	Origin    string
 }
 
 // SendResult is the queued send.
@@ -146,6 +149,9 @@ WHERE d.message_id = $1 AND d.user_id = $2 FOR UPDATE OF d`, p.ID, p.UserID).Sca
 		}
 		now := time.Now()
 		sendAt := now.Add(time.Duration(undo) * time.Second)
+		if p.Immediate {
+			sendAt = now
+		}
 		scheduled := false
 		if p.SendAt != nil {
 			if p.SendAt.After(now.Add(maxSchedule)) {
@@ -357,4 +363,29 @@ const AutocompleteLimit = 8
 // To/Cc of sent messages) and by sends from Silo.
 func (s *Service) Autocomplete(ctx context.Context, userID int64, q string) ([]Contact, error) {
 	return mail.SuggestContacts(ctx, s.o.Pool, userID, q, AutocompleteLimit)
+}
+
+// Forward sends a copy of a message to one address at once, without the
+// undo-send window: the forward action of a filter (plan 3.11). It is the
+// compose path (a draft in forward mode, prefilled with the text of the
+// original, addressed to `to`, then sent with Immediate), so the message is
+// built, sent, saved in Sent and counted like any other. A draft left
+// behind by a failed step is removed.
+func (s *Service) Forward(ctx context.Context, userID, messageID int64, to, origin string) (int64, error) {
+	d, err := s.Create(ctx, CreateParams{UserID: userID, ReplyTo: messageID, Mode: ModeForward, Origin: origin})
+	if err != nil {
+		return 0, err
+	}
+	_, err = s.Update(ctx, UpdateParams{UserID: userID, ID: d.ID, Version: d.Version, To: []mail.Address{{Email: to}},
+		Subject: d.Subject, BodyHTML: d.BodyHTML, Origin: origin})
+	if err == nil {
+		var r *SendResult
+		if r, err = s.Send(ctx, SendParams{UserID: userID, ID: d.ID, Immediate: true, Origin: origin}); err == nil {
+			return r.OutboundID, nil
+		}
+	}
+	if derr := s.Delete(ctx, userID, d.ID, origin); derr != nil && !errors.Is(derr, ErrNotFound) {
+		return 0, errors.Join(err, derr)
+	}
+	return 0, err
 }

@@ -162,9 +162,9 @@ func joinAddrs(lists ...[]Address) string {
 //
 // It is idempotent: ingesting the same batch again changes nothing but the
 // flags and modseq of existing locations. Step 6 (a new message wakes a
-// snoozed thread) is snoozeIngest; step 7 (filters) of 3.5.7 is not
-// implemented yet and belongs between the label derivation and the thread
-// recompute below.
+// snoozed thread) is snoozeIngest; step 7 (filters) is filterIngest, which
+// queues filter_eval for new INBOX messages (the filters package applies the
+// actions as operations without undo, plan 3.11).
 func IngestBatch(ctx context.Context, db DB, accountID, folderID int64, msgs []FetchedMessage) (*IngestResult, error) {
 	res := &IngestResult{}
 	if len(msgs) == 0 {
@@ -319,7 +319,13 @@ ON CONFLICT (folder_id, uid) DO UPDATE SET
 	}
 	threads = uniqueSorted(threads)
 
-	if err := snoozeIngest(ctx, db, folder.role, newIDs, threads); err != nil {
+	// Step 7 before step 6: messages handed to filters wake a snoozed thread
+	// only if the filters leave them in INBOX (filter_eval does it).
+	filtered, err := filterIngest(ctx, db, accountID, folder.role, newIDs)
+	if err != nil {
+		return nil, err
+	}
+	if err := snoozeIngest(ctx, db, folder.role, withoutIDs(newIDs, filtered), threads); err != nil {
 		return nil, err
 	}
 	if len(newIDs) > 0 {
