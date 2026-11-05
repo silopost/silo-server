@@ -102,10 +102,12 @@ func validRecipient(e string) bool {
 // Send queues a draft for sending (plan 3.9 step 1), in one transaction: the
 // message is built (mail.BuildSendMIME: Bcc only in the envelope) and stored
 // as the local message's body (blob kind local), the pending save to the
-// Drafts folder is cancelled, the message turns SCHEDULED (its drafts row
-// stays, so that cancel restores the same content and version), and an
-// outbound row (queued) with a send job at send_at = now + undo_send_seconds
-// (or sendAt) is written with thread.updated and outbound.status.
+// Drafts folder is cancelled (a scheduled send, sendAt beyond the undo
+// window, also removes the copy already in Drafts), the message turns
+// SCHEDULED (its drafts row stays, so that cancel restores the same content
+// and version), and an outbound row (queued) with a send job at send_at =
+// now + undo_send_seconds (or sendAt) is written with thread.updated and
+// outbound.status.
 func (s *Service) Send(ctx context.Context, p SendParams) (*SendResult, error) {
 	var accountID int64
 	err := s.o.Pool.QueryRow(ctx, `SELECT account_id FROM drafts WHERE message_id = $1 AND user_id = $2`, p.ID, p.UserID).Scan(&accountID)
@@ -144,12 +146,13 @@ WHERE d.message_id = $1 AND d.user_id = $2 FOR UPDATE OF d`, p.ID, p.UserID).Sca
 		}
 		now := time.Now()
 		sendAt := now.Add(time.Duration(undo) * time.Second)
+		scheduled := false
 		if p.SendAt != nil {
 			if p.SendAt.After(now.Add(maxSchedule)) {
 				return invalid("sendAt is more than a year ahead")
 			}
 			if p.SendAt.After(sendAt) {
-				sendAt = *p.SendAt
+				sendAt, scheduled = *p.SendAt, true
 			}
 		}
 		m, err := mail.BuildSendMIME(ctx, tx, s.o.Blobs, p.ID, sendAt)
@@ -191,6 +194,24 @@ ON CONFLICT (sha256) DO UPDATE SET ref_count = blobs.ref_count + 1`, sha, size);
 		// The copy in Drafts is not updated any more; it is removed once sent.
 		if _, err := tx.Exec(ctx, `DELETE FROM jobs WHERE id IN (`+unclaimedAppend+`)`, p.ID); err != nil {
 			return err
+		}
+		if scheduled {
+			// A scheduled message is local until it leaves (plan 3.9 step 3):
+			// its copy in the Drafts folder goes now, so that no other client
+			// sends it from there. Cancel saves the draft there again
+			// (server_synced_version 0 makes the copy outdated).
+			folderID, err := removeServerCopy(ctx, tx, accountID, p.ID)
+			if err != nil {
+				return err
+			}
+			if folderID != 0 {
+				if _, err := tx.Exec(ctx, `DELETE FROM message_locations WHERE folder_id = $1 AND message_id = $2`, folderID, p.ID); err != nil {
+					return err
+				}
+			}
+			if _, err := tx.Exec(ctx, `UPDATE drafts SET server_synced_version = 0 WHERE message_id = $1`, p.ID); err != nil {
+				return err
+			}
 		}
 		if err := tx.QueryRow(ctx, `
 INSERT INTO outbound (user_id, account_id, message_id, status, send_at)

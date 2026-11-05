@@ -31,9 +31,11 @@ type Thread struct {
 	HasAttachments bool          `json:"hasAttachments"`
 	LabelIDs       []string      `json:"labelIds" doc:"System labels (INBOX, STARRED, ..., UNREAD) and l_ ids of user/folder labels."`
 	Participants   []Participant `json:"participants"`
-	SnoozedUntil   *time.Time    `json:"snoozedUntil"`
+	SnoozedUntil   *time.Time    `json:"snoozedUntil" doc:"Wake time of a snoozed thread (POST /threads/{id}/snooze); null when not snoozed."`
 	PendingSync    bool          `json:"pendingSync" doc:"Local changes still waiting for the mail server."`
 	DraftID        *string       `json:"draftId" example:"d_4k2" doc:"d_ id of the newest draft in the thread (a message with the DRAFT label), for opening it in compose; null without one."`
+	ScheduledAt    *time.Time    `json:"scheduledAt" doc:"When the queued send of the thread leaves (a scheduled send, or the undo-send window): outbound send_at while the send is queued or sending and still ahead; null otherwise. The Scheduled list is GET /threads?labelId=SCHEDULED."`
+	OutboundID     *string       `json:"outboundId" example:"ob_3k" doc:"ob_ id of that send, for POST /outbound/{id}/cancel; null when scheduledAt is null."`
 }
 
 // threadOf maps a thread of the ops/mail layer to the API shape; GET /threads
@@ -54,6 +56,10 @@ func threadOf(t ops.Thread) Thread {
 	if t.DraftID != 0 {
 		s := formatID("d_", t.DraftID)
 		out.DraftID = &s
+	}
+	if t.OutboundID != 0 && t.ScheduledAt != nil {
+		s := formatID("ob_", t.OutboundID)
+		out.ScheduledAt, out.OutboundID = t.ScheduledAt, &s
 	}
 	return out
 }

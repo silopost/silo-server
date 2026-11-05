@@ -254,7 +254,7 @@ func (v *View) ListThreads(ctx context.Context, p ListParams) (*ThreadPage, erro
 	for _, r := range rows {
 		page.Threads = append(page.Threads, threadOf(r, keys))
 	}
-	if err := ops.FillDraftIDs(ctx, v.pool, page.Threads); err != nil {
+	if err := ops.FillThreadExtras(ctx, v.pool, page.Threads); err != nil {
 		return nil, err
 	}
 	page.ResultSizeEstimate, err = v.estimate(ctx, p)

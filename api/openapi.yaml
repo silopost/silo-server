@@ -1535,6 +1535,13 @@ components:
         messageCount:
           format: int64
           type: integer
+        outboundId:
+          description: ob_ id of that send, for POST /outbound/{id}/cancel; null when scheduledAt is null.
+          examples:
+            - ob_3k
+          type:
+            - string
+            - "null"
         participants:
           items:
             $ref: "#/components/schemas/Participant"
@@ -1544,9 +1551,16 @@ components:
         pendingSync:
           description: Local changes still waiting for the mail server.
           type: boolean
+        scheduledAt:
+          description: "When the queued send of the thread leaves (a scheduled send, or the undo-send window): outbound send_at while the send is queued or sending and still ahead; null otherwise. The Scheduled list is GET /threads?labelId=SCHEDULED."
+          format: date-time
+          type:
+            - string
+            - "null"
         snippet:
           type: string
         snoozedUntil:
+          description: Wake time of a snoozed thread (POST /threads/{id}/snooze); null when not snoozed.
           format: date-time
           type:
             - string
@@ -1570,6 +1584,8 @@ components:
         - snoozedUntil
         - pendingSync
         - draftId
+        - scheduledAt
+        - outboundId
       type: object
     ThreadDetail:
       additionalProperties: false
@@ -1592,6 +1608,23 @@ components:
           type:
             - array
             - "null"
+        outboundId:
+          description: "As in the thread list: ob_ id of that send, for POST /outbound/{id}/cancel."
+          type:
+            - string
+            - "null"
+        scheduledAt:
+          description: "As in the thread list: when the queued send of the thread leaves; null otherwise."
+          format: date-time
+          type:
+            - string
+            - "null"
+        snoozedUntil:
+          description: As in the thread list.
+          format: date-time
+          type:
+            - string
+            - "null"
         subject:
           type: string
       required:
@@ -1599,6 +1632,9 @@ components:
         - accountId
         - subject
         - labelIds
+        - snoozedUntil
+        - scheduledAt
+        - outboundId
         - messages
       type: object
     ThreadList:

@@ -36,6 +36,11 @@ type Thread struct {
 	// DraftID is the newest message of the thread with the DRAFT label (0: none);
 	// its d_ id opens it in compose.
 	DraftID int64
+	// ScheduledAt and OutboundID: the send of the thread waiting for its time
+	// (outbound queued or sending with send_at ahead; a scheduled send or the
+	// undo-send window), the earliest one; nil and 0 without one.
+	ScheduledAt *time.Time
+	OutboundID  int64
 }
 
 // LoadThreads returns the threads of the user, in id order.
@@ -76,7 +81,15 @@ GROUP BY t.id ORDER BY t.id`, ids, userID)
 		return nil, err
 	}
 	rows.Close()
-	return out, FillDraftIDs(ctx, db, out)
+	return out, FillThreadExtras(ctx, db, out)
+}
+
+// FillThreadExtras sets DraftID, ScheduledAt and OutboundID of the threads.
+func FillThreadExtras(ctx context.Context, db mail.DB, ts []Thread) error {
+	if err := FillDraftIDs(ctx, db, ts); err != nil {
+		return err
+	}
+	return fillScheduled(ctx, db, ts)
 }
 
 // FillDraftIDs sets DraftID of the threads that have the DRAFT label: the
@@ -109,6 +122,40 @@ ORDER BY m.thread_id, m.internal_date DESC, m.id DESC`, ids)
 			return err
 		}
 		ts[idx[tid]].DraftID = mid
+	}
+	return rows.Err()
+}
+
+// fillScheduled sets ScheduledAt and OutboundID of the threads with the
+// SCHEDULED label (one query for all), for the "Scheduled" list.
+func fillScheduled(ctx context.Context, db mail.DB, ts []Thread) error {
+	idx := map[int64]int{}
+	var ids []int64
+	for i, t := range ts {
+		if slices.Contains(t.SystemLabels, mail.LabelScheduled) {
+			idx[t.ID] = i
+			ids = append(ids, t.ID)
+		}
+	}
+	if len(ids) == 0 {
+		return nil
+	}
+	rows, err := db.Query(ctx, `
+SELECT DISTINCT ON (m.thread_id) m.thread_id, o.id, o.send_at FROM outbound o
+JOIN messages m ON m.id = o.message_id
+WHERE m.thread_id = ANY($1) AND o.status IN ('queued', 'sending') AND o.send_at > now()
+ORDER BY m.thread_id, o.send_at, o.id`, ids)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var tid, oid int64
+		var at time.Time
+		if err := rows.Scan(&tid, &oid, &at); err != nil {
+			return err
+		}
+		ts[idx[tid]].ScheduledAt, ts[idx[tid]].OutboundID = &at, oid
 	}
 	return rows.Err()
 }

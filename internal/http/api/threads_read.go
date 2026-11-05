@@ -87,11 +87,14 @@ type Message struct {
 
 // ThreadDetail is the answer of GET /threads/{id}.
 type ThreadDetail struct {
-	ID        string    `json:"id" example:"t_8f3k2"`
-	AccountID string    `json:"accountId"`
-	Subject   string    `json:"subject"`
-	LabelIDs  []string  `json:"labelIds"`
-	Messages  []Message `json:"messages"`
+	ID           string     `json:"id" example:"t_8f3k2"`
+	AccountID    string     `json:"accountId"`
+	Subject      string     `json:"subject"`
+	LabelIDs     []string   `json:"labelIds"`
+	SnoozedUntil *time.Time `json:"snoozedUntil" doc:"As in the thread list."`
+	ScheduledAt  *time.Time `json:"scheduledAt" doc:"As in the thread list: when the queued send of the thread leaves; null otherwise."`
+	OutboundID   *string    `json:"outboundId" doc:"As in the thread list: ob_ id of that send, for POST /outbound/{id}/cancel."`
+	Messages     []Message  `json:"messages"`
 }
 
 type threadIDInput struct {
@@ -220,6 +223,7 @@ func (d *deps) registerThreadViews(a huma.API) {
 		th := threadOf(t.Thread)
 		out := &threadDetailOutput{Body: ThreadDetail{
 			ID: th.ID, AccountID: th.AccountID, Subject: th.Subject, LabelIDs: th.LabelIDs,
+			SnoozedUntil: th.SnoozedUntil, ScheduledAt: th.ScheduledAt, OutboundID: th.OutboundID,
 			Messages: make([]Message, 0, len(t.Messages)),
 		}}
 		for _, m := range t.Messages {
