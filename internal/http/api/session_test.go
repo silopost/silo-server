@@ -20,6 +20,7 @@ import (
 	"github.com/silopost/silo-server/internal/auth"
 	"github.com/silopost/silo-server/internal/config"
 	"github.com/silopost/silo-server/internal/http/api"
+	"github.com/silopost/silo-server/internal/ops"
 	"github.com/silopost/silo-server/internal/secrets"
 	"github.com/silopost/silo-server/internal/store"
 	"github.com/silopost/silo-server/internal/store/sqlcgen"
@@ -118,6 +119,7 @@ func (e *env) router(cfg config.Config, ao auth.Options) http.Handler {
 		Auth:      auth.New(ao),
 		Accounts:  accounts.New(accounts.Options{Pool: e.pool, Keys: e.ring, Config: cfg}),
 		Sync:      silosync.NewService(e.pool),
+		Ops:       ops.NewService(e.pool, 10*time.Second),
 		PublicURL: publicURL,
 	})
 	return r
