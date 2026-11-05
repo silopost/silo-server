@@ -118,7 +118,8 @@ func newEnv(t *testing.T) *env {
 	if err != nil {
 		t.Fatal(err)
 	}
-	e.drafts = drafts.New(drafts.Options{Pool: pool, Blobs: blobs, MaxUploadBytes: testMaxUpload, SyncDelay: time.Minute})
+	e.drafts = drafts.New(drafts.Options{Pool: pool, Blobs: blobs, MaxUploadBytes: testMaxUpload, SyncDelay: time.Minute,
+		Keys: ring, InsecureTransport: true, SendRetry: []time.Duration{time.Second, 2 * time.Second}})
 	e.web = e.router(e.cfg, auth.Options{MinLoginDuration: 20 * time.Millisecond, LoginLimit: auth.Limit{Burst: 1000, Every: time.Second}})
 	return e
 }

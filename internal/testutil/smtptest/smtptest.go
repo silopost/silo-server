@@ -1,6 +1,7 @@
-// Package smtptest provides a minimal in-process SMTP server for tests of the
-// connection check: it greets, answers EHLO and AUTH PLAIN against one
-// fixed credential pair and quits. It accepts no mail and offers no STARTTLS.
+// Package smtptest provides in-process SMTP servers for tests: Start is a
+// minimal server for the connection check (it greets, answers EHLO and AUTH
+// PLAIN against one fixed credential pair and quits; it accepts no mail and
+// offers no STARTTLS), StartServer accepts mail (server.go).
 package smtptest
 
 import (

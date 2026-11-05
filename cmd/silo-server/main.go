@@ -143,6 +143,7 @@ func serve(ctx context.Context, args []string) error {
 	view := mailview.New(pool, blobs, syncMgr)
 	draftSvc := drafts.New(drafts.Options{
 		Pool: pool, Blobs: blobs, MaxUploadBytes: int64(cfg.MaxAttachmentBytes), Logger: logger,
+		Keys: ring, InsecureTransport: cfg.AllowInsecureTransport,
 		OpenRaw: func(ctx context.Context, userID, messageID int64) (io.ReadCloser, error) {
 			r, err := view.OpenRaw(ctx, userID, messageID)
 			if err != nil {

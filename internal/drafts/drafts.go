@@ -3,7 +3,7 @@
 // concurrency and mirrored on a local message (DRAFT label, thread lists),
 // and the throttled write-back of the current version to the server's Drafts
 // folder (an imap_op append job executed by the sync engine). Sending (SMTP,
-// outbound) builds on mail.BuildDraftMIME and is not part of this package yet.
+// outbound) is in send.go (API side) and smtp.go (the send job).
 package drafts
 
 import (
@@ -28,6 +28,7 @@ import (
 	"github.com/silopost/silo-server/internal/blob"
 	"github.com/silopost/silo-server/internal/mail"
 	"github.com/silopost/silo-server/internal/ops"
+	"github.com/silopost/silo-server/internal/secrets"
 )
 
 // Errors of the package.
@@ -64,7 +65,17 @@ type Options struct {
 	// the mail server when needed (mailview.View.OpenRaw). It is used to
 	// open a draft written by another client.
 	OpenRaw func(ctx context.Context, userID, messageID int64) (io.ReadCloser, error)
-	Logger  *slog.Logger
+	// Keys decrypt the SMTP password of an account (the send job).
+	Keys *secrets.Keyring
+	// InsecureTransport is SILO_ALLOW_INSECURE_TRANSPORT: SMTP without TLS
+	// (smtp_tls none, or a server without STARTTLS) and unverified certificates.
+	InsecureTransport bool
+	// SendRetry are the delays after transient SMTP failures; one more failure
+	// fails the send [DefaultSendRetry].
+	SendRetry []time.Duration
+	// SMTPTimeout bounds one delivery attempt [2m].
+	SMTPTimeout time.Duration
+	Logger      *slog.Logger
 }
 
 // Service implements the drafts and uploads endpoints.
@@ -77,6 +88,12 @@ type Service struct {
 func New(o Options) *Service {
 	if o.SyncDelay <= 0 {
 		o.SyncDelay = DefaultSyncDelay
+	}
+	if o.SendRetry == nil {
+		o.SendRetry = DefaultSendRetry
+	}
+	if o.SMTPTimeout <= 0 {
+		o.SMTPTimeout = 2 * time.Minute
 	}
 	log := o.Logger
 	if log == nil {
@@ -433,7 +450,7 @@ SELECT d.account_id, m.thread_id, d.to_addrs, d.cc_addrs, d.bcc_addrs, d.subject
        d.server_synced_version > 0 AND NOT EXISTS (
          SELECT 1 FROM message_locations l WHERE l.message_id = d.message_id AND NOT l.flags @> ARRAY['\Deleted'])
 FROM drafts d JOIN messages m ON m.id = d.message_id
-WHERE d.message_id = $1 AND d.user_id = $2`, id, userID).Scan(&d.AccountID, &d.ThreadID, &to, &cc, &bcc, &d.Subject,
+WHERE d.message_id = $1 AND d.user_id = $2 AND `+notSending, id, userID).Scan(&d.AccountID, &d.ThreadID, &to, &cc, &bcc, &d.Subject,
 		&d.BodyHTML, &d.BodyJSON, &d.InReplyTo, &ids, &d.Version, &d.UpdatedAt, &d.SyncedVersion, &d.ServerChanged)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNotFound
@@ -576,7 +593,7 @@ func (s *Service) Update(ctx context.Context, p UpdateParams) (*Draft, error) {
 	}
 
 	var accountID int64
-	err = s.o.Pool.QueryRow(ctx, `SELECT account_id FROM drafts WHERE message_id = $1 AND user_id = $2`, p.ID, p.UserID).Scan(&accountID)
+	err = s.o.Pool.QueryRow(ctx, `SELECT account_id FROM drafts d WHERE message_id = $1 AND user_id = $2 AND `+notSending, p.ID, p.UserID).Scan(&accountID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -591,7 +608,7 @@ func (s *Service) Update(ctx context.Context, p UpdateParams) (*Draft, error) {
 		var from mail.Address
 		err := tx.QueryRow(ctx, `
 SELECT d.version, a.email::text, a.display_name FROM drafts d JOIN accounts a ON a.id = d.account_id
-WHERE d.message_id = $1 AND d.user_id = $2 FOR UPDATE OF d`, p.ID, p.UserID).Scan(&version, &from.Email, &from.Name)
+WHERE d.message_id = $1 AND d.user_id = $2 AND `+notSending+` FOR UPDATE OF d`, p.ID, p.UserID).Scan(&version, &from.Email, &from.Name)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return ErrNotFound
 		}
@@ -691,7 +708,8 @@ func (s *Service) Delete(ctx context.Context, userID, id int64, origin string) e
 	var accountID int64
 	err := s.o.Pool.QueryRow(ctx, `
 SELECT m.account_id FROM messages m
-WHERE m.id = $1 AND m.user_id = $2 AND (EXISTS (SELECT 1 FROM drafts d WHERE d.message_id = m.id) OR EXISTS (
+WHERE m.id = $1 AND m.user_id = $2 AND NOT EXISTS (
+  SELECT 1 FROM outbound o WHERE o.message_id = m.id AND o.status IN ('queued', 'sending', 'sent')) AND (EXISTS (SELECT 1 FROM drafts d WHERE d.message_id = m.id) OR EXISTS (
   SELECT 1 FROM message_labels ml JOIN labels l ON l.id = ml.label_id WHERE ml.message_id = m.id AND l.system_key = 'DRAFT'))`,
 		id, userID).Scan(&accountID)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -704,46 +722,63 @@ WHERE m.id = $1 AND m.user_id = $2 AND (EXISTS (SELECT 1 FROM drafts d WHERE d.m
 		if err := mail.LockAccount(ctx, tx, accountID); err != nil {
 			return err
 		}
-		var draftID string
-		var synced int32
-		err := tx.QueryRow(ctx, `SELECT silo_draft_id, server_synced_version FROM drafts WHERE message_id = $1`, id).Scan(&draftID, &synced)
-		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		var sending bool
+		if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM outbound WHERE message_id = $1 AND status IN ('queued', 'sending', 'sent'))`, id).Scan(&sending); err != nil {
 			return err
 		}
-		var folderID int64
-		var uids []int64
-		if err := tx.QueryRow(ctx, `SELECT id FROM mailbox_folders WHERE account_id = $1 AND role = 'drafts' ORDER BY id LIMIT 1`, accountID).Scan(&folderID); err == nil {
-			r, err := tx.Query(ctx, `SELECT uid FROM message_locations WHERE folder_id = $1 AND message_id = $2`, folderID, id)
-			if err != nil {
-				return err
-			}
-			if uids, err = pgx.CollectRows(r, pgx.RowTo[int64]); err != nil {
-				return err
-			}
-		} else if !errors.Is(err, pgx.ErrNoRows) {
-			return err
+		if sending { // sent meanwhile
+			return ErrNotFound
 		}
-		var claimed bool
-		if err := tx.QueryRow(ctx, `
-SELECT EXISTS (SELECT 1 FROM jobs j JOIN op_messages om ON om.job_id = j.id
-               WHERE om.message_id = $1 AND j.kind = 'imap_op' AND j.status = 'pending' AND j.payload->>'op' = 'append'
-                 AND j.locked_until > now())`, id).Scan(&claimed); err != nil {
+		if _, err := removeServerCopy(ctx, tx, accountID, id); err != nil {
 			return err
-		}
-		if _, err := tx.Exec(ctx, `DELETE FROM jobs WHERE id IN (`+unclaimedAppend+`)`, id); err != nil {
-			return err
-		}
-		if synced > 0 || len(uids) > 0 || claimed {
-			p := mail.OpPayload{Op: mail.OpDeleteDraft, DraftID: draftID, FolderID: folderID}
-			for _, u := range uids {
-				p.UIDs = append(p.UIDs, uint32(u))
-			}
-			payload, _ := json.Marshal(p)
-			if _, err := tx.Exec(ctx, `INSERT INTO jobs (kind, account_id, payload, max_attempts) VALUES ($1, $2, $3, $4)`,
-				ops.JobKind, accountID, payload, ops.MaxAttempts); err != nil {
-				return fmt.Errorf("drafts: enqueue delete: %w", err)
-			}
 		}
 		return mail.DeleteMessages(ctx, tx, accountID, []int64{id}, origin)
 	})
+}
+
+// removeServerCopy cancels the pending save of a draft and, when a copy may
+// be in the server's Drafts folder, enqueues a delete_draft job for it (plan
+// 3.8 step 4: discarded or sent). It returns the Drafts folder (0 if none).
+func removeServerCopy(ctx context.Context, tx pgx.Tx, accountID, id int64) (int64, error) {
+	var draftID string
+	var synced int32
+	err := tx.QueryRow(ctx, `SELECT silo_draft_id, server_synced_version FROM drafts WHERE message_id = $1`, id).Scan(&draftID, &synced)
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return 0, err
+	}
+	var folderID int64
+	var uids []int64
+	if err := tx.QueryRow(ctx, `SELECT id FROM mailbox_folders WHERE account_id = $1 AND role = 'drafts' ORDER BY id LIMIT 1`, accountID).Scan(&folderID); err == nil {
+		r, err := tx.Query(ctx, `SELECT uid FROM message_locations WHERE folder_id = $1 AND message_id = $2`, folderID, id)
+		if err != nil {
+			return 0, err
+		}
+		if uids, err = pgx.CollectRows(r, pgx.RowTo[int64]); err != nil {
+			return 0, err
+		}
+	} else if !errors.Is(err, pgx.ErrNoRows) {
+		return 0, err
+	}
+	var claimed bool
+	if err := tx.QueryRow(ctx, `
+SELECT EXISTS (SELECT 1 FROM jobs j JOIN op_messages om ON om.job_id = j.id
+               WHERE om.message_id = $1 AND j.kind = 'imap_op' AND j.status = 'pending' AND j.payload->>'op' = 'append'
+                 AND j.locked_until > now())`, id).Scan(&claimed); err != nil {
+		return 0, err
+	}
+	if _, err := tx.Exec(ctx, `DELETE FROM jobs WHERE id IN (`+unclaimedAppend+`)`, id); err != nil {
+		return 0, err
+	}
+	if synced > 0 || len(uids) > 0 || claimed {
+		p := mail.OpPayload{Op: mail.OpDeleteDraft, DraftID: draftID, FolderID: folderID}
+		for _, u := range uids {
+			p.UIDs = append(p.UIDs, uint32(u))
+		}
+		payload, _ := json.Marshal(p)
+		if _, err := tx.Exec(ctx, `INSERT INTO jobs (kind, account_id, payload, max_attempts) VALUES ($1, $2, $3, $4)`,
+			ops.JobKind, accountID, payload, ops.MaxAttempts); err != nil {
+			return 0, fmt.Errorf("drafts: enqueue delete: %w", err)
+		}
+	}
+	return folderID, nil
 }

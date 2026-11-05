@@ -80,9 +80,10 @@ WHERE b.sha256 = c.sha`, shas)
 	}
 }
 
-// RegisterJobs binds blob_gc to the job worker. The periodic job also runs
+// RegisterJobs binds send and blob_gc to the job worker. The periodic job also runs
 // the extra clean-up steps (e.g. ops.Service.PurgeOperations) after BlobGC.
 func (s *Service) RegisterJobs(w *worker.Worker, extra ...func(ctx context.Context, now time.Time) error) {
+	w.Register(JobSend, s.runSend)
 	w.Register(JobBlobGC, func(ctx context.Context, _ worker.Job) error {
 		now := time.Now()
 		r, err := s.BlobGC(ctx, now)

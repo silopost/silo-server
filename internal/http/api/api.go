@@ -118,6 +118,7 @@ func Mount(root chi.Router, o Options) huma.API {
 		d.registerThreads(a)
 		d.registerOperations(a)
 		d.registerDrafts(a)
+		d.registerSend(a)
 		d.registerLabels(a)
 		d.registerThreadViews(a)
 		d.registerContent(a)

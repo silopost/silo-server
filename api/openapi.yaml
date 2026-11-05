@@ -148,6 +148,34 @@ components:
       required:
         - password
       type: object
+    ContactSuggestion:
+      additionalProperties: false
+      properties:
+        email:
+          examples:
+            - jan@firma.pl
+          type: string
+        name:
+          examples:
+            - Jan Kowalski
+          type: string
+      required:
+        - email
+        - name
+      type: object
+    ContactSuggestions:
+      additionalProperties: false
+      properties:
+        contacts:
+          items:
+            $ref: "#/components/schemas/ContactSuggestion"
+          maxItems: 8
+          type:
+            - array
+            - "null"
+      required:
+        - contacts
+      type: object
     CreateAccount:
       additionalProperties: false
       properties:
@@ -961,6 +989,36 @@ components:
             - full
             - rebuild
           type: string
+      type: object
+    SendDraftBody:
+      additionalProperties: false
+      properties:
+        sendAt:
+          description: "Schedule the send (at most a year ahead). Omitted or earlier than the end of the undo window: the message leaves when the window ends."
+          format: date-time
+          type: string
+      type: object
+    SendResult:
+      additionalProperties: false
+      properties:
+        messageId:
+          description: The message, labelled SCHEDULED until it is sent, then SENT.
+          examples:
+            - m_4k2
+          type: string
+        outboundId:
+          description: For POST /outbound/{id}/cancel and the outbound.status events.
+          examples:
+            - ob_9
+          type: string
+        undoUntil:
+          description: The message leaves at this time; until then it can be cancelled.
+          format: date-time
+          type: string
+      required:
+        - messageId
+        - outboundId
+        - undoUntil
       type: object
     SessionBody:
       additionalProperties: false
@@ -2008,6 +2066,58 @@ paths:
       summary: Attachment bytes
       tags:
         - messages
+  /contacts/autocomplete:
+    get:
+      description: "Up to 8 addresses of the user whose address, name or a word of the name starts with q (case-insensitive): the most written to first, then the most recent. Learnt from received and sent mail."
+      operationId: autocompleteContacts
+      parameters:
+        - description: Start of an address, a name or a word of the name.
+          explode: false
+          in: query
+          name: q
+          required: true
+          schema:
+            description: Start of an address, a name or a word of the name.
+            maxLength: 200
+            minLength: 1
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ContactSuggestions"
+          description: OK
+        "400":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Bad Request
+        "401":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Unauthorized
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Unprocessable Entity
+        "500":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Internal Server Error
+      security:
+        - cookieAuth: []
+        - bearerAuth: []
+      summary: Suggest recipients
+      tags:
+        - drafts
   /drafts:
     post:
       description: "Creates a draft with the DRAFT label: a new message, or with replyToMessageId a reply (reply: the sender or Reply-To; replyAll: also the other recipients without the account) in the thread of that message, or a forward (new thread). Subject (Re:/Fwd:) and quoted body are prefilled. Nothing reaches the mail server before the first PUT."
@@ -2262,6 +2372,89 @@ paths:
           csrfHeader: []
         - bearerAuth: []
       summary: Save a draft (autosave)
+      tags:
+        - drafts
+  /drafts/{id}/send:
+    post:
+      description: "Queues the draft as last saved (save it first). The message is built at once (Bcc only in the envelope) and labelled SCHEDULED; it leaves undoSendSeconds (5, 10, 20 or 30; 5 by default) later, or at sendAt. Until undoUntil, POST /outbound/{id}/cancel brings the draft back. After sending: SENT, a copy in the Sent folder (when the account's sentAppend is on; otherwise the server's own copy is matched by Message-ID), \\Answered or $Forwarded on the original, the copy in Drafts removed. Delivery problems are retried (30 s, 2 min, 10 min, 30 min); a refusal fails the send at once and the message is a draft again (outbound.status event with error). 422 no_recipients / invalid_address, 413 message_too_large (over SILO_MAX_ATTACHMENT_BYTES; the SMTP server's SIZE is checked when sending), 409 send_in_progress."
+      operationId: sendDraft
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            examples:
+              - d_4k2
+            type: string
+        - in: header
+          name: X-Silo-Client
+          schema:
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SendDraftBody"
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SendResult"
+          description: OK
+        "400":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Bad Request
+        "401":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Unauthorized
+        "403":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Forbidden
+        "404":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Not Found
+        "409":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Conflict
+        "413":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Request Entity Too Large
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Unprocessable Entity
+        "500":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Internal Server Error
+      security:
+        - cookieAuth: []
+          csrfHeader: []
+        - bearerAuth: []
+      summary: Send a draft
       tags:
         - drafts
   /events:
@@ -2912,6 +3105,72 @@ paths:
       summary: Undo an operation
       tags:
         - threads
+  /outbound/{id}/cancel:
+    post:
+      description: "Cancels a queued send (undo send, or a scheduled send) before it leaves: nothing reaches the SMTP server and the message is the draft it was (same content and version), returned for the compose window. A send already being delivered or delivered is 409 send_in_progress; a cancelled or failed one returns its draft."
+      operationId: cancelOutbound
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            examples:
+              - ob_9
+            type: string
+        - in: header
+          name: X-Silo-Client
+          schema:
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Draft"
+          description: OK
+        "401":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Unauthorized
+        "403":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Forbidden
+        "404":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Not Found
+        "409":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Conflict
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Unprocessable Entity
+        "500":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Internal Server Error
+      security:
+        - cookieAuth: []
+          csrfHeader: []
+        - bearerAuth: []
+      summary: Undo send
+      tags:
+        - drafts
   /session:
     delete:
       operationId: logout
