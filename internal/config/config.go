@@ -77,7 +77,10 @@ type Config struct {
 	SyncMaxConnectionsPerAcct int           `env:"SILO_SYNC_MAX_CONNECTIONS_PER_ACCOUNT" envDefault:"3"`
 	SyncInitialConcurrency    int           `env:"SILO_SYNC_INITIAL_CONCURRENCY" envDefault:"2"`
 	SyncBackfillRate          ByteRate      `env:"SILO_SYNC_BACKFILL_RATE" envDefault:"5MB/s"`
-	UndoWindow                time.Duration `env:"SILO_UNDO_WINDOW" envDefault:"10s"`
+	// SyncKeywordFolderLimit: distinct keywords a folder keeps (26 = Dovecot
+	// maildir); a label keyword beyond it stays local in that folder. 0 = no limit.
+	SyncKeywordFolderLimit int           `env:"SILO_SYNC_KEYWORD_FOLDER_LIMIT" envDefault:"26"`
+	UndoWindow             time.Duration `env:"SILO_UNDO_WINDOW" envDefault:"10s"`
 
 	WorkerConcurrency int `env:"SILO_WORKER_CONCURRENCY" envDefault:"4"`
 
@@ -170,6 +173,9 @@ func (c Config) ValidateServe() error {
 	}
 	if c.SyncBackfillRate <= 0 {
 		add("SILO_SYNC_BACKFILL_RATE must be > 0")
+	}
+	if c.SyncKeywordFolderLimit < 0 {
+		add("SILO_SYNC_KEYWORD_FOLDER_LIMIT must not be negative")
 	}
 	if c.UndoWindow < 0 {
 		add("SILO_UNDO_WINDOW must not be negative")

@@ -351,6 +351,9 @@ type labelMeta struct {
 	key      string
 	keyword  bool
 	mirrored bool
+	// localIn: folders where the keyword of a mirrored user label is not
+	// kept (label_folder_state; the 26 keywords of a maildir folder).
+	localIn map[int64]bool
 }
 
 func loadLabelMeta(ctx context.Context, db DB, accountIDs []int64) (map[int64]labelMeta, error) {
@@ -370,7 +373,30 @@ FROM labels WHERE account_id = ANY($1)`, accountIDs)
 		}
 		out[id] = m
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	rows.Close()
+	r2, err := db.Query(ctx, `
+SELECT s.label_id, s.folder_id FROM label_folder_state s JOIN labels l ON l.id = s.label_id WHERE l.account_id = ANY($1)`, accountIDs)
+	if err != nil {
+		return nil, fmt.Errorf("mail: load label folder state: %w", err)
+	}
+	defer r2.Close()
+	for r2.Next() {
+		var lid, fid int64
+		if err := r2.Scan(&lid, &fid); err != nil {
+			return nil, err
+		}
+		if m, ok := out[lid]; ok {
+			if m.localIn == nil {
+				m.localIn = map[int64]bool{}
+			}
+			m.localIn[fid] = true
+			out[lid] = m
+		}
+	}
+	return out, r2.Err()
 }
 
 // isManaged reports whether a message_labels row is owned by the derivation:
@@ -498,6 +524,11 @@ func deriveLabels(ctx context.Context, db DB, ids []int64, apply bool) (*labelPl
 			// A keyword-mirrored user label is only removed while the message
 			// is on the server (otherwise there is no flag to judge by).
 			if m.typ == "user" && len(st.locs) == 0 {
+				continue
+			}
+			// Nor while the message is in a folder that cannot keep the keyword:
+			// there the label lives only in message_labels (plan 3.7).
+			if m.typ == "user" && slices.ContainsFunc(st.locs, func(l loc) bool { return m.localIn[l.folderID] }) {
 				continue
 			}
 			plan.delMsg, plan.delLabel = append(plan.delMsg, st.id), append(plan.delLabel, id)

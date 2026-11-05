@@ -49,9 +49,19 @@ func (s *session) prepare(ctx context.Context, f *folder, sel *imap.SelectData) 
 			s.acc.keywordsSupp = kw
 		}
 	}
+	perm := flagStrings(sel.PermanentFlags)
 	reset := f.uidValidity != 0 && f.uidValidity != sel.UIDValidity
 	if f.uidValidity != 0 && !reset && f.phase != "" {
-		return nil
+		// Keep the keyword list current: new labels must not take a keyword
+		// that another client uses (mail.AssignKeyword).
+		if slices.Equal(perm, f.permFlags) {
+			return nil
+		}
+		f.permFlags = perm
+		return s.tx(ctx, func(tx pgx.Tx) error {
+			_, err := tx.Exec(ctx, `UPDATE mailbox_folders SET permanent_flags = $2 WHERE id = $1`, f.id, perm)
+			return err
+		})
 	}
 	phase := "headers"
 	if !reset && !s.acc.initialDone && (f.role == RoleInbox || f.role == RoleSent) {
@@ -60,7 +70,7 @@ func (s *session) prepare(ctx context.Context, f *folder, sel *imap.SelectData) 
 	if reset {
 		s.log.Warn("UIDVALIDITY changed; refetching folder", "folder", f.name, "old", f.uidValidity, "new", sel.UIDValidity)
 	}
-	perm := flagStrings(sel.PermanentFlags)
+	f.permFlags = perm
 	err := s.tx(ctx, func(tx pgx.Tx) error {
 		if reset {
 			if _, err := tx.Exec(ctx, `UPDATE message_locations SET stale = true WHERE folder_id = $1`, f.id); err != nil {

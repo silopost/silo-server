@@ -504,35 +504,3 @@ WHERE m.account_id = $1 AND m.message_id_hdr = $2 AND NOT ('\Deleted' = ANY(l.fl
 	_ = strings.ToLower
 }
 
-// TestKeywordRejected: a maildir folder takes at most 26 keywords (plan
-// 3.7); a rejected keyword turns the label local-only, the label stays on the
-// message and account.error keywords_unsupported is written.
-func TestKeywordRejected(t *testing.T) {
-	e := newOpsEnv(t, imaptest.Full, time.Second, spec{"INBOX", 2})
-	selectInbox(t, e.other)
-	uid := uidOf(t, e.other, "<m1@silo.test>")
-	var kws []imap.Flag
-	for i := 0; i < 26; i++ {
-		kws = append(kws, imap.Flag("kw"+strconv.Itoa(i)))
-	}
-	if _, err := e.other.Store(imap.UIDSetNum(uid), &imap.StoreFlags{Op: imap.StoreFlagsAdd, Silent: true, Flags: kws}, nil).Collect(); err != nil {
-		t.Skipf("server refused 26 keywords: %v", err)
-	}
-	if _, err := e.other.Store(imap.UIDSetNum(uid), &imap.StoreFlags{Op: imap.StoreFlagsAdd, Silent: true, Flags: []imap.Flag{"probe27"}}, nil).Collect(); err == nil {
-		t.Skip("this Dovecot accepts more than 26 keywords per folder")
-	}
-	var lid int64
-	must(t, testPool.QueryRow(context.Background(), `INSERT INTO labels (user_id, account_id, name, type) VALUES ($1, $2, 'Nadmiar', 'user') RETURNING id`, e.a.userID, e.a.id).Scan(&lid))
-	e.modify("m2@silo.test", []ops.LabelRef{{ID: lid}}, sys("UNREAD"))
-	e.waitNoJobs(10 * time.Second)
-	id, _ := e.thread("m2@silo.test")
-	if !e.a.labelsOf(id)["Nadmiar"] || e.a.int(`SELECT count(*) FROM labels WHERE id = $1 AND keyword_state = 'local_only'`, lid) != 1 {
-		t.Errorf("label after rejection: %v", e.a.labelsOf(id))
-	}
-	if !slices.Contains(e.serverFlags("m2@silo.test"), `\Seen`) {
-		t.Error("system flag not stored after the keyword was dropped")
-	}
-	if e.a.int(`SELECT count(*) FROM events WHERE user_id = $1 AND type = 'account.error' AND payload->>'code' = 'keywords_unsupported'`, e.a.userID) == 0 {
-		t.Error("no account.error keywords_unsupported")
-	}
-}

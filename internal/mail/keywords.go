@@ -72,13 +72,21 @@ func UniqueKeyword(prefix, name string, taken func(keyword string) bool) string 
 }
 
 // AssignKeyword picks a free keyword for a new label name on the account,
-// honouring accounts.keyword_prefix and existing labels.imap_keyword values.
-func AssignKeyword(ctx context.Context, db DB, accountID int64, name string) (string, error) {
+// honouring accounts.keyword_prefix. Taken are the keywords of other labels
+// and the keywords the server lists in the PERMANENTFLAGS of a folder (tags of
+// other clients that Silo has not imported, plan 3.7: an explicit mapping in
+// labels.imap_keyword, never a guess); reuse names keywords that count as
+// free (the label's own keyword when it is renamed).
+func AssignKeyword(ctx context.Context, db DB, accountID int64, name string, reuse ...string) (string, error) {
 	var prefix string
 	if err := db.QueryRow(ctx, `SELECT keyword_prefix FROM accounts WHERE id = $1`, accountID).Scan(&prefix); err != nil {
 		return "", fmt.Errorf("mail: load keyword prefix: %w", err)
 	}
-	rows, err := db.Query(ctx, `SELECT lower(imap_keyword) FROM labels WHERE account_id = $1 AND imap_keyword IS NOT NULL`, accountID)
+	rows, err := db.Query(ctx, `
+SELECT lower(imap_keyword) FROM labels WHERE account_id = $1 AND imap_keyword IS NOT NULL
+UNION
+SELECT lower(p) FROM mailbox_folders f, unnest(f.permanent_flags) AS p
+WHERE f.account_id = $1 AND left(p, 1) <> chr(92)`, accountID)
 	if err != nil {
 		return "", fmt.Errorf("mail: load keywords: %w", err)
 	}
@@ -93,6 +101,9 @@ func AssignKeyword(ctx context.Context, db DB, accountID int64, name string) (st
 	}
 	if err := rows.Err(); err != nil {
 		return "", err
+	}
+	for _, k := range reuse {
+		delete(used, strings.ToLower(k))
 	}
 	return UniqueKeyword(prefix, name, func(k string) bool { return used[strings.ToLower(k)] }), nil
 }

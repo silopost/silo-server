@@ -39,6 +39,14 @@ type Account struct {
 	CreatedAt         pgtype.Timestamptz
 }
 
+type AccountRebuild struct {
+	AccountID   int64
+	UserID      int64
+	RequestedAt pgtype.Timestamptz
+	StartedAt   pgtype.Timestamptz
+	Restore     []byte
+}
+
 type Attachment struct {
 	ID          int64
 	MessageID   pgtype.Int8
@@ -141,6 +149,14 @@ type Label struct {
 	ShowInList   string
 	ParentID     pgtype.Int8
 	Position     int32
+}
+
+type LabelFolderState struct {
+	LabelID   int64
+	FolderID  int64
+	UserID    int64
+	State     string
+	UpdatedAt pgtype.Timestamptz
 }
 
 type MailboxFolder struct {

@@ -311,6 +311,17 @@ func TestAssignKeyword(t *testing.T) {
 	if kw2 != "X-Praca_Projekty_2" {
 		t.Fatalf("collision keyword = %q", kw2)
 	}
+	// A keyword the server lists for a folder (another client's tag that Silo
+	// has not imported) is taken too: explicit mapping, no guessing (plan 3.7).
+	_, err = e.pool.Exec(e.ctx, `UPDATE mailbox_folders SET permanent_flags = ARRAY[chr(92) || 'Seen', 'x-zazolc', chr(92) || '*'] WHERE id = $1`, e.folders["INBOX"])
+	must(t, err)
+	if kw3, err := silomail.AssignKeyword(e.ctx, e.pool, e.accountID, "Zażółć"); err != nil || kw3 != "X-Zazolc_2" {
+		t.Fatalf("keyword next to a server keyword = %q, %v", kw3, err)
+	}
+	// A renamed label may keep its own keyword.
+	if kw4, err := silomail.AssignKeyword(e.ctx, e.pool, e.accountID, "Zażółć", "X-Zazolc"); err != nil || kw4 != "X-Zazolc" {
+		t.Fatalf("keyword reusing its own = %q, %v", kw4, err)
+	}
 }
 
 func TestEnsureSystemLabelsIdempotent(t *testing.T) {

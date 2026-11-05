@@ -716,12 +716,20 @@ components:
             - l_7
           type: string
         keywordState:
-          description: "User labels only: mirrored when the label is an IMAP keyword on the server, local_only when the server keeps no keywords."
+          description: "User labels only: mirrored when the label is an IMAP keyword on the server, local_only when the server keeps no keywords (or rejected them), partial when it is a keyword except in the folders of localOnlyFolders (the 26 keywords of a Dovecot maildir folder are taken): there it lives only in Silo."
           enum:
             - mirrored
             - local_only
+            - partial
           type:
             - string
+            - "null"
+        localOnlyFolders:
+          description: "User labels in state partial: the f_ ids of the folders where the label is not written as a keyword."
+          items:
+            type: string
+          type:
+            - array
             - "null"
         name:
           type: string

@@ -27,7 +27,7 @@ type Label struct {
 	Name          string
 	Type          string // system, folder, user
 	SystemKey     *string
-	KeywordState  string
+	KeywordState  string // mirrored, local_only, partial (mirrored, but local in LocalOnlyFolders)
 	ColorBG       *string
 	ColorText     *string
 	ShowInList    string
@@ -36,6 +36,10 @@ type Label struct {
 	FolderID      *int64
 	ThreadsTotal  int
 	ThreadsUnread int
+	// LocalOnlyFolders: folders where the keyword of the label is not kept
+	// (plan 3.7: the 26 keywords of a maildir folder); its assignments there
+	// live only in Silo.
+	LocalOnlyFolders []int64
 }
 
 const maxLabelName = 200
@@ -177,16 +181,20 @@ const labelSelect = `
 SELECT l.id, l.account_id, l.name, l.type, l.system_key, l.keyword_state, l.color_bg, l.color_text, l.show_in_list,
        l.parent_id, l.position, l.folder_id,
        count(tl.thread_id) FILTER (WHERE NOT tl.hidden)::int,
-       count(tl.thread_id) FILTER (WHERE NOT tl.hidden AND tl.unread_count > 0)::int
+       count(tl.thread_id) FILTER (WHERE NOT tl.hidden AND tl.unread_count > 0)::int,
+       ARRAY(SELECT s.folder_id FROM label_folder_state s WHERE s.label_id = l.id ORDER BY s.folder_id)
 FROM labels l LEFT JOIN thread_labels tl ON tl.label_id = l.id
 WHERE l.user_id = $1 AND `
 
 func scanLabel(row pgx.Row) (*Label, error) {
 	var l Label
 	err := row.Scan(&l.ID, &l.AccountID, &l.Name, &l.Type, &l.SystemKey, &l.KeywordState, &l.ColorBG, &l.ColorText, &l.ShowInList,
-		&l.ParentID, &l.Position, &l.FolderID, &l.ThreadsTotal, &l.ThreadsUnread)
+		&l.ParentID, &l.Position, &l.FolderID, &l.ThreadsTotal, &l.ThreadsUnread, &l.LocalOnlyFolders)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNotFound
+	}
+	if l.KeywordState == "mirrored" && len(l.LocalOnlyFolders) > 0 {
+		l.KeywordState = "partial"
 	}
 	return &l, err
 }
@@ -289,7 +297,7 @@ func (s *Service) renameUserLabel(ctx context.Context, tx pgx.Tx, userID, accoun
 	if _, err := tx.Exec(ctx, `UPDATE labels SET imap_keyword = NULL WHERE id = $1`, labelID); err != nil {
 		return err
 	}
-	newKw, err := mail.AssignKeyword(ctx, tx, accountID, newName)
+	newKw, err := mail.AssignKeyword(ctx, tx, accountID, newName, *oldKw)
 	if err != nil {
 		return err
 	}
@@ -425,12 +433,11 @@ func (s *Service) ListLabels(ctx context.Context, userID, accountID int64) ([]La
 	defer rows.Close()
 	out := []Label{}
 	for rows.Next() {
-		var l Label
-		if err := rows.Scan(&l.ID, &l.AccountID, &l.Name, &l.Type, &l.SystemKey, &l.KeywordState, &l.ColorBG, &l.ColorText, &l.ShowInList,
-			&l.ParentID, &l.Position, &l.FolderID, &l.ThreadsTotal, &l.ThreadsUnread); err != nil {
+		l, err := scanLabel(rows)
+		if err != nil {
 			return nil, err
 		}
-		out = append(out, l)
+		out = append(out, *l)
 	}
 	return out, rows.Err()
 }

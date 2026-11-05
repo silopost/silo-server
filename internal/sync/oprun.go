@@ -498,16 +498,37 @@ func (c *conn) ensure(ctx context.Context, name string) error {
 	return err
 }
 
-// storeFlags runs UID STORE +FLAGS.SILENT / -FLAGS.SILENT in a folder. A
-// rejected keyword (no \* in PERMANENTFLAGS, the 26 keywords of a maildir
-// folder) turns its labels local-only (plan 3.7) and the system flags are
-// stored without it. It returns the flags actually stored.
+// storeFlags runs UID STORE +FLAGS.SILENT / -FLAGS.SILENT in a folder and
+// returns the flags actually stored. User label keywords that the folder
+// cannot keep (plan 3.7) are left out and the label becomes local in that
+// folder (label_folder_state, keywordState partial): those already local
+// there, those beyond the folder's keyword limit (KeywordFolderLimit, the 26
+// keywords of a maildir folder, counted from PERMANENTFLAGS) and those of a
+// STORE the server rejects in a folder that announces \*. A rejection where
+// keywords are not kept at all (no \* in PERMANENTFLAGS) turns the labels
+// local-only for the whole account (account.error keywords_unsupported). The
+// other flags are stored either way.
 func (s *session) storeFlags(ctx context.Context, c *conn, f *opFolder, ls []opLoc, add, remove []string) ([]string, []string, error) {
 	if err := c.ensure(ctx, f.name); err != nil {
 		return nil, nil, err
 	}
+	add, err := s.folderKeywords(ctx, c, f, add)
+	if err != nil {
+		return nil, nil, err
+	}
 	uids := uidsOf(ls)
-	err := c.store(ctx, uids, imap.StoreFlagsAdd, add)
+	var labelKws []string
+	for _, k := range add {
+		if mail.IsLabelKeyword(k) {
+			labelKws = append(labelKws, k)
+		}
+	}
+	if h := s.d.Hooks.StoreError; h != nil && len(labelKws) > 0 {
+		err = h(f.name, labelKws)
+	}
+	if err == nil {
+		err = c.store(ctx, uids, imap.StoreFlagsAdd, add)
+	}
 	if err == nil {
 		err = c.store(ctx, uids, imap.StoreFlagsDel, remove)
 	}
@@ -530,9 +551,16 @@ func (s *session) storeFlags(ctx context.Context, c *conn, f *opFolder, ls []opL
 	if len(kws) == 0 {
 		return nil, nil, err
 	}
-	s.log.Warn("server rejected keywords; labels become local only", "folder", f.name, "keywords", kws, "err", err)
-	if e := s.keywordsRejected(ctx, kws, err); e != nil {
-		return nil, nil, e
+	if s.acc.keywordsSupp && c.sel != nil && slices.Contains(c.sel.PermanentFlags, imap.FlagWildcard) && len(labelKws) > 0 {
+		s.log.Warn("server rejected keywords in a folder; labels become local there", "folder", f.name, "keywords", labelKws, "err", err)
+		if e := s.localInFolder(ctx, f.id, labelKws); e != nil {
+			return nil, nil, e
+		}
+	} else {
+		s.log.Warn("server rejected keywords; labels become local only", "folder", f.name, "keywords", kws, "err", err)
+		if e := s.keywordsRejected(ctx, kws, err); e != nil {
+			return nil, nil, e
+		}
 	}
 	if e := c.store(ctx, uids, imap.StoreFlagsAdd, add2); e != nil {
 		return nil, nil, e
@@ -541,6 +569,124 @@ func (s *session) storeFlags(ctx context.Context, c *conn, f *opFolder, ls []opL
 		return nil, nil, e
 	}
 	return add2, rem2, nil
+}
+
+// folderKeywords drops from add the user label keywords that folder f cannot
+// keep: labels already local in f, and new keywords beyond the folder's
+// keyword limit (those labels become local in f). Keywords other than user
+// labels ($SiloSnoozed, $Forwarded, ...) are always tried.
+func (s *session) folderKeywords(ctx context.Context, c *conn, f *opFolder, add []string) ([]string, error) {
+	var kws []string
+	for _, k := range add {
+		if mail.IsLabelKeyword(k) {
+			kws = append(kws, k)
+		}
+	}
+	if len(kws) == 0 {
+		return add, nil
+	}
+	rows, err := s.d.Pool.Query(ctx, `
+SELECT lower(l.imap_keyword) FROM label_folder_state st JOIN labels l ON l.id = st.label_id
+WHERE st.folder_id = $1 AND l.imap_keyword = ANY($2)`, f.id, kws)
+	if err != nil {
+		return nil, err
+	}
+	local, err := pgx.CollectRows(rows, pgx.RowTo[string])
+	if err != nil {
+		return nil, err
+	}
+	drop := map[string]bool{}
+	for _, k := range local {
+		drop[k] = true
+	}
+	limit := s.d.Settings.withDefaults().KeywordFolderLimit
+	if limit > 0 {
+		have := func() map[string]bool {
+			out := map[string]bool{}
+			if c.sel != nil {
+				for _, p := range c.sel.PermanentFlags {
+					if p != imap.FlagWildcard && !strings.HasPrefix(string(p), `\`) {
+						out[strings.ToLower(string(p))] = true
+					}
+				}
+			}
+			return out
+		}
+		known := have()
+		var fresh []string
+		for _, k := range kws {
+			if !drop[strings.ToLower(k)] && !known[strings.ToLower(k)] {
+				fresh = append(fresh, k)
+			}
+		}
+		if len(fresh) > 0 {
+			// The keyword list of the folder may have grown since the SELECT
+			// (other clients, earlier operations): count on a fresh one.
+			if _, err := c.selectFolder(ctx, f.name); err != nil {
+				return nil, err
+			}
+			known = have()
+			n := len(known)
+			var over []string
+			slices.Sort(fresh)
+			for _, k := range fresh {
+				switch {
+				case known[strings.ToLower(k)]:
+				case n < limit:
+					n++
+				default:
+					over = append(over, k)
+					drop[strings.ToLower(k)] = true
+				}
+			}
+			if len(over) > 0 {
+				s.log.Warn("folder keyword limit reached; labels become local there", "folder", f.name, "limit", limit, "keywords", over)
+				if err := s.localInFolder(ctx, f.id, over); err != nil {
+					return nil, err
+				}
+			}
+		}
+	}
+	if len(drop) == 0 {
+		return add, nil
+	}
+	return slices.DeleteFunc(slices.Clone(add), func(k string) bool { return drop[strings.ToLower(k)] }), nil
+}
+
+// localInFolder records that the user labels with these keywords are local
+// in a folder and writes label.changed for each label that changed.
+func (s *session) localInFolder(ctx context.Context, folderID int64, kws []string) error {
+	return inTx(ctx, s.d.Pool, func(tx pgx.Tx) error {
+		rows, err := tx.Query(ctx, `
+INSERT INTO label_folder_state (label_id, folder_id, user_id)
+SELECT l.id, $2, l.user_id FROM labels l
+WHERE l.account_id = $1 AND l.type = 'user' AND lower(l.imap_keyword) = ANY($3)
+ON CONFLICT (label_id, folder_id) DO NOTHING
+RETURNING label_id`, s.acc.id, folderID, lowerAll(kws))
+		if err != nil {
+			return err
+		}
+		ids, err := pgx.CollectRows(rows, pgx.RowTo[int64])
+		if err != nil {
+			return err
+		}
+		for _, id := range ids {
+			if err := mail.WriteEvent(ctx, tx, s.acc.userID, mail.EventLabelChanged, map[string]any{
+				"accountId": s.acc.id, "labelId": id,
+			}); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
+func lowerAll(ss []string) []string {
+	out := make([]string, len(ss))
+	for i, s := range ss {
+		out[i] = strings.ToLower(s)
+	}
+	return out
 }
 
 func (s *session) keywordsRejected(ctx context.Context, kws []string, cause error) error {

@@ -76,6 +76,7 @@ type folder struct {
 	syncMode      string
 	lastSyncAt    *time.Time
 	lastFullFlags *time.Time
+	permFlags     []string // PERMANENTFLAGS of the last SELECT
 	// cursor (zero when the folder was never initialised)
 	phase  string
 	lowUID uint32 // header backfill covers UIDs < lowUID
@@ -102,7 +103,7 @@ func loadFolders(ctx context.Context, db mail.DB, accountID int64) ([]*folder, e
 	rows, err := db.Query(ctx, `
 SELECT f.id, f.name, COALESCE(f.delimiter, ''), COALESCE(f.special_use, ''), f.role, f.label_id, f.uidvalidity,
        f.uidnext, COALESCE(f.highestmodseq, 0), f.messages_count, f.sync_mode, f.last_sync_at, f.last_full_flags_at,
-       COALESCE(c.phase, ''), COALESCE(c.low_uid, 0)
+       COALESCE(c.phase, ''), COALESCE(c.low_uid, 0), f.permanent_flags
 FROM mailbox_folders f LEFT JOIN sync_cursors c ON c.folder_id = f.id
 WHERE f.account_id = $1 AND f.selectable
 ORDER BY f.id`, accountID)
@@ -115,7 +116,7 @@ ORDER BY f.id`, accountID)
 		f := &folder{}
 		var uv, un, low, hms int64
 		if err := rows.Scan(&f.id, &f.name, &f.delim, &f.specialUse, &f.role, &f.labelID, &uv, &un, &hms, &f.messages,
-			&f.syncMode, &f.lastSyncAt, &f.lastFullFlags, &f.phase, &low); err != nil {
+			&f.syncMode, &f.lastSyncAt, &f.lastFullFlags, &f.phase, &low, &f.permFlags); err != nil {
 			return nil, err
 		}
 		f.uidValidity, f.uidNext, f.lowUID, f.highestModSeq = uint32(uv), uint32(un), uint32(low), uint64(hms)

@@ -139,6 +139,7 @@ func serve(ctx context.Context, args []string) error {
 			MaxMessageBytes:    int64(cfg.MirrorMaxMessageBytes),
 			QuotaPerAccount:    int64(cfg.MirrorQuotaPerAccount),
 			InsecureTLS:        cfg.AllowInsecureTransport,
+			KeywordFolderLimit: keywordLimit(cfg.SyncKeywordFolderLimit),
 		},
 	})
 	syncMgr.RegisterJobs(jobs)
@@ -243,4 +244,13 @@ func newLogger(cfg config.Config) (*slog.Logger, error) {
 		return slog.New(slog.NewTextHandler(os.Stderr, opts)), nil
 	}
 	return slog.New(slog.NewJSONHandler(os.Stderr, opts)), nil
+}
+
+// keywordLimit maps SILO_SYNC_KEYWORD_FOLDER_LIMIT (0 = no limit) to
+// silosync.Settings.KeywordFolderLimit (0 = default, < 0 = no limit).
+func keywordLimit(n int) int {
+	if n == 0 {
+		return -1
+	}
+	return n
 }

@@ -12,19 +12,20 @@ import (
 
 // Label of an account (plan 5.5). System labels have their key as id.
 type Label struct {
-	ID            string  `json:"id" example:"l_7" doc:"The key (INBOX, STARRED, ..., UNREAD) for system labels, l_ id otherwise."`
-	AccountID     string  `json:"accountId" example:"acc_1"`
-	Name          string  `json:"name"`
-	Type          string  `json:"type" enum:"system,folder,user"`
-	KeywordState  *string `json:"keywordState" enum:"mirrored,local_only" doc:"User labels only: mirrored when the label is an IMAP keyword on the server, local_only when the server keeps no keywords."`
-	ColorBG       *string `json:"colorBg"`
-	ColorText     *string `json:"colorText"`
-	ShowInList    string  `json:"showInList" enum:"show,hide,show_if_unread"`
-	ParentID      *string `json:"parentId"`
-	FolderID      *string `json:"folderId" doc:"Folder labels: the f_ id of the server folder."`
-	Position      int     `json:"position"`
-	ThreadsTotal  int     `json:"threadsTotal"`
-	ThreadsUnread int     `json:"threadsUnread"`
+	ID               string   `json:"id" example:"l_7" doc:"The key (INBOX, STARRED, ..., UNREAD) for system labels, l_ id otherwise."`
+	AccountID        string   `json:"accountId" example:"acc_1"`
+	Name             string   `json:"name"`
+	Type             string   `json:"type" enum:"system,folder,user"`
+	KeywordState     *string  `json:"keywordState" enum:"mirrored,local_only,partial" doc:"User labels only: mirrored when the label is an IMAP keyword on the server, local_only when the server keeps no keywords (or rejected them), partial when it is a keyword except in the folders of localOnlyFolders (the 26 keywords of a Dovecot maildir folder are taken): there it lives only in Silo."`
+	LocalOnlyFolders []string `json:"localOnlyFolders,omitempty" doc:"User labels in state partial: the f_ ids of the folders where the label is not written as a keyword."`
+	ColorBG          *string  `json:"colorBg"`
+	ColorText        *string  `json:"colorText"`
+	ShowInList       string   `json:"showInList" enum:"show,hide,show_if_unread"`
+	ParentID         *string  `json:"parentId"`
+	FolderID         *string  `json:"folderId" doc:"Folder labels: the f_ id of the server folder."`
+	Position         int      `json:"position"`
+	ThreadsTotal     int      `json:"threadsTotal"`
+	ThreadsUnread    int      `json:"threadsUnread"`
 }
 
 func labelOf(l ops.Label) Label {
@@ -38,6 +39,9 @@ func labelOf(l ops.Label) Label {
 	}
 	if l.Type == "user" {
 		out.KeywordState = &l.KeywordState
+		for _, f := range l.LocalOnlyFolders {
+			out.LocalOnlyFolders = append(out.LocalOnlyFolders, formatID("f_", f))
+		}
 	}
 	if l.ParentID != nil {
 		p := formatID("l_", *l.ParentID)
