@@ -3,6 +3,7 @@ package mailview
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -114,6 +115,18 @@ type HTML struct {
 // text/plain part wrapped in a preformatted block. cid: references become
 // /api/v1/attachments/{id}?inline=1.
 func (v *View) HTML(ctx context.Context, userID, messageID int64, attachmentURL func(id int64) string) (*HTML, error) {
+	// A local draft is shown as saved in Silo (its server copy may lag).
+	var draftHTML string
+	var version int32
+	err := v.pool.QueryRow(ctx, `SELECT body_html, version FROM drafts WHERE message_id = $1 AND user_id = $2`, messageID, userID).Scan(&draftHTML, &version)
+	if err == nil {
+		sum := sha256.Sum256([]byte(draftHTML))
+		out := SanitizeHTML(draftHTML, func(string) string { return "" })
+		return &HTML{Body: []byte(out), ETag: `"d` + strconv.Itoa(int(version)) + "-" + hex.EncodeToString(sum[:8]) + "-" + SanitizerVersion + `"`}, nil
+	}
+	if !errors.Is(err, pgx.ErrNoRows) {
+		return nil, err
+	}
 	raw, err := v.OpenRaw(ctx, userID, messageID)
 	if err != nil {
 		return nil, err

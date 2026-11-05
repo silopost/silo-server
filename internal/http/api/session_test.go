@@ -18,8 +18,11 @@ import (
 
 	"github.com/silopost/silo-server/internal/accounts"
 	"github.com/silopost/silo-server/internal/auth"
+	"github.com/silopost/silo-server/internal/blob"
 	"github.com/silopost/silo-server/internal/config"
+	"github.com/silopost/silo-server/internal/drafts"
 	"github.com/silopost/silo-server/internal/http/api"
+	"github.com/silopost/silo-server/internal/mailview"
 	"github.com/silopost/silo-server/internal/ops"
 	"github.com/silopost/silo-server/internal/secrets"
 	"github.com/silopost/silo-server/internal/store"
@@ -32,12 +35,16 @@ import (
 
 const publicURL = "http://example.com"
 
+// testMaxUpload is SILO_MAX_ATTACHMENT_BYTES of the test API.
+const testMaxUpload = 64 << 10
+
 type env struct {
-	t    *testing.T
-	pool *pgxpool.Pool
-	ring *secrets.Keyring
-	cfg  config.Config
-	web  http.Handler // normal service: Dovecot reachable
+	t      *testing.T
+	pool   *pgxpool.Pool
+	ring   *secrets.Keyring
+	cfg    config.Config
+	web    http.Handler // normal service: Dovecot reachable
+	drafts *drafts.Service
 }
 
 type resp struct {
@@ -107,6 +114,11 @@ func newEnv(t *testing.T) *env {
 		DefaultLoginFormat: config.LoginFormatLocalpart, DefaultDomain: "silo.test",
 		AllowInsecureTransport: true, MaxAccountsPerUser: 5,
 	}}
+	blobs, err := blob.NewFSStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.drafts = drafts.New(drafts.Options{Pool: pool, Blobs: blobs, MaxUploadBytes: testMaxUpload, SyncDelay: time.Minute})
 	e.web = e.router(e.cfg, auth.Options{MinLoginDuration: 20 * time.Millisecond, LoginLimit: auth.Limit{Burst: 1000, Every: time.Second}})
 	return e
 }
@@ -120,6 +132,8 @@ func (e *env) router(cfg config.Config, ao auth.Options) http.Handler {
 		Accounts:  accounts.New(accounts.Options{Pool: e.pool, Keys: e.ring, Config: cfg}),
 		Sync:      silosync.NewService(e.pool),
 		Ops:       ops.NewService(e.pool, 10*time.Second),
+		View:      mailview.New(e.pool, nil, nil),
+		Drafts:    e.drafts,
 		PublicURL: publicURL,
 	})
 	return r

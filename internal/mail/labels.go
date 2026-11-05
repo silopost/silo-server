@@ -117,6 +117,7 @@ type loc struct {
 type msgState struct {
 	id, accountID, userID int64
 	isUnread              bool
+	isDraft               bool // a local draft (drafts row): DRAFT whether or not it is on the server
 	locs                  []loc
 }
 
@@ -141,7 +142,7 @@ type desired struct {
 
 func loadStates(ctx context.Context, db DB, ids []int64) ([]*msgState, error) {
 	rows, err := db.Query(ctx, `
-SELECT m.id, m.account_id, m.user_id, m.is_unread,
+SELECT m.id, m.account_id, m.user_id, m.is_unread, EXISTS (SELECT 1 FROM drafts d WHERE d.message_id = m.id),
        l.folder_id, f.role, f.label_id, l.flags
 FROM messages m
 LEFT JOIN message_locations l ON l.message_id = m.id
@@ -156,17 +157,17 @@ ORDER BY m.id, l.folder_id, l.uid`, ids)
 	byID := map[int64]*msgState{}
 	for rows.Next() {
 		var id, acc, user int64
-		var unread bool
+		var unread, draft bool
 		var folderID *int64
 		var role *string
 		var labelID *int64
 		var flags []string
-		if err := rows.Scan(&id, &acc, &user, &unread, &folderID, &role, &labelID, &flags); err != nil {
+		if err := rows.Scan(&id, &acc, &user, &unread, &draft, &folderID, &role, &labelID, &flags); err != nil {
 			return nil, err
 		}
 		st := byID[id]
 		if st == nil {
-			st = &msgState{id: id, accountID: acc, userID: user, isUnread: unread}
+			st = &msgState{id: id, accountID: acc, userID: user, isUnread: unread, isDraft: draft}
 			byID[id] = st
 			out = append(out, st)
 		}
@@ -283,15 +284,21 @@ func (idx *labelIndex) compute(st *msgState, keywordLabel func(kw string) (int64
 	// A location flagged \Deleted is already gone for Silo (ADR 0006: without
 	// UIDPLUS a move leaves the source copy flagged until someone expunges it).
 	visible := slices.DeleteFunc(slices.Clone(st.locs), func(l loc) bool { return hasFlag(l.flags, `\Deleted`) })
-	if len(visible) == 0 {
-		return d
-	}
-	d.isUnread = false
 	add := func(key string) {
 		if id, ok := idx.system[key]; ok {
 			d.labels[id] = true
 		}
 	}
+	if st.isDraft {
+		// A draft written in Silo lives locally before (and while) its copy
+		// is in the server's Drafts folder (plan 3.8).
+		add(LabelDraft)
+		d.isUnread = false
+	}
+	if len(visible) == 0 {
+		return d
+	}
+	d.isUnread = false
 	for _, l := range visible {
 		if key, ok := roleLabel[l.role]; ok {
 			add(key)

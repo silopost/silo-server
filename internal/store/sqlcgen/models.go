@@ -41,7 +41,7 @@ type Account struct {
 
 type Attachment struct {
 	ID          int64
-	MessageID   int64
+	MessageID   pgtype.Int8
 	UserID      int64
 	BlobSha256  []byte
 	Filename    string
@@ -50,6 +50,7 @@ type Attachment struct {
 	ContentID   pgtype.Text
 	IsInline    bool
 	PartPath    string
+	CreatedAt   pgtype.Timestamptz
 }
 
 type Blob struct {

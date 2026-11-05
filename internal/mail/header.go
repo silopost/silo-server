@@ -35,6 +35,7 @@ type ParsedHeader struct {
 	ListID          string
 	ListUnsubscribe string
 	ContentType     string
+	SiloDraftID     string // X-Silo-Draft-Id: a draft saved by Silo (plan 3.8)
 	ParseError      string // non-empty when something was unreadable; the rest is best effort
 }
 
@@ -88,6 +89,7 @@ func ParseHeader(raw []byte, size int64) *ParsedHeader {
 	p.ListID = get("List-Id")
 	p.ListUnsubscribe = get("List-Unsubscribe")
 	p.ContentType = strings.ToLower(get("Content-Type"))
+	p.SiloDraftID = get(HeaderSiloDraftID)
 
 	if ids := msgIDs(get("Message-ID")); len(ids) > 0 {
 		p.MessageID = ids[0]

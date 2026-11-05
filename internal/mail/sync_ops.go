@@ -3,7 +3,10 @@ package mail
 import (
 	"context"
 	"fmt"
+	"slices"
 	"time"
+
+	"github.com/jackc/pgx/v5"
 )
 
 // FlagUpdate is a flag change reported by the server for one UID.
@@ -148,7 +151,8 @@ type VanishedResult struct {
 // VANISHED, STATUS/UID sweep) as in plan 3.5.6 steps 1-2: the location rows are
 // deleted; a message with other locations only gets its labels re-derived, a
 // message with none is marked orphaned_at = now() (it leaves the lists but
-// keeps its row, user labels and thread). The STATUS sweep and the orphan_gc
+// keeps its row, user labels and thread). A local draft (drafts row) is never orphaned:
+// it lives in Silo whether or not its copy is on the server. The STATUS sweep and the orphan_gc
 // job (PurgeOrphans) are the sync engine's business.
 func LocationVanished(ctx context.Context, db DB, folderID int64, uids []uint32) (*VanishedResult, error) {
 	res := &VanishedResult{}
@@ -188,7 +192,8 @@ func LocationVanished(ctx context.Context, db DB, folderID int64, uids []uint32)
 	tag, err := db.Exec(ctx, `
 UPDATE messages m SET orphaned_at = now()
 WHERE m.id = ANY($1) AND m.orphaned_at IS NULL
-  AND NOT EXISTS (SELECT 1 FROM message_locations l WHERE l.message_id = m.id)`, msgIDs)
+  AND NOT EXISTS (SELECT 1 FROM message_locations l WHERE l.message_id = m.id)
+  AND NOT EXISTS (SELECT 1 FROM drafts d WHERE d.message_id = m.id)`, msgIDs)
 	if err != nil {
 		return nil, fmt.Errorf("mail: orphan messages: %w", err)
 	}
@@ -244,10 +249,26 @@ ORDER BY m.id FOR UPDATE OF m`, accountID, olderThan)
 	if len(msgIDs) == 0 {
 		return res, nil
 	}
+	ev := &eventBuf{userID: userID}
+	if err := deleteMessages(ctx, db, ev, accountID, msgIDs, threadIDs, res); err != nil {
+		return nil, err
+	}
+	return res, ev.flush(ctx, db)
+}
+
+// deleteMessages deletes messages of one account for good: the references of
+// their raw and attachment blobs are released (blob_gc deletes unreferenced
+// blobs later), threads left without messages are deleted (thread.deleted),
+// the others recomputed (thread.updated, label.counts). threadIDs are the
+// threads of the messages; res, when not nil, receives the counts.
+func deleteMessages(ctx context.Context, db DB, ev *eventBuf, accountID int64, msgIDs, threadIDs []int64, res *PurgeResult) error {
+	if res == nil {
+		res = &PurgeResult{}
+	}
 	threadIDs = uniqueSorted(threadIDs)
 	before, err := labelsOfThreads(ctx, db, threadIDs)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	tag, err := db.Exec(ctx, `
 WITH refs AS (
@@ -257,53 +278,39 @@ WITH refs AS (
 ), cnt AS (SELECT sha, count(*)::int AS n FROM refs GROUP BY sha)
 UPDATE blobs b SET ref_count = GREATEST(b.ref_count - cnt.n, 0) FROM cnt WHERE b.sha256 = cnt.sha`, msgIDs)
 	if err != nil {
-		return nil, fmt.Errorf("mail: release blobs: %w", err)
+		return fmt.Errorf("mail: release blobs: %w", err)
 	}
 	res.BlobsReleased = int(tag.RowsAffected())
 	tag, err = db.Exec(ctx, `DELETE FROM messages WHERE id = ANY($1)`, msgIDs)
 	if err != nil {
-		return nil, fmt.Errorf("mail: delete orphans: %w", err)
+		return fmt.Errorf("mail: delete messages: %w", err)
 	}
 	res.Messages = int(tag.RowsAffected())
 
 	// Threads without any message left are deleted, the rest recomputed.
-	var gone []int64
 	r2, err := db.Query(ctx, `
 DELETE FROM threads t WHERE t.id = ANY($1) AND NOT EXISTS (SELECT 1 FROM messages m WHERE m.thread_id = t.id)
 RETURNING t.id`, threadIDs)
 	if err != nil {
-		return nil, fmt.Errorf("mail: delete empty threads: %w", err)
+		return fmt.Errorf("mail: delete empty threads: %w", err)
 	}
-	for r2.Next() {
-		var id int64
-		if err := r2.Scan(&id); err != nil {
-			r2.Close()
-			return nil, err
-		}
-		gone = append(gone, id)
-	}
-	r2.Close()
-	if err := r2.Err(); err != nil {
-		return nil, err
+	gone, err := pgx.CollectRows(r2, pgx.RowTo[int64])
+	if err != nil {
+		return err
 	}
 	res.Threads = len(gone)
 	var remain []int64
 	for _, id := range threadIDs {
-		found := false
-		for _, g := range gone {
-			found = found || g == id
-		}
-		if !found {
+		if !slices.Contains(gone, id) {
 			remain = append(remain, id)
 		}
 	}
 	res.RecomputedThrs = len(remain)
-	ev := &eventBuf{userID: userID}
 	if err := finishThreads(ctx, db, ev, accountID, remain, before); err != nil {
-		return nil, err
+		return err
 	}
 	for _, id := range gone {
 		ev.add(EventThreadDelete, map[string]any{"threadId": id, "accountId": accountID})
 	}
-	return res, ev.flush(ctx, db)
+	return nil
 }

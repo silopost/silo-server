@@ -221,9 +221,14 @@ WHERE l.folder_id = $1 AND l.uid = ANY($2)`, folderID, uids)
 		out := IngestedMessage{UID: m.UID}
 		var msgID, threadID int64
 		matched := false
+		// A copy of a draft saved by Silo belongs to the local draft (plan 3.8).
+		draftMsg, err := draftMessage(ctx, db, accountID, ph.SiloDraftID)
+		if err != nil {
+			return nil, err
+		}
 
 		if e, ok := existing[m.UID]; ok {
-			if e.dedupeKey == dedupe {
+			if e.dedupeKey == dedupe || draftMsg != 0 && e.messageID == draftMsg {
 				msgID, matched, out.Outcome = e.messageID, true, OutcomeKnown
 			} else if err := dropLocation(ctx, db, folderID, int64(m.UID), e.messageID, ts); err != nil {
 				// The UID now holds a different message (UIDVALIDITY reuse).
@@ -231,6 +236,9 @@ WHERE l.folder_id = $1 AND l.uid = ANY($2)`, folderID, uids)
 			}
 		}
 		if !matched {
+			if m.KnownMessageID == 0 {
+				m.KnownMessageID = draftMsg
+			}
 			msgID, matched, out.Outcome, err = matchMessage(ctx, db, accountID, m, dedupe)
 			if err != nil {
 				return nil, err
@@ -361,7 +369,8 @@ func threadsOfMessages(ctx context.Context, db DB, msgIDs []int64) ([]int64, err
 }
 
 // matchMessage is the Matcher of plan 3.5.6 (the existing-location key was
-// handled by the caller): KnownMessageID, EmailID, dedupe_key.
+// handled by the caller): KnownMessageID (also the local draft named by
+// X-Silo-Draft-Id), EmailID, dedupe_key.
 func matchMessage(ctx context.Context, db DB, accountID int64, m FetchedMessage, dedupe string) (int64, bool, Outcome, error) {
 	var id int64
 	var orphaned, located bool
@@ -399,6 +408,22 @@ func matchMessage(ctx context.Context, db DB, accountID int64, m FetchedMessage,
 	return id, true, OutcomeAttached, nil
 }
 
+// draftMessage returns the local draft whose X-Silo-Draft-Id is id (0 if none).
+func draftMessage(ctx context.Context, db DB, accountID int64, id string) (int64, error) {
+	if id == "" {
+		return 0, nil
+	}
+	var msgID int64
+	err := db.QueryRow(ctx, `SELECT message_id FROM drafts WHERE account_id = $1 AND silo_draft_id = $2`, accountID, id).Scan(&msgID)
+	if err == pgx.ErrNoRows {
+		return 0, nil
+	}
+	if err != nil {
+		return 0, fmt.Errorf("mail: match draft: %w", err)
+	}
+	return msgID, nil
+}
+
 // dropLocation removes one location (used when a UID is reused by another
 // message) and orphans the message if it has no other location.
 func dropLocation(ctx context.Context, db DB, folderID, uid, messageID int64, ts *threadState) error {
@@ -407,7 +432,8 @@ func dropLocation(ctx context.Context, db DB, folderID, uid, messageID int64, ts
 	}
 	if _, err := db.Exec(ctx, `
 UPDATE messages SET orphaned_at = now()
-WHERE id = $1 AND orphaned_at IS NULL AND NOT EXISTS (SELECT 1 FROM message_locations WHERE message_id = $1)`, messageID); err != nil {
+WHERE id = $1 AND orphaned_at IS NULL AND NOT EXISTS (SELECT 1 FROM message_locations WHERE message_id = $1)
+  AND NOT EXISTS (SELECT 1 FROM drafts WHERE message_id = $1)`, messageID); err != nil {
 		return fmt.Errorf("mail: orphan message: %w", err)
 	}
 	ts.dropped = append(ts.dropped, messageID)

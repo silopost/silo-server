@@ -80,7 +80,20 @@ accept `50MB` style values, rates `5MB/s`, durations `5m`. Worth knowing:
   `/threads/trash`, `/untrash`, `/delete`) are applied locally at once and queued as
   `imap_op` jobs run by the account's worker. Folder moves wait `SILO_UNDO_WINDOW`
   (default `10s`), flags go at once; queued changes are coalesced, and jobs wait
-  (up to 7 days) while the account is offline.
+  (up to 7 days) while the account is offline. `POST /operations/{id}/undo` cancels an
+  operation while its jobs wait (the server never sees it); once a job was claimed it
+  answers `409 undo_expired` and the client sends the inverse modify.
+- Drafts and uploads (`internal/drafts`): `POST /uploads` streams one multipart file
+  (up to `SILO_MAX_ATTACHMENT_BYTES`, default `25MB`, else `413 upload_too_large`) to
+  the blob store as `u_…`; uploads not attached to a draft are removed after 24 h by the
+  hourly `blob_gc` job, which also deletes unreferenced blobs. `POST /drafts` (new,
+  `reply`, `replyAll`, `forward` with prefilled recipients and subject), `GET`/`PUT`/
+  `DELETE /drafts/{id}`: a draft is a local message with the `DRAFT` label (`d_` id =
+  its `m_` id); `PUT` takes the edited `version` (`409 draft_version_conflict`) and
+  pins `attachmentIds`. At least 30 s after the last save an `imap_op` `append` job
+  writes exactly one copy to the Drafts folder (`X-Silo-Draft-Id`, `\Draft \Seen`,
+  older copies expunged; the folder is created if missing); sync recognises the copy by
+  that header. Drafts written by other programs open via `GET /drafts/{id}`.
 - Sessions and accounts (`internal/auth`, `internal/accounts`): `POST/GET/DELETE /session`, `GET /sessions`, `DELETE /sessions/{id}`, `GET/POST /accounts`, `POST /accounts/test`, `GET/PATCH/DELETE /accounts/{id}`, `GET /accounts/{id}/folders`, `POST /accounts/{id}/resync`, `GET /accounts/{id}/sync-status`, `GET /meta`. The full list is `api/openapi.yaml`.
 - Reading the mailbox (`internal/mailview`): `GET /labels` (counters, pseudo label
   `UNREAD`), `POST /labels` (user label with an IMAP keyword, or a folder: `CREATE`

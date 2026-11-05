@@ -6,6 +6,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"os"
@@ -17,6 +18,7 @@ import (
 	"github.com/silopost/silo-server/internal/auth"
 	"github.com/silopost/silo-server/internal/blob"
 	"github.com/silopost/silo-server/internal/config"
+	"github.com/silopost/silo-server/internal/drafts"
 	"github.com/silopost/silo-server/internal/events"
 	siloHTTP "github.com/silopost/silo-server/internal/http"
 	"github.com/silopost/silo-server/internal/http/api"
@@ -138,6 +140,18 @@ func serve(ctx context.Context, args []string) error {
 		},
 	})
 	syncMgr.RegisterJobs(jobs)
+	view := mailview.New(pool, blobs, syncMgr)
+	draftSvc := drafts.New(drafts.Options{
+		Pool: pool, Blobs: blobs, MaxUploadBytes: int64(cfg.MaxAttachmentBytes), Logger: logger,
+		OpenRaw: func(ctx context.Context, userID, messageID int64) (io.ReadCloser, error) {
+			r, err := view.OpenRaw(ctx, userID, messageID)
+			if err != nil {
+				return nil, err
+			}
+			return r.Body, nil
+		},
+	})
+	draftSvc.RegisterJobs(jobs)
 	workerCtx, stopWorker := context.WithCancel(ctx)
 	workerDone := make(chan struct{})
 	go func() { defer close(workerDone); _ = jobs.Run(workerCtx) }()
@@ -146,6 +160,7 @@ func serve(ctx context.Context, args []string) error {
 	go func() { defer close(hubDone); _ = hub.Run(workerCtx) }()
 	syncDone := make(chan struct{})
 	go func() { defer close(syncDone); _ = syncMgr.Run(workerCtx) }()
+	go draftSvc.RunGC(workerCtx, time.Hour)
 	// Shutdown: account workers close their IMAP connections and finish the
 	// current transaction, then the job loops return.
 	defer func() { stopWorker(); <-syncDone; <-workerDone; <-hubDone }()
@@ -164,7 +179,8 @@ func serve(ctx context.Context, args []string) error {
 				Accounts:           accountSvc,
 				Sync:               silosync.NewService(pool),
 				Ops:                ops.NewService(pool, cfg.UndoWindow),
-				View:               mailview.New(pool, blobs, syncMgr),
+				View:               view,
+				Drafts:             draftSvc,
 				Events:             hub,
 				PublicURL:          cfg.PublicURL,
 				Logger:             logger,

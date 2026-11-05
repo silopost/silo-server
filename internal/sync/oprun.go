@@ -234,7 +234,8 @@ ORDER BY l.message_id, l.folder_id`, msgIDs)
 	}
 	var gone []int64
 	for _, it := range items {
-		if len(locs[it.msg]) == 0 {
+		// A draft is saved whether or not it has a copy on the server yet.
+		if len(locs[it.msg]) == 0 && p.Op != mail.OpAppend {
 			gone = append(gone, it.msg)
 		}
 	}
@@ -335,6 +336,24 @@ ORDER BY l.message_id, l.folder_id`, msgIDs)
 			}
 			touched[fid] = true
 			fin = append(fin, g)
+		}
+	case mail.OpAppend:
+		f, folderID, err := s.appendDraft(ctx, c, folders, p, msgIDs)
+		if err != nil {
+			return err
+		}
+		if f != nil {
+			touched[folderID] = true
+			fin = append(fin, f)
+		}
+	case mail.OpDeleteDraft:
+		f, folderID, err := s.deleteDraftCopies(ctx, c, folders, p)
+		if err != nil {
+			return err
+		}
+		if f != nil {
+			touched[folderID] = true
+			fin = append(fin, f)
 		}
 	default:
 		return fmt.Errorf("%w: unknown op %q", errOpPermanent, p.Op)
@@ -553,14 +572,16 @@ func (s *session) moveTarget(ctx context.Context, c *conn, folders map[int64]*op
 	if p.ToRole != RoleArchive {
 		return nil, fmt.Errorf("%w: the account has no %s folder", errOpPermanent, p.ToRole)
 	}
-	return s.createArchive(ctx, c, folders)
+	return s.createRoleFolder(ctx, c, folders, RoleArchive, "Archive")
 }
 
-func (s *session) createArchive(ctx context.Context, c *conn, folders map[int64]*opFolder) (*opFolder, error) {
-	names := []string{"Archive"}
+// createRoleFolder creates a missing special folder (Archive, Drafts) as base
+// or INBOX<delim>base and records it with its role.
+func (s *session) createRoleFolder(ctx context.Context, c *conn, folders map[int64]*opFolder, role, base string) (*opFolder, error) {
+	names := []string{base}
 	for _, f := range folders {
 		if f.role == RoleInbox && f.delim != "" {
-			names = append(names, "INBOX"+f.delim+"Archive")
+			names = append(names, "INBOX"+f.delim+base)
 		}
 	}
 	var name string
@@ -580,21 +601,21 @@ func (s *session) createArchive(ctx context.Context, c *conn, folders map[int64]
 	if name == "" {
 		return nil, lastErr
 	}
-	s.log.Info("created the Archive folder", "name", name)
-	f := &opFolder{name: name, role: RoleArchive}
+	s.log.Info("created a special folder", "role", role, "name", name)
+	f := &opFolder{name: name, role: role}
 	err := inTx(ctx, s.d.Pool, func(tx pgx.Tx) error {
 		if err := mail.LockAccount(ctx, tx, s.acc.id); err != nil {
 			return err
 		}
 		err := tx.QueryRow(ctx, `
 INSERT INTO mailbox_folders (account_id, user_id, name, name_raw, role, uidvalidity)
-VALUES ($1, $2, $3, $3, 'archive', 0)
-ON CONFLICT (account_id, name_raw) DO UPDATE SET role = 'archive', selectable = true, sync_mode = 'sync'
-RETURNING id`, s.acc.id, s.acc.userID, name).Scan(&f.id)
+VALUES ($1, $2, $3, $3, $4, 0)
+ON CONFLICT (account_id, name_raw) DO UPDATE SET role = $4, selectable = true, sync_mode = 'sync'
+RETURNING id`, s.acc.id, s.acc.userID, name, role).Scan(&f.id)
 		if err != nil {
 			return err
 		}
-		_, err = tx.Exec(ctx, `UPDATE accounts SET folder_mapping = folder_mapping || jsonb_build_object('archive', $2::text) WHERE id = $1`, s.acc.id, name)
+		_, err = tx.Exec(ctx, `UPDATE accounts SET folder_mapping = folder_mapping || jsonb_build_object($3::text, $2::text) WHERE id = $1`, s.acc.id, name, role)
 		return err
 	})
 	if err != nil {

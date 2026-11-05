@@ -70,6 +70,8 @@ type Config struct {
 
 	MirrorMaxMessageBytes ByteSize `env:"SILO_MIRROR_MAX_MESSAGE_BYTES" envDefault:"50MB"`
 	MirrorQuotaPerAccount ByteSize `env:"SILO_MIRROR_QUOTA_PER_ACCOUNT" envDefault:"0"`
+	// MaxAttachmentBytes limits one file of POST /uploads (plan 5.6).
+	MaxAttachmentBytes ByteSize `env:"SILO_MAX_ATTACHMENT_BYTES" envDefault:"25MB"`
 
 	SyncPollInterval          time.Duration `env:"SILO_SYNC_POLL_INTERVAL" envDefault:"5m"`
 	SyncMaxConnectionsPerAcct int           `env:"SILO_SYNC_MAX_CONNECTIONS_PER_ACCOUNT" envDefault:"3"`
@@ -171,6 +173,9 @@ func (c Config) ValidateServe() error {
 	}
 	if c.UndoWindow < 0 {
 		add("SILO_UNDO_WINDOW must not be negative")
+	}
+	if c.MaxAttachmentBytes <= 0 {
+		add("SILO_MAX_ATTACHMENT_BYTES must be > 0")
 	}
 
 	if c.WorkerConcurrency < 1 {

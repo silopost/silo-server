@@ -100,3 +100,19 @@ func decodeFragment(b []byte, encoding, cs string, isHTML bool) string {
 	}
 	return s
 }
+
+// TextToHTML turns plain text into escaped HTML paragraphs (blank lines
+// separate paragraphs, single newlines become <br>).
+func TextToHTML(s string) string {
+	s = strings.TrimSpace(strings.ReplaceAll(s, "\r\n", "\n"))
+	if s == "" {
+		return ""
+	}
+	var b strings.Builder
+	for _, para := range reBlankLines.Split(s, -1) {
+		b.WriteString("<p>")
+		b.WriteString(strings.ReplaceAll(html.EscapeString(strings.TrimSpace(para)), "\n", "<br>"))
+		b.WriteString("</p>")
+	}
+	return b.String()
+}

@@ -1,0 +1,349 @@
+package api
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"io"
+	"mime"
+	"mime/multipart"
+	"net/http"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/danielgtaylor/huma/v2"
+
+	"github.com/silopost/silo-server/internal/drafts"
+	"github.com/silopost/silo-server/internal/mail"
+)
+
+// Error codes of the compose endpoints (plan 5.3).
+const (
+	CodeDraftVersionConflict = "draft_version_conflict"
+	CodeUploadTooLarge       = "upload_too_large"
+)
+
+// ---- uploads -----------------------------------------------------------------
+
+// UploadInfo is an uploaded draft attachment (plan 5.6).
+type UploadInfo struct {
+	ID          string `json:"id" example:"u_91"`
+	Filename    string `json:"filename" example:"umowa.pdf"`
+	Size        int64  `json:"size" example:"1203311"`
+	ContentType string `json:"contentType" example:"application/pdf"`
+}
+
+func uploadOf(u drafts.Upload) UploadInfo {
+	return UploadInfo{ID: formatID("u_", u.ID), Filename: u.Filename, Size: u.Size, ContentType: u.ContentType}
+}
+
+// uploadInput takes the raw request: the multipart body is streamed by the
+// handler, never buffered by huma.
+type uploadInput struct {
+	contentType string
+	body        io.Reader
+}
+
+// Resolve captures the request body and its content type.
+func (i *uploadInput) Resolve(ctx huma.Context) []error {
+	i.contentType, i.body = ctx.Header("Content-Type"), ctx.BodyReader()
+	return nil
+}
+
+type uploadOutput struct {
+	Status int
+	Body   UploadInfo
+}
+
+// uploadFile streams the first file part of a multipart/form-data body.
+func (d *deps) uploadFile(ctx context.Context, userID int64, ct string, body io.Reader) (*drafts.Upload, error) {
+	mt, params, err := mime.ParseMediaType(ct)
+	if err != nil || mt != "multipart/form-data" || params["boundary"] == "" {
+		return nil, problem(http.StatusBadRequest, CodeValidation, "Expected a multipart/form-data body with one file.")
+	}
+	// The form may carry small fields before the file; bound the whole body.
+	limit := d.drafts.MaxUploadBytes() + 1<<20
+	mr := multipart.NewReader(http.MaxBytesReader(nil, io.NopCloser(body), limit), params["boundary"])
+	for {
+		part, err := mr.NextPart()
+		var mbe *http.MaxBytesError
+		switch {
+		case errors.As(err, &mbe):
+			return nil, errUploadTooLarge(d.drafts.MaxUploadBytes())
+		case errors.Is(err, io.EOF):
+			return nil, problem(http.StatusBadRequest, CodeValidation, "The form has no file part.")
+		case err != nil:
+			return nil, problem(http.StatusBadRequest, CodeValidation, "Cannot read the multipart body.")
+		}
+		if part.FileName() == "" {
+			_ = part.Close()
+			continue
+		}
+		u, err := d.drafts.Upload(ctx, userID, part.FileName(), part.Header.Get("Content-Type"), part)
+		_ = part.Close()
+		if errors.Is(err, drafts.ErrTooLarge) || errors.As(err, &mbe) {
+			return nil, errUploadTooLarge(d.drafts.MaxUploadBytes())
+		}
+		if err != nil {
+			return nil, errInternal(err)
+		}
+		return u, nil
+	}
+}
+
+func errUploadTooLarge(limit int64) error {
+	return problem(http.StatusRequestEntityTooLarge, CodeUploadTooLarge,
+		"The file is larger than the attachment limit of "+formatBytes(limit)+".")
+}
+
+func formatBytes(n int64) string {
+	switch {
+	case n >= 1<<20 && n%(1<<20) == 0:
+		return strconv.FormatInt(n>>20, 10) + " MB"
+	case n >= 1<<10 && n%(1<<10) == 0:
+		return strconv.FormatInt(n>>10, 10) + " KB"
+	}
+	return strconv.FormatInt(n, 10) + " bytes"
+}
+
+// ---- drafts ------------------------------------------------------------------
+
+// Draft is a draft as saved in Silo (plan 3.8).
+type Draft struct {
+	ID                 string          `json:"id" example:"d_4k2" doc:"Draft id; the draft's local message is messageId."`
+	AccountID          string          `json:"accountId" example:"acc_1"`
+	ThreadID           string          `json:"threadId" example:"t_8f3k2"`
+	MessageID          string          `json:"messageId" example:"m_4k2"`
+	To                 []Address       `json:"to"`
+	Cc                 []Address       `json:"cc"`
+	Bcc                []Address       `json:"bcc"`
+	Subject            string          `json:"subject"`
+	BodyHTML           string          `json:"bodyHtml"`
+	BodyJSON           json.RawMessage `json:"bodyJson" doc:"Editor document (TipTap JSON) stored as given; null when never set."`
+	InReplyToMessageID *string         `json:"inReplyToMessageId" doc:"m_ id of the message replied to or forwarded."`
+	Attachments        []UploadInfo    `json:"attachments"`
+	Version            int32           `json:"version" doc:"Send it back with PUT; it grows with every save."`
+	UpdatedAt          time.Time       `json:"updatedAt"`
+	SyncedVersion      int32           `json:"syncedVersion" doc:"Version saved in the Drafts folder of the mail server (0: not yet). Saves reach the server at least 30 s after the last change."`
+	ServerChanged      bool            `json:"serverChanged" doc:"The copy in the server's Drafts folder was changed or removed by another program since Silo saved it."`
+}
+
+func addrsOut(l []mail.Address) []Address {
+	out := make([]Address, 0, len(l))
+	for _, a := range l {
+		out = append(out, Address{Email: a.Email, Name: a.Name})
+	}
+	return out
+}
+
+// Recipient is an address in a draft save; name is optional.
+type Recipient struct {
+	Email string `json:"email" minLength:"3" maxLength:"254"`
+	Name  string `json:"name,omitempty" maxLength:"200"`
+}
+
+func addrsIn(l []Recipient) []mail.Address {
+	out := make([]mail.Address, 0, len(l))
+	for _, a := range l {
+		out = append(out, mail.Address{Email: a.Email, Name: a.Name})
+	}
+	return out
+}
+
+func draftOf(x *drafts.Draft) Draft {
+	out := Draft{
+		ID: formatID("d_", x.ID), AccountID: formatID("acc_", x.AccountID), ThreadID: formatID("t_", x.ThreadID),
+		MessageID: formatID("m_", x.ID), To: addrsOut(x.To), Cc: addrsOut(x.Cc), Bcc: addrsOut(x.Bcc),
+		Subject: x.Subject, BodyHTML: x.BodyHTML, BodyJSON: x.BodyJSON, Version: x.Version, UpdatedAt: x.UpdatedAt,
+		SyncedVersion: x.SyncedVersion, ServerChanged: x.ServerChanged, Attachments: make([]UploadInfo, 0, len(x.Attachments)),
+	}
+	if len(out.BodyJSON) == 0 {
+		out.BodyJSON = json.RawMessage("null")
+	}
+	if x.InReplyTo != nil {
+		s := formatID("m_", *x.InReplyTo)
+		out.InReplyToMessageID = &s
+	}
+	for _, u := range x.Attachments {
+		out.Attachments = append(out.Attachments, uploadOf(u))
+	}
+	return out
+}
+
+func draftsError(err error) error {
+	switch {
+	case err == nil:
+		return nil
+	case errors.Is(err, drafts.ErrNotFound):
+		return errNotFound()
+	case errors.Is(err, drafts.ErrConflict):
+		return problem(http.StatusConflict, CodeDraftVersionConflict, "The draft was saved meanwhile (another window or device); reload it.")
+	case errors.Is(err, drafts.ErrInvalid):
+		return problem(http.StatusBadRequest, CodeValidation, strings.TrimPrefix(err.Error(), "drafts: invalid request: "))
+	}
+	return viewError(err)
+}
+
+// CreateDraftBody is the body of POST /drafts.
+type CreateDraftBody struct {
+	AccountID        string `json:"accountId,omitempty" doc:"Account of a new message; the active account when omitted. Ignored for replies (the account of the message replied to)."`
+	ReplyToMessageID string `json:"replyToMessageId,omitempty" doc:"m_ id of the message to reply to or forward."`
+	Mode             string `json:"mode,omitempty" enum:"reply,replyAll,forward" doc:"With replyToMessageId; reply when omitted."`
+}
+
+type createDraftInput struct {
+	Client string `header:"X-Silo-Client"`
+	Body   CreateDraftBody
+}
+
+// UpdateDraftBody is the body of PUT /drafts/{id}: the whole editable draft.
+type UpdateDraftBody struct {
+	Version       int32           `json:"version" minimum:"1" doc:"Version the client edited (from the last GET/PUT); another save meanwhile is 409 draft_version_conflict."`
+	To            []Recipient     `json:"to" maxItems:"500"`
+	Cc            []Recipient     `json:"cc,omitempty" maxItems:"500"`
+	Bcc           []Recipient     `json:"bcc,omitempty" maxItems:"500"`
+	Subject       string          `json:"subject" maxLength:"998"`
+	BodyHTML      string          `json:"bodyHtml" maxLength:"5000000"`
+	BodyJSON      json.RawMessage `json:"bodyJson,omitempty" doc:"Editor document (TipTap JSON), stored as given."`
+	AttachmentIDs []string        `json:"attachmentIds,omitempty" maxItems:"100" doc:"u_ ids of uploads to attach; uploads left out are detached."`
+}
+
+type draftIDInput struct {
+	ID     string `path:"id" example:"d_4k2"`
+	Client string `header:"X-Silo-Client"`
+}
+
+type updateDraftInput struct {
+	ID     string `path:"id" example:"d_4k2"`
+	Client string `header:"X-Silo-Client"`
+	Body   UpdateDraftBody
+}
+
+type draftOutput struct {
+	Status int
+	Body   Draft
+}
+
+func (d *deps) registerDrafts(a huma.API) {
+	errs := []int{http.StatusBadRequest, http.StatusUnauthorized, http.StatusForbidden, http.StatusNotFound}
+
+	op := d.secured(huma.Operation{
+		OperationID: "uploadAttachment", Method: http.MethodPost, Path: "/uploads", Tags: []string{"drafts"},
+		Summary: "Upload a draft attachment",
+		Description: "multipart/form-data with one file part (any field name). The file is streamed to the blob store; " +
+			"its id goes to attachmentIds of PUT /drafts/{id}. Uploads not attached to a draft are deleted after 24 h. " +
+			"A file over the instance limit (SILO_MAX_ATTACHMENT_BYTES, 25 MB by default) is 413 upload_too_large.",
+		DefaultStatus: http.StatusCreated,
+		Errors:        append(errs[:len(errs):len(errs)], http.StatusRequestEntityTooLarge),
+	})
+	huma.Register(a, op, func(ctx context.Context, in *uploadInput) (*uploadOutput, error) {
+		u, err := d.uploadFile(ctx, sessionFrom(ctx).UserID, in.contentType, in.body)
+		if err != nil {
+			return nil, err
+		}
+		return &uploadOutput{Status: http.StatusCreated, Body: uploadOf(*u)}, nil
+	})
+	// The handler reads the body itself; document it for the contract.
+	if p := a.OpenAPI().Paths["/uploads"]; p != nil && p.Post != nil {
+		p.Post.RequestBody = &huma.RequestBody{Required: true, Content: map[string]*huma.MediaType{
+			"multipart/form-data": {Schema: &huma.Schema{
+				Type: huma.TypeObject, Required: []string{"file"},
+				Properties: map[string]*huma.Schema{"file": {Type: huma.TypeString, Format: "binary", Description: "The file."}},
+			}},
+		}}
+	}
+
+	huma.Register(a, d.secured(huma.Operation{
+		OperationID: "createDraft", Method: http.MethodPost, Path: "/drafts", Tags: []string{"drafts"},
+		Summary: "Start a draft",
+		Description: "Creates a draft with the DRAFT label: a new message, or with replyToMessageId a reply (reply: the " +
+			"sender or Reply-To; replyAll: also the other recipients without the account) in the thread of that " +
+			"message, or a forward (new thread). Subject (Re:/Fwd:) and quoted body are prefilled. Nothing reaches " +
+			"the mail server before the first PUT.",
+		DefaultStatus: http.StatusCreated, Errors: errs,
+	}), func(ctx context.Context, in *createDraftInput) (*draftOutput, error) {
+		p := drafts.CreateParams{UserID: sessionFrom(ctx).UserID, Mode: in.Body.Mode, Origin: in.Client}
+		if in.Body.ReplyToMessageID != "" {
+			id, ok := parseID("m_", in.Body.ReplyToMessageID)
+			if !ok {
+				return nil, errNotFound()
+			}
+			p.ReplyTo = id
+		} else {
+			acc, err := d.accountFrom(ctx, in.Body.AccountID)
+			if err != nil {
+				return nil, err
+			}
+			p.AccountID = acc
+		}
+		x, err := d.drafts.Create(ctx, p)
+		if err != nil {
+			return nil, draftsError(err)
+		}
+		return &draftOutput{Status: http.StatusCreated, Body: draftOf(x)}, nil
+	})
+
+	huma.Register(a, d.secured(huma.Operation{
+		OperationID: "getDraft", Method: http.MethodGet, Path: "/drafts/{id}", Tags: []string{"drafts"},
+		Summary: "Get a draft",
+		Description: "The draft as last saved. The d_ id of a draft equals the m_ id of its message, so a message " +
+			"with the DRAFT label written in another program opens as d_<same id>: its content is read from the " +
+			"server (503 content_not_available while unreachable) and later saves replace it there.",
+		Errors: []int{http.StatusUnauthorized, http.StatusNotFound, http.StatusServiceUnavailable},
+	}), func(ctx context.Context, in *draftIDInput) (*draftOutput, error) {
+		id, ok := parseID("d_", in.ID)
+		if !ok {
+			return nil, errNotFound()
+		}
+		x, err := d.drafts.Get(ctx, sessionFrom(ctx).UserID, id)
+		if err != nil {
+			return nil, draftsError(err)
+		}
+		return &draftOutput{Status: http.StatusOK, Body: draftOf(x)}, nil
+	})
+
+	huma.Register(a, d.secured(huma.Operation{
+		OperationID: "updateDraft", Method: http.MethodPut, Path: "/drafts/{id}", Tags: []string{"drafts"},
+		Summary: "Save a draft (autosave)",
+		Description: "Replaces the editable fields. version must be the version the client edited, else 409 " +
+			"draft_version_conflict (another window saved meanwhile). The draft and its thread are updated at once " +
+			"(thread.updated, draft.updated); the copy in the server's Drafts folder follows at least 30 s after the " +
+			"last save, always as exactly one message.",
+		Errors: append(errs[:len(errs):len(errs)], http.StatusConflict),
+	}), func(ctx context.Context, in *updateDraftInput) (*draftOutput, error) {
+		id, ok := parseID("d_", in.ID)
+		if !ok {
+			return nil, errNotFound()
+		}
+		atts, err := parseIDs("u_", in.Body.AttachmentIDs)
+		if err != nil {
+			return nil, err
+		}
+		x, err := d.drafts.Update(ctx, drafts.UpdateParams{
+			UserID: sessionFrom(ctx).UserID, ID: id, Version: in.Body.Version,
+			To: addrsIn(in.Body.To), Cc: addrsIn(in.Body.Cc), Bcc: addrsIn(in.Body.Bcc), Subject: in.Body.Subject,
+			BodyHTML: in.Body.BodyHTML, BodyJSON: in.Body.BodyJSON, AttachmentIDs: atts, Origin: in.Client,
+		})
+		if err != nil {
+			return nil, draftsError(err)
+		}
+		return &draftOutput{Status: http.StatusOK, Body: draftOf(x)}, nil
+	})
+
+	huma.Register(a, d.secured(huma.Operation{
+		OperationID: "deleteDraft", Method: http.MethodDelete, Path: "/drafts/{id}", Tags: []string{"drafts"},
+		Summary:       "Discard a draft",
+		Description:   "Deletes the draft and its message in Silo at once; its copy in the server's Drafts folder is removed by a queued operation.",
+		DefaultStatus: http.StatusNoContent, Errors: []int{http.StatusUnauthorized, http.StatusForbidden, http.StatusNotFound},
+	}), func(ctx context.Context, in *draftIDInput) (*struct{}, error) {
+		id, ok := parseID("d_", in.ID)
+		if !ok {
+			return nil, errNotFound()
+		}
+		if err := d.drafts.Delete(ctx, sessionFrom(ctx).UserID, id, in.Client); err != nil {
+			return nil, draftsError(err)
+		}
+		return nil, nil
+	})
+}

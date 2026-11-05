@@ -37,7 +37,7 @@ func TestLoadDefaults(t *testing.T) {
 	if c.MaxAccountsPerUser != 5 || c.MirrorMaxMessageBytes != 50<<20 || c.MirrorQuotaPerAccount != 0 ||
 		c.SyncPollInterval != 5*time.Minute || c.SyncMaxConnectionsPerAcct != 3 ||
 		c.SyncInitialConcurrency != 2 || c.SyncBackfillRate != 5<<20 || c.UndoWindow != 10*time.Second ||
-		c.BlobBackend != "fs" || c.BlobFSDir != "/data/blobs" || c.WorkerConcurrency != 4 {
+		c.BlobBackend != "fs" || c.BlobFSDir != "/data/blobs" || c.WorkerConcurrency != 4 || c.MaxAttachmentBytes != 25<<20 {
 		t.Fatalf("unexpected limits defaults: %+v", c)
 	}
 }

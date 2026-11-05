@@ -11,7 +11,7 @@ func b36(prefix string, id int64) string { return prefix + strconv.FormatInt(id,
 
 // Payload keys that hold database ids, by the prefix of their API id.
 var (
-	idKeys    = map[string]string{"accountId": "acc_", "threadId": "t_", "messageId": "m_", "intoId": "t_"}
+	idKeys    = map[string]string{"accountId": "acc_", "threadId": "t_", "messageId": "m_", "intoId": "t_", "draftId": "d_"}
 	idListKey = map[string]string{"threadIds": "t_", "fromIds": "t_"}
 )
 
@@ -26,7 +26,7 @@ func asInt(v any) (int64, bool) {
 
 // mapPayload translates the database ids of an event payload to API ids:
 // accountId -> acc_, threadId/intoId/threadIds/fromIds -> t_, messageId ->
-// m_, label ids -> the system key (INBOX, ...) or l_. thread.updated also
+// m_, draftId -> d_, label ids -> the system key (INBOX, ...) or l_. thread.updated also
 // gets the pseudo label UNREAD in labelIds when unreadCount > 0, as the
 // thread shape of the REST API has it.
 func (h *Hub) mapPayload(ctx context.Context, typ string, raw []byte) (json.RawMessage, error) {

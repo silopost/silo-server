@@ -13,6 +13,7 @@ import (
 
 	"github.com/silopost/silo-server/internal/accounts"
 	"github.com/silopost/silo-server/internal/auth"
+	"github.com/silopost/silo-server/internal/drafts"
 	"github.com/silopost/silo-server/internal/events"
 	"github.com/silopost/silo-server/internal/mailview"
 	"github.com/silopost/silo-server/internal/ops"
@@ -44,6 +45,8 @@ type Options struct {
 	Ops *ops.Service
 	// View backs the thread list, thread detail and message content endpoints.
 	View *mailview.View
+	// Drafts backs /drafts and /uploads.
+	Drafts *drafts.Service
 	// Events backs GET /events and /events/poll.
 	Events *events.Hub
 	// SSEHeartbeat is the interval of the ": ping" comment on /events (25 s when 0).
@@ -61,6 +64,7 @@ type deps struct {
 	sync         *silosync.Service
 	ops          *ops.Service
 	view         *mailview.View
+	drafts       *drafts.Service
 	events       *events.Hub
 	heartbeat    time.Duration
 	log          *slog.Logger
@@ -69,7 +73,7 @@ type deps struct {
 }
 
 func newDeps(o Options) *deps {
-	d := &deps{auth: o.Auth, accts: o.Accounts, sync: o.Sync, ops: o.Ops, view: o.View, events: o.Events, heartbeat: o.SSEHeartbeat, log: o.Logger}
+	d := &deps{auth: o.Auth, accts: o.Accounts, sync: o.Sync, ops: o.Ops, view: o.View, drafts: o.Drafts, events: o.Events, heartbeat: o.SSEHeartbeat, log: o.Logger}
 	if d.heartbeat <= 0 {
 		d.heartbeat = 25 * time.Second
 	}
@@ -113,6 +117,7 @@ func Mount(root chi.Router, o Options) huma.API {
 		d.registerSync(a)
 		d.registerThreads(a)
 		d.registerOperations(a)
+		d.registerDrafts(a)
 		d.registerLabels(a)
 		d.registerThreadViews(a)
 		d.registerContent(a)

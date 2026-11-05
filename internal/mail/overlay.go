@@ -21,6 +21,15 @@ const (
 	// FolderID. They are invisible to the overlay (it joins op_messages).
 	OpCreateFolder = "create_folder"
 	OpDeleteFolder = "delete_folder"
+
+	// Draft operations (plan 3.8). append (ToRole "drafts") saves the current
+	// version of the local draft of its message in the Drafts folder and
+	// removes the older copies; delete_draft removes the copies of a
+	// discarded draft (DraftID, plus UIDs in FolderID for a draft that came
+	// from another client). The overlay does not change labels for them and
+	// append is not counted in pending_ops (a draft is saved locally).
+	OpAppend      = "append"
+	OpDeleteDraft = "delete_draft"
 )
 
 // OpPayload is jobs.payload of an imap_op job.
@@ -34,8 +43,11 @@ type OpPayload struct {
 	Remove []string `json:"remove,omitempty"`
 	// create_folder: the folder name as the user typed it (hierarchy with /).
 	Name string `json:"name,omitempty"`
-	// delete_folder: mailbox_folders.id.
+	// delete_folder: mailbox_folders.id; delete_draft: the Drafts folder of UIDs.
 	FolderID int64 `json:"folderId,omitempty"`
+	// delete_draft: X-Silo-Draft-Id of the draft and UIDs of its copies.
+	DraftID string   `json:"draftId,omitempty"`
+	UIDs    []uint32 `json:"uids,omitempty"`
 }
 
 // pendingOp is one pending operation of one message.
@@ -217,7 +229,11 @@ func applyOverlay(ctx context.Context, db DB, states []*msgState, ids []int64) (
 		if len(ops) == 0 {
 			continue
 		}
-		counts[st.id] = len(ops)
+		for _, op := range ops {
+			if op.Op != OpAppend {
+				counts[st.id]++
+			}
+		}
 		overlay(st, ops, byID, byRole[st.accountID])
 	}
 	return counts, nil
