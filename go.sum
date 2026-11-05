@@ -1,2 +1,4 @@
 github.com/caarlos0/env/v11 v11.4.2 h1:fosEVW/SjFBBzATf+buI6vsAfOzXxPrchST/RNzmBWQ=
 github.com/caarlos0/env/v11 v11.4.2/go.mod h1:sH0CUPGS25jkIKlk2q4qs0c+C7y++K7W3crU70JVB/k=
+github.com/go-chi/chi/v5 v5.5.0 h1:xdKQ1dJmVJsmgahrXSKhUx8NyVPzpwdlyrrQFpMPJgg=
+github.com/go-chi/chi/v5 v5.5.0/go.mod h1:d1IG7GtKPSjPyBP365PH8sAGVHk3qfB/IhjFNRH1wWM=
