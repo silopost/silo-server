@@ -165,6 +165,79 @@ func TestEventStreamLimit(t *testing.T) {
 	})
 }
 
+func TestEventStreamEndsWithSession(t *testing.T) {
+	he := newHardEnv(t, 0)
+	expired := func(t *testing.T, s *sseStream, start time.Time) {
+		t.Helper()
+		e := s.wait(t, 2*time.Second, "session.expired", ofType("session.expired"))
+		if e.data != "{}" {
+			t.Errorf("data = %q", e.data)
+		}
+		if d := time.Since(start); d > time.Second {
+			t.Errorf("session.expired after %v", d)
+		}
+		select {
+		case _, ok := <-s.events:
+			if ok {
+				t.Error("event after session.expired")
+			}
+		case <-time.After(time.Second):
+			t.Error("stream not closed after session.expired")
+		}
+	}
+
+	t.Run("logout", func(t *testing.T) {
+		l := he.login(he.h, imaptest.User, imaptest.Pass)
+		s := openSSE(t, he.srv.URL, l, "")
+		start := time.Now()
+		if r := serve(he.h, req{method: "DELETE", path: "/session", cookie: l.cookie, csrf: l.csrf}); r.Code != http.StatusNoContent {
+			t.Fatalf("logout: %d %s", r.Code, r.Body)
+		}
+		expired(t, s, start)
+	})
+
+	t.Run("revoked from another session", func(t *testing.T) {
+		la := he.login(he.h, imaptest.User, imaptest.Pass)
+		lb := he.login(he.h, imaptest.User, imaptest.Pass)
+		s := openSSE(t, he.srv.URL, lb, "")
+		var list struct {
+			Sessions []api.SessionInfo `json:"sessions"`
+		}
+		serve(he.h, req{method: "GET", path: "/sessions", cookie: lb.cookie}).json(&list)
+		var id string
+		for _, si := range list.Sessions {
+			if si.Current {
+				id = si.ID
+			}
+		}
+		start := time.Now()
+		if r := serve(he.h, req{method: "DELETE", path: "/sessions/" + id, cookie: la.cookie, csrf: la.csrf}); r.Code != http.StatusNoContent {
+			t.Fatalf("revoke: %d %s", r.Code, r.Body)
+		}
+		expired(t, s, start)
+	})
+
+	t.Run("user disabled", func(t *testing.T) {
+		l := he.login(he.h, imaptest.User, imaptest.Pass)
+		s := openSSE(t, he.srv.URL, l, "")
+		// A live session keeps its stream across heartbeats.
+		time.Sleep(500 * time.Millisecond)
+		select {
+		case e, ok := <-s.events:
+			t.Fatalf("unexpected event %+v (open %v)", e, ok)
+		default:
+		}
+		start := time.Now()
+		if _, err := he.pool.Exec(context.Background(), `UPDATE users SET disabled_at = now() WHERE email = 'silo@silo.test'`); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() {
+			_, _ = he.pool.Exec(context.Background(), `UPDATE users SET disabled_at = NULL WHERE email = 'silo@silo.test'`)
+		})
+		expired(t, s, start)
+	})
+}
+
 // checkHeaders asserts the security headers of a JSON (or problem) answer.
 func checkHeaders(t *testing.T, what string, h http.Header) {
 	t.Helper()

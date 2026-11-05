@@ -42,7 +42,8 @@ var eventStreamDoc = map[string]*huma.Response{"200": {
 	Description: "A Server-Sent Events stream. Each event has id (sequence number), event (type) and data (JSON); " +
 		"types: message.new, thread.updated, thread.deleted, thread.merged, label.counts, label.changed, operation.failed, " +
 		"filter.applied ({filterId, accountId, messages, threads}: POST /filters/{id}/apply is done), settings.updated " +
-		"({updatedAt}: reload GET /settings), account.status, account.sync_progress, account.error, resync. Events caused by a request that carried " +
+		"({updatedAt}: reload GET /settings), account.status, account.sync_progress, account.error, resync, session.expired " +
+		"(the session was signed out, revoked, expired or its user disabled: the stream ends; sign in again). Events caused by a request that carried " +
 		"X-Silo-Client have origin set to that id.",
 	Content: map[string]*huma.MediaType{"text/event-stream": {Schema: &huma.Schema{Type: huma.TypeString}}},
 }}
@@ -53,11 +54,13 @@ func (d *deps) registerEvents(a huma.API) {
 		Summary: "Server-Sent Events stream",
 		Description: "Pushes changes of the mailbox as they are committed. After a reconnect with Last-Event-ID the " +
 			"missed events (24 h retained) are replayed first; an id older than the retention yields a resync event. " +
-			"A ': ping' comment is sent every 25 s. A client that cannot keep up is disconnected and replays on reconnect. " +
-			"At most 8 streams per user are open at once; more answer 429 rate_limited (use /events/poll).",
+			"A ': ping' comment is sent every 25 s; with it the session is checked, and a stream whose session ended gets session.expired " +
+			"and is closed. A client that cannot keep up is disconnected and replays on reconnect. At most 8 streams per user are open at " +
+			"once; more answer 429 rate_limited (use /events/poll).",
 		Responses: eventStreamDoc, Errors: []int{http.StatusUnauthorized, http.StatusTooManyRequests},
 	}), func(ctx context.Context, in *eventsInput) (*huma.StreamResponse, error) {
-		userID := sessionFrom(ctx).UserID
+		sess := sessionFrom(ctx)
+		userID := sess.UserID
 		last := in.LastEventID
 		if last == "" {
 			last = in.LastEventIDQ
@@ -161,6 +164,11 @@ func (d *deps) registerEvents(a huma.API) {
 						return
 					}
 				case <-tick.C:
+					if d.auth != nil && !d.auth.SessionAlive(c.Context(), sess.ID) {
+						send(events.Event{Type: "session.expired", Data: []byte("{}")})
+						flush()
+						return
+					}
 					w.WriteString(": ping\n\n")
 					if !flush() {
 						return

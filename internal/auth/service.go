@@ -506,3 +506,18 @@ func hostOnly(addr string) string {
 	}
 	return addr
 }
+
+// SessionAlive reports whether the session still authenticates: not logged
+// out or revoked, not expired, user not disabled. It is one indexed query,
+// meant for long-lived requests (the SSE stream checks it on each heartbeat).
+// A database error answers true: a transient failure must not sign anyone out.
+func (s *Service) SessionAlive(ctx context.Context, sessionID int64) bool {
+	alive, err := sqlcgen.New(s.o.Pool).SessionAlive(ctx, sessionID)
+	if err != nil {
+		if ctx.Err() == nil {
+			s.log.Warn("check session", "error", err)
+		}
+		return true
+	}
+	return alive
+}

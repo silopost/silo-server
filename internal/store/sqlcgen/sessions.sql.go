@@ -178,6 +178,24 @@ func (q *Queries) ListSessionsByUser(ctx context.Context, userID int64) ([]Sessi
 	return items, nil
 }
 
+const sessionAlive = `-- name: SessionAlive :one
+SELECT EXISTS (
+  SELECT 1 FROM sessions s
+  WHERE s.id = $1 AND s.expires_at > now()
+    AND NOT EXISTS (SELECT 1 FROM users u WHERE u.id = s.user_id AND u.disabled_at IS NOT NULL)
+) AS alive
+`
+
+// tenancy: exempt the id is the caller's own session, checked on each SSE heartbeat
+// A session is alive while not deleted (logout, revoke), not expired and its
+// user is not disabled. expires_at never exceeds the absolute expiry.
+func (q *Queries) SessionAlive(ctx context.Context, id int64) (bool, error) {
+	row := q.db.QueryRow(ctx, sessionAlive, id)
+	var alive bool
+	err := row.Scan(&alive)
+	return alive, err
+}
+
 const touchSession = `-- name: TouchSession :exec
 UPDATE sessions SET last_seen_at = now(), expires_at = $3
 WHERE id = $1 AND user_id = $2 AND last_seen_at < now() - interval '1 minute'

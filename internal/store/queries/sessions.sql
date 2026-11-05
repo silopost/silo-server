@@ -32,3 +32,13 @@ DELETE FROM sessions WHERE user_id = $1;
 -- name: DeleteOtherUserSessions :execrows
 -- All sessions of a user but one (own password change).
 DELETE FROM sessions WHERE user_id = $1 AND id <> $2;
+
+-- name: SessionAlive :one
+-- tenancy: exempt the id is the caller's own session, checked on each SSE heartbeat
+-- A session is alive while not deleted (logout, revoke), not expired and its
+-- user is not disabled. expires_at never exceeds the absolute expiry.
+SELECT EXISTS (
+  SELECT 1 FROM sessions s
+  WHERE s.id = $1 AND s.expires_at > now()
+    AND NOT EXISTS (SELECT 1 FROM users u WHERE u.id = s.user_id AND u.disabled_at IS NOT NULL)
+) AS alive;
