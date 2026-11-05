@@ -24,6 +24,7 @@ import (
 	"github.com/silopost/silo-server/internal/accounts"
 	"github.com/silopost/silo-server/internal/auth"
 	"github.com/silopost/silo-server/internal/blob"
+	"github.com/silopost/silo-server/internal/drafts"
 	"github.com/silopost/silo-server/internal/events"
 	"github.com/silopost/silo-server/internal/filters"
 	"github.com/silopost/silo-server/internal/http/api"
@@ -44,7 +45,10 @@ type stack struct {
 	srv   *httptest.Server
 	hub   *events.Hub
 	mgr   *silosync.Manager
-	l     login
+	// view and compose back h (with content fetching).
+	view    *mailview.View
+	compose *drafts.Service
+	l       login
 }
 
 type stackOpts struct {
@@ -83,18 +87,34 @@ func newStack(t *testing.T, o stackOpts) *stack {
 		}
 	})
 
+	views := map[mailview.BodyFetcher]*mailview.View{}
+	composers := map[mailview.BodyFetcher]*drafts.Service{}
 	mk := func(fetcher mailview.BodyFetcher) http.Handler {
 		ao := auth.Options{Pool: e.pool, Keys: e.ring, Config: e.cfg, MinLoginDuration: 20 * time.Millisecond,
 			LoginLimit: auth.Limit{Burst: 1000, Every: time.Second}}
+		view := mailview.New(e.pool, blobs, fetcher)
+		// Compose over the same blobs: replies and forwards download the
+		// original through this view.
+		compose := drafts.New(drafts.Options{Pool: e.pool, Blobs: blobs, MaxUploadBytes: testMaxUpload, SyncDelay: time.Minute,
+			Keys: e.ring, InsecureTransport: true, Logger: logger,
+			OpenRaw: func(ctx context.Context, userID, messageID int64) (io.ReadCloser, error) {
+				raw, err := view.OpenRaw(ctx, userID, messageID)
+				if err != nil {
+					return nil, err
+				}
+				return raw.Body, nil
+			}})
+		views[fetcher], composers[fetcher] = view, compose
 		r := chi.NewRouter()
 		api.Mount(r, api.Options{
 			Auth: auth.New(ao), Accounts: accounts.New(accounts.Options{Pool: e.pool, Keys: e.ring, Config: e.cfg}),
 			Sync: silosync.NewService(e.pool), Ops: ops.NewService(e.pool, 100*time.Millisecond),
-			View: mailview.New(e.pool, blobs, fetcher), Events: hub, Filters: filterSvc, SSEHeartbeat: o.heartbeat, PublicURL: publicURL,
+			View: view, Drafts: compose, Events: hub, Filters: filterSvc, SSEHeartbeat: o.heartbeat, PublicURL: publicURL,
 		})
 		return r
 	}
 	s := &stack{env: e, h: mk(mgr), noFet: mk(nil), hub: hub, mgr: mgr}
+	s.view, s.compose = views[mgr], composers[mgr]
 	s.srv = httptest.NewServer(s.h)
 	t.Cleanup(s.srv.Close)
 	return s

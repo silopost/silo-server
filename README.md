@@ -106,6 +106,40 @@ accept `50MB` style values, rates `5MB/s`, durations `5m`. Worth knowing:
   saved and still empty (version 1, no recipients, subject, body or attachments, no
   server copy) are deleted after 24 h by `blob_gc`. The limit is `maxAttachmentBytes`
   in `GET /meta`; `413 upload_too_large` carries `limit` and `size`.
+- Compose media (plan 5.1/5.6, Faza 4):
+  - Inline pictures: `POST /uploads` with `inline=true` (a form field before the file,
+    or `?inline=true`) stores an `image/*` upload (`422 inline_not_image` otherwise)
+    with a server-generated Content-ID; the answer is
+    `{id, filename, size, contentType, inline: true, cid: "<hex>@silo", thumbnail}`
+    (`inline: false, cid: null` for plain uploads). The client puts
+    `<img src="cid:<cid>">` in `bodyHtml` and the id in `attachmentIds` like any upload;
+    drafts list `attachments[].inline`/`cid`. Inline pictures do not set
+    `has_attachments`. The sent message is
+    `mixed( related( alternative(text, html), inline… ), attachments… )` (levels with one
+    part left out); an inline upload the HTML no longer refers to is sent as a plain
+    attachment, as Gmail does. `GET /attachments/{id}` also serves uploads (`u_…`), and
+    `GET /messages/{id}/html` of a draft resolves its `cid:` pictures.
+  - Received mail: parts with a Content-ID that are not `attachment` are `inline`
+    (stored at ingest from BODYSTRUCTURE and when the body is downloaded), do not count
+    for `has:attachment`, and `cid:` in the HTML points to
+    `/api/v1/attachments/a_…?inline=1` (unknown cids are dropped).
+  - Replies and forwards: a body not downloaded yet is fetched first (up to 10 s); the
+    quote is the sanitised HTML of the original (its text without HTML), with the inline
+    pictures it shows copied to the draft under the same cid. A forward also carries the
+    original's attachments (new `attachments` rows sharing the blob, `ref_count` + 1;
+    their ids belong in `attachmentIds`), also for the filter action `forwardTo`.
+    `POST /drafts` returns `warnings`: `quote_unavailable` (no body: the quote is the
+    snippet), `attachments_unavailable` (parts that could not be downloaded were left
+    out), `attachments_too_large` (parts over `SILO_MAX_ATTACHMENT_BYTES` together).
+  - Thumbnails: `GET /attachments/{id}/thumbnail?size=s|m` (`a_…` or `u_…`; s = 64 px,
+    m = 256 px on the longer side, never enlarged) for png, jpeg, gif (first frame) and
+    webp up to 20 megapixels; JPEG, or PNG when the picture has transparency;
+    `Cache-Control: private, immutable`. Made on the first request (pure Go:
+    `image/*`, `golang.org/x/image`) and cached in the blob store (table `thumbnails`,
+    one per source blob and size; `blob_gc` drops them with their source). Other types
+    are `415 thumbnail_unsupported` — PDF included, since rendering PDF needs cgo; an
+    attachment not downloaded yet is fetched first (`503 content_not_available` as for
+    the bytes). Attachments of messages and uploads carry `thumbnail: bool`.
 - Sending (`internal/drafts`, plan 3.9): `POST /drafts/{id}/send` (`{sendAt?}`) builds
   the message at once (Bcc only in the envelope), stores it and queues it: the message
   is `SCHEDULED`, an `outbound` row (`ob_…`) is `queued` and a `send` job runs at
