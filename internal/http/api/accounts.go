@@ -111,19 +111,6 @@ type accountOutput struct{ Body Account }
 
 type testOutput struct{ Body accounts.TestResult }
 
-// SyncStatus is the sync state of an account (progress details arrive with the sync engine).
-type SyncStatus struct {
-	ID                string     `json:"id" example:"acc_1"`
-	Email             string     `json:"email"`
-	State             string     `json:"state" enum:"connecting,discovering,initial_sync,live,backoff,auth_failed,disabled"`
-	LastSyncAt        *time.Time `json:"lastSyncAt"`
-	Error             *string    `json:"error"`
-	Capabilities      []string   `json:"capabilities"`
-	KeywordsSupported bool       `json:"keywordsSupported"`
-}
-
-type syncStatusOutput struct{ Body SyncStatus }
-
 func (d *deps) registerAccounts(a huma.API) {
 	errs := func(more ...int) []int { return append([]int{http.StatusUnauthorized, http.StatusForbidden}, more...) }
 
@@ -205,24 +192,5 @@ func (d *deps) registerAccounts(a huma.API) {
 			return nil, accountError(err)
 		}
 		return nil, nil
-	})
-
-	huma.Register(a, d.secured(huma.Operation{
-		OperationID: "getSyncStatus", Method: http.MethodGet, Path: "/accounts/{id}/sync-status", Tags: []string{"accounts"},
-		Summary: "Get the sync state of an account", Errors: []int{http.StatusUnauthorized, http.StatusNotFound},
-	}), func(ctx context.Context, in *accountIDInput) (*syncStatusOutput, error) {
-		id, ok := parseID("acc_", in.ID)
-		if !ok {
-			return nil, errNotFound()
-		}
-		acc, err := d.accts.Get(ctx, sessionFrom(ctx).UserID, id)
-		if err != nil {
-			return nil, accountError(err)
-		}
-		v := accountOf(acc)
-		return &syncStatusOutput{Body: SyncStatus{
-			ID: v.ID, Email: v.Email, State: v.State, LastSyncAt: v.LastSyncAt, Error: v.Error,
-			Capabilities: append([]string{}, acc.Capabilities...), KeywordsSupported: acc.KeywordsSupported,
-		}}, nil
 	})
 }

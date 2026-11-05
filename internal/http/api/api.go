@@ -12,6 +12,7 @@ import (
 
 	"github.com/silopost/silo-server/internal/accounts"
 	"github.com/silopost/silo-server/internal/auth"
+	silosync "github.com/silopost/silo-server/internal/sync"
 )
 
 // Prefix is the URL prefix of the API on the root router.
@@ -33,6 +34,8 @@ type Options struct {
 	// when only the OpenAPI document is needed (cmd/silo-openapi).
 	Auth     *auth.Service
 	Accounts *accounts.Service
+	// Sync backs sync-status, resync and folders.
+	Sync *silosync.Service
 	// PublicURL (SILO_PUBLIC_URL) is the origin browsers use; it feeds the Origin
 	// check and decides the Secure flag of the session cookie (https only).
 	PublicURL string
@@ -43,13 +46,14 @@ type Options struct {
 type deps struct {
 	auth         *auth.Service
 	accts        *accounts.Service
+	sync         *silosync.Service
 	log          *slog.Logger
 	publicOrigin string
 	cookieSecure bool
 }
 
 func newDeps(o Options) *deps {
-	d := &deps{auth: o.Auth, accts: o.Accounts, log: o.Logger}
+	d := &deps{auth: o.Auth, accts: o.Accounts, sync: o.Sync, log: o.Logger}
 	if d.log == nil {
 		d.log = slog.Default()
 	}
@@ -85,6 +89,7 @@ func Mount(root chi.Router, o Options) huma.API {
 		registerMeta(a, o)
 		d.registerSession(a)
 		d.registerAccounts(a)
+		d.registerSync(a)
 	})
 	return a
 }

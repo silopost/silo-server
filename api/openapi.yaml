@@ -196,6 +196,107 @@ components:
         value:
           description: The value at the given location
       type: object
+    Folder:
+      additionalProperties: false
+      properties:
+        error:
+          type:
+            - string
+            - "null"
+        errorCount:
+          format: int64
+          type: integer
+        id:
+          examples:
+            - f_3
+          type: string
+        lastSyncAt:
+          format: date-time
+          type:
+            - string
+            - "null"
+        messages:
+          format: int64
+          type: integer
+        name:
+          examples:
+            - INBOX
+          type: string
+        role:
+          enum:
+            - inbox
+            - sent
+            - drafts
+            - trash
+            - junk
+            - archive
+            - all
+            - user
+          type: string
+        specialUse:
+          description: RFC 6154 attribute reported by the server, e.g. \Sent.
+          type:
+            - string
+            - "null"
+        syncMode:
+          enum:
+            - sync
+            - ignore
+          type: string
+        unread:
+          format: int64
+          type: integer
+      required:
+        - id
+        - name
+        - role
+        - specialUse
+        - messages
+        - unread
+        - syncMode
+        - lastSyncAt
+        - error
+        - errorCount
+      type: object
+    FolderChange:
+      additionalProperties: false
+      properties:
+        id:
+          examples:
+            - f_3
+          type: string
+        role:
+          description: Manual role; wins over SPECIAL-USE and names. One folder per role.
+          enum:
+            - sent
+            - drafts
+            - trash
+            - junk
+            - archive
+            - all
+            - user
+          type: string
+        syncMode:
+          description: ignore removes the folder from the mirror.
+          enum:
+            - sync
+            - ignore
+          type: string
+      required:
+        - id
+      type: object
+    FoldersOutputBody:
+      additionalProperties: false
+      properties:
+        folders:
+          items:
+            $ref: "#/components/schemas/Folder"
+          type:
+            - array
+            - "null"
+      required:
+        - folders
+      type: object
     LoginInputBody:
       additionalProperties: false
       properties:
@@ -327,6 +428,31 @@ components:
         - ok
         - steps
       type: object
+    PutFoldersInputBody:
+      additionalProperties: false
+      properties:
+        folders:
+          items:
+            $ref: "#/components/schemas/FolderChange"
+          maxItems: 1000
+          type:
+            - array
+            - "null"
+      required:
+        - folders
+      type: object
+    Resync:
+      additionalProperties: false
+      properties:
+        mode:
+          default: incremental
+          description: "incremental: sync all folders now; full: also compare every flag; rebuild: drop and rebuild the cache (not implemented yet, 501)."
+          enum:
+            - incremental
+            - full
+            - rebuild
+          type: string
+      type: object
     SessionBody:
       additionalProperties: false
       properties:
@@ -453,6 +579,44 @@ components:
         - ok
         - ms
       type: object
+    SyncProgress:
+      additionalProperties: false
+      properties:
+        bytesDone:
+          format: int64
+          type: integer
+        bytesTotal:
+          format: int64
+          type: integer
+        foldersDone:
+          format: int64
+          type: integer
+        foldersTotal:
+          format: int64
+          type: integer
+        messagesDone:
+          format: int64
+          type: integer
+        messagesTotal:
+          format: int64
+          type: integer
+        phase:
+          description: "headers_recent: last 30 days of INBOX and Sent (phase A); headers: header backfill; bodies: body backfill; done."
+          enum:
+            - headers_recent
+            - headers
+            - bodies
+            - done
+          type: string
+      required:
+        - phase
+        - foldersDone
+        - foldersTotal
+        - messagesDone
+        - messagesTotal
+        - bytesDone
+        - bytesTotal
+      type: object
     SyncStatus:
       additionalProperties: false
       properties:
@@ -462,16 +626,33 @@ components:
           type:
             - array
             - "null"
+        deadOps:
+          description: Jobs of the account that failed for good.
+          format: int64
+          type: integer
         email:
           type: string
         error:
           type:
             - string
             - "null"
+        folders:
+          items:
+            $ref: "#/components/schemas/Folder"
+          type:
+            - array
+            - "null"
         id:
           examples:
             - acc_1
           type: string
+        initialSync:
+          $ref: "#/components/schemas/SyncProgress"
+        initialSyncDoneAt:
+          format: date-time
+          type:
+            - string
+            - "null"
         keywordsSupported:
           type: boolean
         lastSyncAt:
@@ -479,6 +660,17 @@ components:
           type:
             - string
             - "null"
+        missingRoles:
+          description: "Roles without a folder on the server (archive: created on the first archive operation)."
+          items:
+            type: string
+          type:
+            - array
+            - "null"
+        pendingOps:
+          description: Local operations waiting for write-back.
+          format: int64
+          type: integer
         state:
           enum:
             - connecting
@@ -495,8 +687,14 @@ components:
         - state
         - lastSyncAt
         - error
+        - initialSync
+        - initialSyncDoneAt
+        - pendingOps
+        - deadOps
         - capabilities
         - keywordsSupported
+        - missingRoles
+        - folders
       type: object
     TestResult:
       additionalProperties: false
@@ -781,8 +979,179 @@ paths:
       summary: Change account settings
       tags:
         - accounts
+  /accounts/{id}/folders:
+    get:
+      operationId: listFolders
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            examples:
+              - acc_1
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FoldersOutputBody"
+          description: OK
+        "401":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Unauthorized
+        "404":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Not Found
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Unprocessable Entity
+        "500":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Internal Server Error
+      security:
+        - cookieAuth: []
+      summary: List the server folders of an account with roles and sync mode
+      tags:
+        - accounts
+    put:
+      description: Listed folders get the given role and/or sync mode; others stay unchanged. Each role except user belongs to at most one folder and INBOX cannot be changed (422 validation_failed).
+      operationId: updateFolders
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            examples:
+              - acc_1
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PutFoldersInputBody"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FoldersOutputBody"
+          description: OK
+        "401":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Unauthorized
+        "403":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Forbidden
+        "404":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Not Found
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Unprocessable Entity
+        "500":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Internal Server Error
+      security:
+        - cookieAuth: []
+          csrfHeader: []
+      summary: Map folder roles and choose which folders are synced
+      tags:
+        - accounts
+  /accounts/{id}/resync:
+    post:
+      description: Queues the request for the account's sync worker and returns at once.
+      operationId: resyncAccount
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            examples:
+              - acc_1
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/Resync"
+        required: true
+      responses:
+        "202":
+          description: Accepted
+        "401":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Unauthorized
+        "403":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Forbidden
+        "404":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Not Found
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Unprocessable Entity
+        "500":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Internal Server Error
+        "501":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Not Implemented
+      security:
+        - cookieAuth: []
+          csrfHeader: []
+      summary: Force a sync of the account
+      tags:
+        - accounts
   /accounts/{id}/sync-status:
     get:
+      description: State machine, initial sync progress, pending operations, folders and their errors, and roles still missing on the server.
       operationId: getSyncStatus
       parameters:
         - in: path

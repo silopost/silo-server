@@ -28,6 +28,7 @@ const (
 	CodeCustomServers      = "custom_servers_disabled"
 	CodeAccountLimit       = "account_limit_reached"
 	CodeAccountExists      = "account_exists"
+	CodeNotImplemented     = "not_implemented"
 	CodeInternal           = "internal_error"
 )
 

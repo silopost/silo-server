@@ -23,6 +23,7 @@ import (
 	"github.com/silopost/silo-server/internal/secrets"
 	"github.com/silopost/silo-server/internal/store"
 	"github.com/silopost/silo-server/internal/store/sqlcgen"
+	silosync "github.com/silopost/silo-server/internal/sync"
 	"github.com/silopost/silo-server/internal/testutil/imaptest"
 	"github.com/silopost/silo-server/internal/testutil/pgtest"
 	"github.com/silopost/silo-server/internal/testutil/smtptest"
@@ -116,6 +117,7 @@ func (e *env) router(cfg config.Config, ao auth.Options) http.Handler {
 	api.Mount(r, api.Options{
 		Auth:      auth.New(ao),
 		Accounts:  accounts.New(accounts.Options{Pool: e.pool, Keys: e.ring, Config: cfg}),
+		Sync:      silosync.NewService(e.pool),
 		PublicURL: publicURL,
 	})
 	return r
