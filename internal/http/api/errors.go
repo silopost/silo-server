@@ -16,29 +16,30 @@ import (
 
 // Stable machine-readable error codes (plan 5.3). The frontend branches on these.
 const (
-	CodeValidation         = "validation_failed"
-	CodeUnauthenticated    = "unauthenticated"
-	CodeInvalidCredentials = "invalid_credentials"
-	CodeCSRF               = "csrf_failed"
-	CodeForbidden          = "forbidden"
-	CodeNotFound           = "not_found"
-	CodeConflict           = "conflict"
-	CodeRateLimited        = "rate_limited"
-	CodeUpstreamIMAP       = "upstream_imap_error"
-	CodeAccountTestFailed  = "account_test_failed"
-	CodeHostNotAllowed     = "host_not_allowed"
-	CodeCustomServers      = "custom_servers_disabled"
-	CodeAccountLimit       = "account_limit_reached"
-	CodeAccountExists      = "account_exists"
-	CodeNotImplemented     = "not_implemented"
-	CodeLabelExists        = "label_exists"
-	CodeFolderNotEmpty     = "folder_not_empty"
-	CodeContentUnavailable = "content_not_available"
-	CodeInvalidQuery       = "invalid_query"
-	CodeInvalidSnooze      = "invalid_snooze"
-	CodeNotInInbox         = "not_in_inbox"
-	CodeNotSnoozed         = "not_snoozed"
-	CodeInternal           = "internal_error"
+	CodeValidation           = "validation_failed"
+	CodeUnauthenticated      = "unauthenticated"
+	CodeInvalidCredentials   = "invalid_credentials"
+	CodeCSRF                 = "csrf_failed"
+	CodeForbidden            = "forbidden"
+	CodeNotFound             = "not_found"
+	CodeConflict             = "conflict"
+	CodeRateLimited          = "rate_limited"
+	CodeUpstreamIMAP         = "upstream_imap_error"
+	CodeAccountTestFailed    = "account_test_failed"
+	CodeHostNotAllowed       = "host_not_allowed"
+	CodeCustomServers        = "custom_servers_disabled"
+	CodeAccountLimit         = "account_limit_reached"
+	CodeAccountExists        = "account_exists"
+	CodeNotImplemented       = "not_implemented"
+	CodeLabelExists          = "label_exists"
+	CodeFolderNotEmpty       = "folder_not_empty"
+	CodeContentUnavailable   = "content_not_available"
+	CodeInvalidQuery         = "invalid_query"
+	CodeInvalidSnooze        = "invalid_snooze"
+	CodeNotInInbox           = "not_in_inbox"
+	CodeNotSnoozed           = "not_snoozed"
+	CodeThumbnailUnsupported = "thumbnail_unsupported"
+	CodeInternal             = "internal_error"
 )
 
 const errorTypeBase = "https://silo.dev/errors/"
@@ -193,6 +194,8 @@ func viewError(err error) error {
 		return problem(http.StatusBadRequest, CodeValidation, strings.TrimPrefix(err.Error(), "mailview: invalid request: "))
 	case errors.Is(err, mailview.ErrContentNotAvailable):
 		return errContentUnavailable()
+	case errors.Is(err, mailview.ErrThumbnailUnsupported):
+		return problem(http.StatusUnsupportedMediaType, CodeThumbnailUnsupported, "There is no thumbnail for this attachment (only png, jpeg, gif and webp pictures up to 20 megapixels).")
 	case errors.Is(err, search.ErrInvalidQuery):
 		return problem(http.StatusUnprocessableEntity, CodeInvalidQuery, strings.TrimPrefix(err.Error(), "search: "))
 	}

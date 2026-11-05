@@ -104,11 +104,12 @@ func (d *deps) registerContent(a huma.API) {
 	huma.Register(a, d.secured(huma.Operation{
 		OperationID: "getAttachment", Method: http.MethodGet, Path: "/attachments/{id}", Tags: []string{"messages"},
 		Summary: "Attachment bytes",
-		Description: "A download; with inline=1 images are shown in the browser. An attachment that was not downloaded " +
+		Description: "A download (a_ id of a message attachment, or u_ id of an upload, e.g. a picture pasted into a draft); " +
+			"with inline=1 images are shown in the browser. An attachment that was not downloaded " +
 			"yet is fetched from the mail server together with its message (same wait and 503 as /messages/{id}/html).",
 		Responses: streamOf("application/octet-stream", "The attachment, with its own content type"), Errors: errs,
 	}), func(ctx context.Context, in *attachmentInput) (*huma.StreamResponse, error) {
-		id, ok := parseID("a_", in.ID)
+		id, ok := parseAttachmentID(in.ID)
 		if !ok {
 			return nil, errNotFound()
 		}
@@ -136,6 +137,59 @@ func (d *deps) registerContent(a huma.API) {
 			_, _ = io.Copy(c.BodyWriter(), att.Body)
 		}}, nil
 	})
+
+	huma.Register(a, d.secured(huma.Operation{
+		OperationID: "getAttachmentThumbnail", Method: http.MethodGet, Path: "/attachments/{id}/thumbnail", Tags: []string{"messages"},
+		Summary: "Thumbnail of an image attachment",
+		Description: "A thumbnail of a png, jpeg, gif (first frame) or webp attachment or upload (a_ or u_ id): size s is " +
+			"at most 64 px, m at most 256 px on the longer side (smaller pictures are not enlarged). JPEG, or PNG when " +
+			"the picture has transparency. Made on the first request and cached on the server; immutable. Other types " +
+			"(PDF included) and pictures over 20 megapixels are 415 thumbnail_unsupported; the thumbnail flag of an " +
+			"attachment tells which have one. An attachment that was not downloaded yet is fetched first (same wait and " +
+			"503 as /attachments/{id}).",
+		Responses: map[string]*huma.Response{"200": {
+			Description: "The thumbnail",
+			Content: map[string]*huma.MediaType{
+				"image/jpeg": {Schema: &huma.Schema{Type: huma.TypeString, Format: "binary"}},
+				"image/png":  {Schema: &huma.Schema{Type: huma.TypeString, Format: "binary"}},
+			},
+		}},
+		Errors: append(errs[:len(errs):len(errs)], http.StatusBadRequest, http.StatusUnsupportedMediaType),
+	}), func(ctx context.Context, in *thumbnailInput) (*huma.StreamResponse, error) {
+		id, ok := parseAttachmentID(in.ID)
+		if !ok {
+			return nil, errNotFound()
+		}
+		t, err := d.view.Thumbnail(ctx, sessionFrom(ctx).UserID, id, in.Size)
+		if err != nil {
+			return nil, viewError(err)
+		}
+		return &huma.StreamResponse{Body: func(c huma.Context) {
+			defer t.Body.Close()
+			c.SetHeader("Content-Type", t.ContentType)
+			c.SetHeader("Content-Disposition", "inline")
+			c.SetHeader("Cache-Control", "private, max-age=31536000, immutable")
+			c.SetHeader("ETag", `"`+t.SHA+`"`)
+			c.SetHeader("X-Content-Type-Options", "nosniff")
+			c.SetHeader("Content-Security-Policy", attachmentCSP)
+			c.SetStatus(http.StatusOK)
+			_, _ = io.Copy(c.BodyWriter(), t.Body)
+		}}, nil
+	})
+}
+
+type thumbnailInput struct {
+	ID   string `path:"id" example:"a_44"`
+	Size string `query:"size" enum:"s,m" default:"m" doc:"s: 64 px, m: 256 px (the longer side)."`
+}
+
+// parseAttachmentID reads an attachment id: a_ (attachment of a message) or
+// u_ (upload; the same table).
+func parseAttachmentID(s string) (int64, bool) {
+	if id, ok := parseID("a_", s); ok {
+		return id, true
+	}
+	return parseID("u_", s)
 }
 
 // dispositionOf formats a Content-Disposition header; a name that is not

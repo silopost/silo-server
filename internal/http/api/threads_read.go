@@ -61,6 +61,7 @@ type MessageAttachment struct {
 	Size        int64  `json:"size"`
 	Inline      bool   `json:"inline"`
 	Downloaded  bool   `json:"downloaded" doc:"false: the bytes are fetched from the mail server on first download."`
+	Thumbnail   bool   `json:"thumbnail" doc:"GET /attachments/{id}/thumbnail serves a thumbnail (png, jpeg, gif, webp); false for other types (PDF included)."`
 }
 
 // Message is a message of a thread (plan 5.2).
@@ -134,7 +135,8 @@ func messageOf(m mailview.Message) Message {
 	}
 	for _, a := range m.Attachments {
 		out.Attachments = append(out.Attachments, MessageAttachment{ID: formatID("a_", a.ID), Filename: a.Filename,
-			ContentType: a.ContentType, Size: a.Size, Inline: a.Inline, Downloaded: a.Downloaded})
+			ContentType: a.ContentType, Size: a.Size, Inline: a.Inline, Downloaded: a.Downloaded,
+			Thumbnail: mailview.ThumbnailSupported(a.ContentType)})
 	}
 	return out
 }

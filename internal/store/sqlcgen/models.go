@@ -339,6 +339,16 @@ type ThreadLabel struct {
 	Hidden       bool
 }
 
+type Thumbnail struct {
+	SourceSha256 []byte
+	Size         string
+	ThumbSha256  []byte
+	ContentType  string
+	Width        int32
+	Height       int32
+	CreatedAt    pgtype.Timestamptz
+}
+
 type User struct {
 	ID           int64
 	Email        string

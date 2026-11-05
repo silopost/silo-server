@@ -48,6 +48,19 @@ func (s *Service) BlobGC(ctx context.Context, now time.Time) (*GCResult, error) 
 UPDATE blobs b SET ref_count = GREATEST(b.ref_count - c.n, 0)
 FROM (SELECT sha, count(*)::int AS n FROM unnest($1::bytea[]) AS sha WHERE sha IS NOT NULL GROUP BY sha) c
 WHERE b.sha256 = c.sha`, shas)
+		if err != nil {
+			return err
+		}
+		// Thumbnails of blobs nobody references any more go with them: the
+		// row is deleted and the thumbnail blob released (deleted below once
+		// old enough).
+		_, err = tx.Exec(ctx, `
+WITH d AS (
+  DELETE FROM thumbnails t USING blobs b WHERE b.sha256 = t.source_sha256 AND b.ref_count = 0 RETURNING t.thumb_sha256
+)
+UPDATE blobs b SET ref_count = GREATEST(b.ref_count - c.n, 0)
+FROM (SELECT thumb_sha256 AS sha, count(*)::int AS n FROM d GROUP BY thumb_sha256) c
+WHERE b.sha256 = c.sha`)
 		return err
 	})
 	if err != nil {

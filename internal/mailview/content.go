@@ -22,7 +22,7 @@ import (
 
 // SanitizerVersion is part of the ETag of sanitised HTML: bump it when the
 // sanitiser changes so that caches drop old output.
-const SanitizerVersion = "1"
+const SanitizerVersion = "2"
 
 // maxHTMLBytes bounds the HTML part that is sanitised.
 const maxHTMLBytes = 8 << 20
@@ -120,8 +120,12 @@ func (v *View) HTML(ctx context.Context, userID, messageID int64, attachmentURL 
 	var version int32
 	err := v.pool.QueryRow(ctx, `SELECT body_html, version FROM drafts WHERE message_id = $1 AND user_id = $2`, messageID, userID).Scan(&draftHTML, &version)
 	if err == nil {
+		cids, err := v.cidURLs(ctx, messageID, attachmentURL)
+		if err != nil {
+			return nil, err
+		}
 		sum := sha256.Sum256([]byte(draftHTML))
-		out := SanitizeHTML(draftHTML, func(string) string { return "" })
+		out := SanitizeHTML(draftHTML, func(cid string) string { return cids[strings.ToLower(cid)] })
 		return &HTML{Body: []byte(out), ETag: `"d` + strconv.Itoa(int(version)) + "-" + hex.EncodeToString(sum[:8]) + "-" + SanitizerVersion + `"`}, nil
 	}
 	if !errors.Is(err, pgx.ErrNoRows) {
@@ -137,22 +141,8 @@ func (v *View) HTML(ctx context.Context, userID, messageID int64, attachmentURL 
 		return nil, err
 	}
 	htmlPart, text := extractBodies(data)
-	cids := map[string]string{}
-	rows, err := v.pool.Query(ctx, `SELECT lower(content_id), id FROM attachments WHERE message_id = $1 AND content_id IS NOT NULL`, messageID)
+	cids, err := v.cidURLs(ctx, messageID, attachmentURL)
 	if err != nil {
-		return nil, err
-	}
-	for rows.Next() {
-		var cid string
-		var id int64
-		if err := rows.Scan(&cid, &id); err != nil {
-			rows.Close()
-			return nil, err
-		}
-		cids[cid] = attachmentURL(id)
-	}
-	rows.Close()
-	if err := rows.Err(); err != nil {
 		return nil, err
 	}
 	var out string
@@ -218,16 +208,16 @@ type AttachmentContent struct {
 	SHA         string
 }
 
-// OpenAttachment opens the bytes of an attachment. When they are not in the
+// OpenAttachment opens the bytes of an attachment or upload. When they are not in the
 // mirror yet the whole message is downloaded (the same path as IngestBody).
 func (v *View) OpenAttachment(ctx context.Context, userID, id int64) (*AttachmentContent, error) {
 	for attempt := 0; ; attempt++ {
 		var a AttachmentContent
-		var msgID, accountID int64
+		var msgID, accountID *int64 // NULL for an upload not pinned to a draft
 		var sha []byte
 		err := v.pool.QueryRow(ctx, `
 SELECT a.message_id, m.account_id, a.blob_sha256, a.filename, a.content_type, a.size_bytes
-FROM attachments a JOIN messages m ON m.id = a.message_id
+FROM attachments a LEFT JOIN messages m ON m.id = a.message_id
 WHERE a.id = $1 AND a.user_id = $2`, id, userID).Scan(&msgID, &accountID, &sha, &a.Filename, &a.ContentType, &a.Size)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, ErrNotFound
@@ -250,10 +240,10 @@ WHERE a.id = $1 AND a.user_id = $2`, id, userID).Scan(&msgID, &accountID, &sha, 
 				return nil, err
 			}
 		}
-		if attempt > 0 {
+		if attempt > 0 || msgID == nil {
 			return nil, ErrNotFound // the part is not in the message
 		}
-		if err := v.fetch(ctx, accountID, msgID); err != nil {
+		if err := v.fetch(ctx, *accountID, *msgID); err != nil {
 			return nil, err
 		}
 	}
@@ -262,4 +252,28 @@ WHERE a.id = $1 AND a.user_id = $2`, id, userID).Scan(&msgID, &accountID, &sha, 
 // AttachmentURL is the URL of an attachment in the API.
 func AttachmentURL(prefix string, id int64) string {
 	return prefix + "a_" + strconv.FormatInt(id, 36) + "?inline=1"
+}
+
+// ExtractBodies returns the text/html and text/plain bodies of a raw message
+// (the parts that are not attachments), as GET /messages/{id}/html reads them.
+func ExtractBodies(raw []byte) (htmlPart, text string) { return extractBodies(raw) }
+
+// cidURLs maps the Content-IDs (lower case) of the parts of a message, or the
+// inline uploads of a draft, to their URLs.
+func (v *View) cidURLs(ctx context.Context, messageID int64, attachmentURL func(id int64) string) (map[string]string, error) {
+	cids := map[string]string{}
+	rows, err := v.pool.Query(ctx, `SELECT lower(content_id), id FROM attachments WHERE message_id = $1 AND content_id IS NOT NULL`, messageID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var cid string
+		var id int64
+		if err := rows.Scan(&cid, &id); err != nil {
+			return nil, err
+		}
+		cids[cid] = attachmentURL(id)
+	}
+	return cids, rows.Err()
 }

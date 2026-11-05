@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -59,6 +60,9 @@ type View struct {
 	FetchWait time.Duration
 	// SearchTimeout is the statement_timeout of a search (plan 3.12: 3 s).
 	SearchTimeout time.Duration
+	// thumbsGenerated counts thumbnails decoded and encoded (not served
+	// from the cache).
+	thumbsGenerated atomic.Int64
 }
 
 // New returns a View. blobs and fetcher may be nil (content endpoints then
