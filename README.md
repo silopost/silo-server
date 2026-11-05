@@ -129,6 +129,31 @@ accept `50MB` style values, rates `5MB/s`, durations `5m`. Worth knowing:
   (default for generic servers), an `imap_op` `append` saves it in Sent with `\Seen`;
   otherwise the server's own copy in Sent is attached by `Message-ID`.
   `GET /contacts/autocomplete?q=` suggests up to 8 recipients.
+- Schedule send (plan 3.9 step 3): `sendAt` beyond the undo-send window schedules the
+  message (at most a year ahead). It stays local until it leaves: its copy in the Drafts
+  folder is removed when it is scheduled (no other client can send it from there) and
+  saved again if the schedule is cancelled or the send fails. The "Scheduled" list is
+  `GET /threads?labelId=SCHEDULED`; threads (list and `GET /threads/{id}`) carry
+  `scheduledAt` (the `outbound.send_at` of a queued/sending send still ahead) and
+  `outboundId` for `POST /outbound/{id}/cancel`. Precision: the job poll (±30 s DoD).
+- Snooze (`internal/ops`, plan 3.10): `POST /threads/{id}/snooze` `{until}` (≥ 30 s,
+  ≤ 1 year ahead, else `422 invalid_snooze`; a thread without mail in INBOX is
+  `409 not_in_inbox`) answers `{thread, operationId, undoUntil}`: INBOX turns `SNOOZED`
+  at once and after `SILO_UNDO_WINDOW` an `imap_op` moves the messages to the folder of
+  role `snoozed` (`Snoozed`, created by Silo on the first snooze like Archive; another
+  name can be mapped with `PUT /accounts/{id}/folders`, which also detects `Snoozed` by
+  name) with the keyword `$SiloSnoozed` when the server keeps keywords, so other clients
+  do not show them in their inbox. Snoozing again changes the time; the operation is
+  undone by `/operations/{id}/undo`. `snooze_wake` (queued every 30 s and by ingest when a
+  new message arrives in a snoozed thread) moves due threads back to INBOX at once
+  without `$SiloSnoozed`, the newest message unread, the thread on top
+  (`threads.sort_at = now()`), and drops snoozes whose messages another client took out of
+  Snoozed; `DELETE /threads/{id}/snooze` wakes now (not undoable; `409 not_snoozed`).
+  `GET /snooze/presets[?now=]` lists `later_today`/`tomorrow`/`this_weekend`/`next_week`
+  computed in `users.settings.timezone`. `SNOOZED` cannot be set by `modify`; threads and
+  `thread.updated` carry `snoozedUntil`. Waking needs a running Silo (mail waits safely in
+  Snoozed); `snooze_items` point at messages, not UIDs, so a snooze survives a
+  UIDVALIDITY change or a re-created Snoozed folder.
 - Sessions and accounts (`internal/auth`, `internal/accounts`): `POST/GET/DELETE /session`, `GET /sessions`, `DELETE /sessions/{id}`, `GET/POST /accounts`, `POST /accounts/test`, `GET/PATCH/DELETE /accounts/{id}`, `GET /accounts/{id}/folders`, `POST /accounts/{id}/resync`, `GET /accounts/{id}/sync-status`, `GET /meta`. Accounts carry `position` and are listed in that order (`GET /session`, `GET /accounts`). Migration `000005` turns `sent_append` on for generic accounts created before sending existed. The full list is `api/openapi.yaml`.
 - Reading the mailbox (`internal/mailview`): `GET /labels` (counters, pseudo label
   `UNREAD`), `POST /labels` (user label with an IMAP keyword, or a folder: `CREATE`
