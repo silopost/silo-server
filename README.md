@@ -23,16 +23,17 @@ silo-server migrate version           # current schema version
 silo-server rotate-secrets           # re-encrypt account secrets after a key change
 silo-server reconcile [--account ID] # report drift of derived mail data (threads, labels)
 silo-server rebuild-cache --account ID [--yes] # drop the cached mail of an account, sync it again
+silo-server user add|passwd|admin|list   # manage Silo users (see below)
 silo-server version
 ```
 
 `migrate` needs only `SILO_DATABASE_URL`. Migrations run under a Postgres
 advisory lock, so several instances can start at once.
 
-`rotate-secrets` rotates the key protecting stored mailbox passwords: set
+`rotate-secrets` rotates the key protecting stored mailbox passwords and TOTP secrets: set
 `SILO_SECRET_KEY` to the new key and `SILO_SECRET_KEY_PREVIOUS` to the old one,
 run the command (it needs both plus `SILO_DATABASE_URL`, is safe to repeat and
-reports how many accounts were re-encrypted), then drop the previous key.
+reports how many accounts and TOTP secrets were re-encrypted), then drop the previous key.
 
 ## Run
 
@@ -317,6 +318,7 @@ accept `50MB` style values, rates `5MB/s`, durations `5m`. Worth knowing:
   365 days at most, and are listed with `kind` and `clientName` in `GET /sessions`.
 - Custom mail servers (`SILO_ALLOW_CUSTOM_SERVERS=true`) must resolve to public
   addresses unless listed in `SILO_CUSTOM_SERVER_ALLOWLIST` (host names, IPs or CIDRs).
+  In `SILO_AUTH_MODE=local` custom servers are always allowed (see below).
 - Logging: `SILO_LOG_FORMAT` (`json`/`text`), `SILO_LOG_LEVEL`; listen address: `SILO_HTTP_ADDR`.
 
 ## Labels and IMAP keywords
@@ -376,6 +378,85 @@ events follow.
 - Refused with `409 rebuild_blocked` while a message is queued or being sent
   (`outbound`) or operations wait for write-back (`imap_op` jobs); try again when
   `sync-status.pendingOps` is 0.
+
+## Users, mode `local` and the admin panel
+
+### Mode `local`
+
+With `SILO_AUTH_MODE=local` users sign in with a Silo password (argon2id)
+instead of their mailbox credentials. Nobody can sign up: an admin creates
+users, and users add their mail accounts themselves after signing in
+(`POST /accounts`, host given explicitly). `SILO_DEFAULT_IMAP_HOST` is optional
+in this mode; custom servers are always allowed (`GET /meta` reports
+`allowCustomServers: true`) and every host other than a configured default must
+resolve to a public address or be on `SILO_CUSTOM_SERVER_ALLOWLIST`.
+
+Sign-in failures (unknown email, wrong password, disabled user) all answer
+`401 invalid_credentials` after the same argon2id work and the same minimum time;
+the per-IP and per-login rate limits apply as in mode `imap`. `POST
+/session/password` (`{currentPassword, newPassword}`, at least 10 characters)
+changes the password and signs out the user's other sessions; in mode `imap` it
+answers `409 not_available`.
+
+Create the first admin from the command line:
+
+```sh
+silo-server user add --email admin@example.com --admin      # prints a generated password once
+echo 'a long password' | silo-server user add --email ala@example.com --password-stdin
+```
+
+### `user` command
+
+```sh
+silo-server user add --email X [--name N] [--admin] [--password-stdin]
+silo-server user passwd --email X        # new password from stdin (mode local), signs the user out
+silo-server user admin --email X --set=true|false
+silo-server user list
+```
+
+It needs `SILO_DATABASE_URL` and reads `SILO_AUTH_MODE`. In mode `imap`, `user
+add` stores no password (the user signs in with the mailbox, which links the
+account on first sign-in) and `user admin` is how a mailbox user becomes admin.
+
+### TOTP (mode `local`)
+
+Authenticator-app codes (RFC 6238: SHA1, 30 s, 6 digits, ±1 step) as a second
+factor. The secret is stored encrypted with `SILO_SECRET_KEY` (and re-encrypted
+by `rotate-secrets`); a code of an already used time step is refused; backup
+codes are stored as SHA-256 hashes and work once. In mode `imap` every TOTP
+endpoint answers `409 not_available`.
+
+| Request | Effect |
+|---|---|
+| `POST /totp/setup` | new secret: `{secret, otpauthUrl}` (show as QR code); not enforced yet; `409 totp_enabled` when on |
+| `POST /totp/enable {code}` | turns TOTP on, returns 10 `backupCodes` once (`422 invalid_totp_code` for a wrong code) |
+| `DELETE /totp {password, code}` | turns TOTP off (`code`: TOTP or backup code; `403 invalid_credentials` when wrong) |
+| `POST /totp/backup-codes {password, code}` | replaces the backup codes |
+
+Sign-in: `POST /session` takes an optional `totpCode` (TOTP or backup code). For
+a user with TOTP on, the right password without a code answers `401
+totp_required` (the client asks for the code and posts again), a wrong code `401
+invalid_credentials`. `GET /session` reports `user.totpEnabled`.
+
+### Admin panel
+
+Endpoints for users with `is_admin` (others get `403 forbidden`), in both modes:
+
+| Request | Effect |
+|---|---|
+| `GET /admin/users` | users with `isAdmin`, `disabled`, `totpEnabled` and their accounts' states |
+| `POST /admin/users {email, displayName?, isAdmin?, password?}` | mode `local` only; without `password` a generated `temporaryPassword` is returned once |
+| `PATCH /admin/users/{id} {disabled?, isAdmin?, displayName?, password?}` | disabling signs the user out and sets their accounts to `disabled` (sync stops); enabling reconnects them; `password` only in mode `local` |
+| `POST /admin/users/{id}/totp/reset` | turns the user's TOTP off (lost device) |
+| `DELETE /admin/users/{id}` | removes the user and everything Silo keeps for them (mail servers untouched) |
+| `GET /admin/accounts` | every account with state, error, `pendingOps` and `deadOps` |
+| `GET /admin/jobs?status=dead\|pending&accountId=` | newest 200 jobs, without payloads |
+| `POST /admin/jobs/{id}/retry` | a dead job runs again (attempts reset) |
+| `DELETE /admin/jobs/{id}` | discards a job that is not running |
+
+Admins cannot disable, demote or delete themselves (`409 admin_self_change`). A
+disabled user cannot sign in in either mode, and their existing sessions stop
+working at once.
 
 ## Development
 
