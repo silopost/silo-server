@@ -3,7 +3,6 @@ package auth
 import (
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/silopost/silo-server/internal/config"
 )
@@ -27,37 +26,6 @@ func TestPasswordHash(t *testing.T) {
 		if h.verify("s3cret", bad) {
 			t.Errorf("malformed hash %q accepted", bad)
 		}
-	}
-}
-
-func TestLimiter(t *testing.T) {
-	now := time.Unix(1000, 0)
-	l := newLimiter(Limit{Burst: 2, Every: 10 * time.Second}, func() time.Time { return now })
-
-	for i := 0; i < 2; i++ {
-		if ok, _ := l.allow("k"); !ok {
-			t.Fatalf("request %d denied within burst", i+1)
-		}
-	}
-	ok, wait := l.allow("k")
-	if ok || wait <= 0 || wait > 10*time.Second {
-		t.Fatalf("third request: ok=%v wait=%v, want denied with wait in (0,10s]", ok, wait)
-	}
-	if ok, _ := l.allow("other"); !ok {
-		t.Error("keys must not share a bucket")
-	}
-	now = now.Add(10 * time.Second)
-	if ok, _ := l.allow("k"); !ok {
-		t.Error("token not refilled after Every")
-	}
-	if ok, _ := l.allow("k"); ok {
-		t.Error("only one token should have been refilled")
-	}
-	// Idle, fully refilled buckets are swept.
-	now = now.Add(time.Hour)
-	l.allow("trigger")
-	if len(l.buckets) != 1 {
-		t.Errorf("buckets after sweep = %d, want 1", len(l.buckets))
 	}
 }
 

@@ -21,6 +21,7 @@ import (
 
 	"github.com/silopost/silo-server/internal/config"
 	"github.com/silopost/silo-server/internal/imapx"
+	"github.com/silopost/silo-server/internal/ratelimit"
 	"github.com/silopost/silo-server/internal/secrets"
 	"github.com/silopost/silo-server/internal/store/sqlcgen"
 	"github.com/silopost/silo-server/internal/worker"
@@ -110,8 +111,8 @@ type Service struct {
 	o        Options
 	log      *slog.Logger
 	hash     *hasher
-	ipLim    *limiter
-	loginLim *limiter
+	ipLim    *ratelimit.Limiter
+	loginLim *ratelimit.Limiter
 }
 
 // New returns a Service.
@@ -137,7 +138,7 @@ func New(o Options) *Service {
 	}
 	return &Service{
 		o: o, log: log.With("component", "auth"), hash: newHasher(),
-		ipLim: newLimiter(o.IPLimit, o.Now), loginLim: newLimiter(o.LoginLimit, o.Now),
+		ipLim: ratelimit.New(o.IPLimit, o.Now), loginLim: ratelimit.New(o.LoginLimit, o.Now),
 	}
 }
 
@@ -197,10 +198,10 @@ func (s *Service) Login(ctx context.Context, email, password string, c Client) (
 // throttle returns how long the caller must wait, or 0 when allowed.
 func (s *Service) throttle(ip, login string) time.Duration {
 	var wait time.Duration
-	if ok, w := s.ipLim.allow(hostOnly(ip)); !ok {
+	if ok, w := s.ipLim.Allow(hostOnly(ip)); !ok {
 		wait = w
 	}
-	if ok, w := s.loginLim.allow(strings.ToLower(login)); !ok && w > wait {
+	if ok, w := s.loginLim.Allow(strings.ToLower(login)); !ok && w > wait {
 		wait = w
 	}
 	return wait

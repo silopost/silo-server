@@ -179,7 +179,7 @@ func (s *Service) setPassword(ctx context.Context, userID int64, password string
 // reauth checks the password of a signed-in user before a sensitive change.
 // It is throttled like a sign-in of the same login.
 func (s *Service) reauth(user sqlcgen.User, password string) error {
-	if ok, w := s.loginLim.allow(strings.ToLower(user.Email)); !ok {
+	if ok, w := s.loginLim.Allow(strings.ToLower(user.Email)); !ok {
 		return &RateLimitError{RetryAfter: w}
 	}
 	if !user.PasswordHash.Valid || len(password) > 1024 || !s.hash.verify(password, user.PasswordHash.String) {
