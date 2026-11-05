@@ -249,6 +249,17 @@ type MessageReference struct {
 	Position        int16
 }
 
+type MetadataRestore struct {
+	ID        int64
+	UserID    int64
+	AccountID int64
+	Kind      string
+	Payload   []byte
+	CreatedAt pgtype.Timestamptz
+	Attempts  int32
+	LastError pgtype.Text
+}
+
 type OpMessage struct {
 	JobID          int64
 	MessageID      int64
