@@ -176,6 +176,8 @@ type Deps struct {
 	// Backoff overrides DefaultBackoff (tests).
 	Backoff []time.Duration
 	Hooks   Hooks
+	// OAuth issues the access tokens of xoauth2 accounts (oauth.go).
+	OAuth TokenSource
 }
 
 func (d *Deps) now() time.Time {

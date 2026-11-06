@@ -67,6 +67,8 @@ type smtpAccount struct {
 	password       string
 	insecureTransp bool
 	dialCtx        func(ctx context.Context, network, addr string) (net.Conn, error)
+	// oauthToken returns the access token of an xoauth2 account (nil: password).
+	oauthToken func(ctx context.Context) (string, error)
 }
 
 // delivery is a successful delivery.
@@ -159,6 +161,11 @@ func deliver(ctx context.Context, a *smtpAccount, rcpts []string, raw []byte) (*
 	if ok, _ := c.Extension("AUTH"); ok {
 		var auth sasl.Client
 		switch {
+		case a.oauthToken != nil:
+			var serr *sendError
+			if auth, serr = xoauth2Auth(ctx, c, a); serr != nil {
+				return nil, serr
+			}
 		case c.SupportsAuth(sasl.Plain):
 			auth = sasl.NewPlainClient("", a.username, a.password)
 		case c.SupportsAuth(sasl.Login):
@@ -168,7 +175,7 @@ func deliver(ctx context.Context, a *smtpAccount, rcpts []string, raw []byte) (*
 			return nil, permanent("auth: no supported AUTH mechanism (server offers %s)", mechs)
 		}
 		if err := c.Auth(auth); err != nil {
-			return nil, classify("auth", err)
+			return nil, classifyAuth(err)
 		}
 	} else if a.username != "" {
 		return nil, permanent("auth: the server does not offer AUTH")
@@ -300,20 +307,28 @@ func (s *Service) requeue(ctx context.Context, outboundID int64, errText string)
 // draft's recipients) and the stored message of a send.
 func (s *Service) loadSend(ctx context.Context, accountID, msgID int64) (*smtpAccount, *mail.DraftMIME, []byte, error) {
 	a := &smtpAccount{id: accountID, insecureTransp: s.o.InsecureTransport, dialCtx: s.o.DialContext}
+	var authType string
 	err := s.o.Pool.QueryRow(ctx, `
-SELECT user_id, email::text, smtp_host, smtp_port, smtp_tls, username, secret_enc, sent_append FROM accounts WHERE id = $1`, accountID).
-		Scan(&a.userID, &a.email, &a.host, &a.port, &a.tls, &a.username, &a.secret, &a.sentAppend)
+SELECT user_id, email::text, smtp_host, smtp_port, smtp_tls, username, secret_enc, sent_append, auth_type FROM accounts WHERE id = $1`, accountID).
+		Scan(&a.userID, &a.email, &a.host, &a.port, &a.tls, &a.username, &a.secret, &a.sentAppend, &authType)
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("drafts: load account %d: %w", accountID, err)
 	}
-	if s.o.Keys == nil {
+	if authType == "xoauth2" {
+		if s.o.OAuth == nil {
+			return nil, nil, nil, errors.New("drafts: no OAuth provider to authenticate an xoauth2 account")
+		}
+		a.oauthToken = func(ctx context.Context) (string, error) { return s.o.OAuth.Token(ctx, accountID) }
+	} else if s.o.Keys == nil {
 		return nil, nil, nil, errors.New("drafts: no keyring to decrypt the SMTP password")
 	}
-	pass, err := s.o.Keys.Decrypt(a.secret, []byte(strconv.FormatInt(accountID, 10)))
-	if err != nil {
-		return nil, nil, nil, fmt.Errorf("drafts: decrypt account secret: %w", err)
+	if a.oauthToken == nil {
+		pass, err := s.o.Keys.Decrypt(a.secret, []byte(strconv.FormatInt(accountID, 10)))
+		if err != nil {
+			return nil, nil, nil, fmt.Errorf("drafts: decrypt account secret: %w", err)
+		}
+		a.password = string(pass)
 	}
-	a.password = string(pass)
 	m := &mail.DraftMIME{}
 	var to, cc, bcc []byte
 	var sha []byte

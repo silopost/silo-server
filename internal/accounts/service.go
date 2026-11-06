@@ -3,6 +3,7 @@
 package accounts
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -30,6 +31,8 @@ var (
 	ErrInvalid             = errors.New("accounts: invalid parameters")
 	ErrLimitReached        = errors.New("accounts: account limit reached")
 	ErrExists              = errors.New("accounts: account already exists")
+	// ErrPasswordNotAvailable: a password for an OAuth (xoauth2) account.
+	ErrPasswordNotAvailable = errors.New("accounts: the account signs in with OAuth and has no password")
 )
 
 // TestFailedError carries the per-step result of a failed connection test.
@@ -201,6 +204,12 @@ func (s *Service) Update(ctx context.Context, userID, id int64, in Update) (sqlc
 	}
 	if in.Password != nil && *in.Password == "" {
 		return sqlcgen.Account{}, fmt.Errorf("%w: empty password", ErrInvalid)
+	}
+	if in.Password != nil {
+		// An OAuth account has no password: it signs in again at its provider.
+		if acc, err := s.Get(ctx, userID, id); err != nil || acc.AuthType == AuthXOAuth2 {
+			return acc, cmp.Or(err, ErrPasswordNotAvailable)
+		}
 	}
 
 	tx, err := s.o.Pool.BeginTx(ctx, pgx.TxOptions{})

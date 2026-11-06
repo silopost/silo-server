@@ -99,6 +99,8 @@ type Options struct {
 	// DialContext opens the SMTP connections (the anti-SSRF dialer of netx);
 	// net.Dialer when nil.
 	DialContext func(ctx context.Context, network, addr string) (net.Conn, error)
+	// OAuth issues the access tokens of xoauth2 accounts (oauth.go).
+	OAuth OAuthTokens
 }
 
 // Service implements the drafts and uploads endpoints.

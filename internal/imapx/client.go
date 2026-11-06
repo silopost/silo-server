@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/emersion/go-imap/v2/imapclient"
+	"github.com/emersion/go-sasl"
 )
 
 // TLSMode selects how the connection is secured.
@@ -144,6 +145,15 @@ func (c *Client) Login(ctx context.Context, user, pass string) error {
 	ctx, cancel := context.WithTimeout(ctx, DefaultCommandTimeout)
 	defer cancel()
 	return wrapLoginError(c.await(ctx, c.c.Login(user, pass).Wait))
+}
+
+// Authenticate authenticates with AUTHENTICATE and a SASL mechanism (XOAUTH2
+// for OAuth accounts). Errors are classified as for Login; a failure the
+// SASL client reports itself (a refused token) is ErrAuthFailed too.
+func (c *Client) Authenticate(ctx context.Context, sc sasl.Client) error {
+	ctx, cancel := context.WithTimeout(ctx, DefaultCommandTimeout)
+	defer cancel()
+	return wrapLoginError(c.await(ctx, func() error { return c.c.Authenticate(sc) }))
 }
 
 // Capabilities asks the server for its capabilities (they usually grow after

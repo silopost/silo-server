@@ -5,10 +5,8 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"errors"
-	"fmt"
 	"log/slog"
 	"math/rand/v2"
-	"strconv"
 	stdsync "sync"
 	"time"
 
@@ -197,7 +195,7 @@ func (w *AccountWorker) Run(ctx context.Context) error {
 			attempt = 0 // the next pass wipes the cache
 		case errors.Is(err, imapx.ErrAuthFailed):
 			w.log.Warn("authentication failed; waiting for new credentials", "err", err)
-			if e := w.setState(ctx, StateAuthFailed, ErrCodeAuthFailed, "authentication failed"); errors.Is(e, errAccountGone) {
+			if e := w.setState(ctx, StateAuthFailed, ErrCodeAuthFailed, authFailedDetail(err)); errors.Is(e, errAccountGone) {
 				return nil
 			}
 			attempt = 0
@@ -250,10 +248,6 @@ func (w *AccountWorker) release() { <-w.slots }
 
 // dial opens and authenticates one IMAP connection.
 func (w *AccountWorker) dial(ctx context.Context, acc *account, opts ...imapx.Option) (*conn, error) {
-	pass, err := w.d.Keys.Decrypt(acc.secret, []byte(strconv.FormatInt(acc.id, 10)))
-	if err != nil {
-		return nil, fmt.Errorf("%w: decrypt account secret: %v", imapx.ErrAuthFailed, err)
-	}
 	if dial := w.d.Settings.DialContext; dial != nil {
 		opts = append(opts, imapx.WithDialContext(dial))
 	}
@@ -261,7 +255,7 @@ func (w *AccountWorker) dial(ctx context.Context, acc *account, opts ...imapx.Op
 	if err != nil {
 		return nil, err
 	}
-	if err := cl.Login(ctx, acc.username, string(pass)); err != nil {
+	if err := w.authenticate(ctx, cl, acc); err != nil {
 		cl.Close()
 		return nil, err
 	}

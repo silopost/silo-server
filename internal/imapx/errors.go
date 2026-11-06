@@ -24,6 +24,12 @@ func wrapLoginError(err error) error {
 	if err == nil {
 		return nil
 	}
+	// A SASL client that gives up on a challenge (XOAUTH2: the server sent
+	// its JSON error for a refused token) reports rejected credentials.
+	var af interface{ AuthFailed() bool }
+	if errors.As(err, &af) && af.AuthFailed() {
+		return fmt.Errorf("%w: %w", ErrAuthFailed, err)
+	}
 	var ie *imap.Error
 	if errors.As(err, &ie) {
 		switch ie.Type {

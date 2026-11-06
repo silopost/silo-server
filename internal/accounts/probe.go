@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/emersion/go-imap/v2"
+	"github.com/emersion/go-sasl"
 
 	"github.com/silopost/silo-server/internal/imapx"
 	"github.com/silopost/silo-server/internal/netx"
@@ -54,6 +55,9 @@ type endpoint struct {
 	// Dial opens the TCP connections: the anti-SSRF dialer of the host (set
 	// by resolve); net.Dialer when nil (tests).
 	Dial netx.DialFunc
+	// SASL, when set, authenticates instead of Username/Password (XOAUTH2);
+	// it returns a new client for each connection.
+	SASL func() sasl.Client
 }
 
 // dial connects to e.Host:e.Port through e.Dial.
@@ -115,7 +119,11 @@ func probeIMAP(ctx context.Context, e endpoint) ProtocolResult {
 		return e.TLS, nil
 	})
 	st.run("login", func() (string, error) {
-		if err := cl.Login(ctx, e.Username, e.Password); err != nil {
+		login := func() error { return cl.Login(ctx, e.Username, e.Password) }
+		if e.SASL != nil {
+			login = func() error { return cl.Authenticate(ctx, e.SASL()) }
+		}
+		if err := login(); err != nil {
 			if errors.Is(err, imapx.ErrAuthFailed) {
 				return "", fmt.Errorf("authentication failed: %w", unwrapIMAP(err))
 			}
@@ -150,6 +158,10 @@ func unwrapIMAP(err error) error {
 	var ie *imap.Error
 	if errors.As(err, &ie) {
 		return errors.New(strings.TrimSpace(ie.Text))
+	}
+	var af interface{ AuthFailed() bool }
+	if errors.As(err, &af) {
+		return af.(error) // a refused token, with the server's explanation
 	}
 	return errors.New("rejected by server")
 }
@@ -212,6 +224,13 @@ func probeSMTP(ctx context.Context, e endpoint) ProtocolResult {
 		}
 		var a smtp.Auth
 		switch {
+		case e.SASL != nil:
+			sc := e.SASL()
+			mech, _, _ := sc.Start()
+			if !hasMech(mechs, mech) {
+				return "", fmt.Errorf("the server does not offer %s (it offers %s)", mech, mechs)
+			}
+			a = saslAuth{c: sc}
 		case hasMech(mechs, "PLAIN"):
 			a = plainAuth{user: e.Username, pass: e.Password}
 		case hasMech(mechs, "LOGIN"):
@@ -276,4 +295,16 @@ func (a loginAuth) Next(challenge []byte, more bool) ([]byte, error) {
 		return []byte(a.pass), nil
 	}
 	return nil, errors.New("unexpected server challenge")
+}
+
+// saslAuth runs a go-sasl client (XOAUTH2) as a net/smtp Auth.
+type saslAuth struct{ c sasl.Client }
+
+func (a saslAuth) Start(*smtp.ServerInfo) (string, []byte, error) { return a.c.Start() }
+
+func (a saslAuth) Next(challenge []byte, more bool) ([]byte, error) {
+	if !more {
+		return nil, nil
+	}
+	return a.c.Next(challenge)
 }
