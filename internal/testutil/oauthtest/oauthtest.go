@@ -47,12 +47,13 @@ type Server struct {
 	// RotateRefresh makes refresh_token grants return a new refresh token.
 	RotateRefresh bool
 
-	codes     map[string]grant  // authorization codes
-	refresh   map[string]string // refresh token -> email
-	access    map[string]string // access token -> email
-	refreshes int
-	exchanges int
-	lastAuth  url.Values
+	codes        map[string]grant  // authorization codes
+	refresh      map[string]string // refresh token -> email
+	access       map[string]string // access token -> email
+	refreshes    int
+	exchanges    int
+	lastAuth     url.Values
+	refreshScope string
 }
 
 type grant struct{ challenge, redirect, email string }
@@ -222,6 +223,7 @@ func (s *Server) token(w http.ResponseWriter, r *http.Request) {
 		s.refresh[refresh] = email
 		s.exchanges++
 	case "refresh_token":
+		s.refreshScope = r.PostForm.Get("scope")
 		e, ok := s.refresh[r.PostForm.Get("refresh_token")]
 		if !ok || s.FailRefresh {
 			tokenError(w, "invalid_grant", "Token has been expired or revoked.")
@@ -309,4 +311,11 @@ func (s *Server) RevokeAccessTokens() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.access = map[string]string{}
+}
+
+// LastRefreshScope is the scope parameter of the last refresh_token grant.
+func (s *Server) LastRefreshScope() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.refreshScope
 }

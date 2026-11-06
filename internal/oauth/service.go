@@ -11,6 +11,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"slices"
 	"strconv"
 	"strings"
@@ -382,18 +383,68 @@ type cached struct {
 // refresher always asks the token endpoint (the ReuseTokenSource around it
 // caches); it keeps the refresh token the provider may rotate.
 type refresher struct {
-	ctx context.Context
-	cfg *oauth2.Config
-	rt  string
+	ctx    context.Context
+	cfg    *oauth2.Config
+	rt     string
+	scoped bool // send scope (Provider.RefreshScopes)
+	client *http.Client
 }
 
 func (r *refresher) Token() (*oauth2.Token, error) {
-	tok, err := r.cfg.TokenSource(r.ctx, &oauth2.Token{RefreshToken: r.rt}).Token()
+	var tok *oauth2.Token
+	var err error
+	if r.scoped {
+		tok, err = r.refreshScoped()
+	} else {
+		tok, err = r.cfg.TokenSource(r.ctx, &oauth2.Token{RefreshToken: r.rt}).Token()
+	}
 	if err != nil {
 		return nil, err
 	}
 	if tok.RefreshToken != "" {
 		r.rt = tok.RefreshToken
+	}
+	return tok, nil
+}
+
+// refreshScoped is the refresh_token grant with the scopes of the
+// authorization, which the Microsoft identity platform (v2.0) requires and
+// golang.org/x/oauth2 does not send. Errors are *oauth2.RetrieveError as
+// from x/oauth2.
+func (r *refresher) refreshScoped() (*oauth2.Token, error) {
+	form := url.Values{
+		"grant_type": {"refresh_token"}, "refresh_token": {r.rt}, "scope": {strings.Join(r.cfg.Scopes, " ")},
+		"client_id": {r.cfg.ClientID}, "client_secret": {r.cfg.ClientSecret},
+	}
+	req, err := http.NewRequestWithContext(r.ctx, http.MethodPost, r.cfg.Endpoint.TokenURL, strings.NewReader(form.Encode()))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	resp, err := r.client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("oauth2: cannot fetch token: %w", err)
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if err != nil {
+		return nil, fmt.Errorf("oauth2: cannot fetch token: %w", err)
+	}
+	var tj struct {
+		AccessToken      string `json:"access_token"`
+		TokenType        string `json:"token_type"`
+		RefreshToken     string `json:"refresh_token"`
+		ExpiresIn        int64  `json:"expires_in"`
+		Error            string `json:"error"`
+		ErrorDescription string `json:"error_description"`
+	}
+	_ = json.Unmarshal(body, &tj)
+	if resp.StatusCode != http.StatusOK || tj.AccessToken == "" {
+		return nil, &oauth2.RetrieveError{Response: resp, Body: body, ErrorCode: tj.Error, ErrorDescription: tj.ErrorDescription}
+	}
+	tok := &oauth2.Token{AccessToken: tj.AccessToken, TokenType: tj.TokenType, RefreshToken: tj.RefreshToken}
+	if tj.ExpiresIn > 0 {
+		tok.Expiry = time.Now().Add(time.Duration(tj.ExpiresIn) * time.Second)
 	}
 	return tok, nil
 }
@@ -426,7 +477,7 @@ func (s *Service) Token(ctx context.Context, accountID int64) (string, error) {
 			s.mu.Unlock()
 			return "", fmt.Errorf("oauth: decrypt refresh token of account %d: %w", accountID, err)
 		}
-		src := &refresher{ctx: s.httpCtx(context.Background()), cfg: &p.OAuth2, rt: string(rt)}
+		src := &refresher{ctx: s.httpCtx(context.Background()), cfg: &p.OAuth2, rt: string(rt), scoped: p.RefreshScopes, client: s.client}
 		e = &cached{sealed: sealed, src: src, stored: string(rt), ts: oauth2.ReuseTokenSourceWithExpiry(nil, src, refreshMargin)}
 		s.cache[accountID] = e
 	}

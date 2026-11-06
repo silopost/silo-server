@@ -42,6 +42,9 @@ type Provider struct {
 	// id_token has no email claim.
 	UserinfoURL string
 	IMAP, SMTP  Server
+	// RefreshScopes sends the scopes with every refresh_token grant
+	// (Microsoft identity platform v2.0).
+	RefreshScopes bool
 	// SentAppend is accounts.sent_append of its accounts: whether Silo saves
 	// sent mail to the Sent folder itself.
 	SentAppend bool
@@ -94,8 +97,9 @@ func NewProviders(c config.OAuthConfig) map[string]*Provider {
 					"offline_access", "openid", "email",
 				},
 			},
-			UserinfoURL: or(c.MicrosoftUserinfoURL, microsoftUserinfo),
-			IMAP:        Server{Host: "outlook.office365.com", Port: 993, TLS: config.TLSImplicit},
+			UserinfoURL:   or(c.MicrosoftUserinfoURL, microsoftUserinfo),
+			RefreshScopes: true,
+			IMAP:          Server{Host: "outlook.office365.com", Port: 993, TLS: config.TLSImplicit},
 			// Exchange Online offers SMTP AUTH only on 587 with STARTTLS.
 			SMTP: Server{Host: "smtp.office365.com", Port: 587, TLS: config.TLSStartTLS},
 			// Plan 3.9: Exchange Online saves mail submitted with SMTP AUTH

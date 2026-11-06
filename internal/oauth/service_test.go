@@ -297,3 +297,53 @@ VALUES ($1, 'p@silo.test', 'h', 993, 'implicit', 'h', 465, 'implicit', 'p', '\x0
 		t.Fatal("password account got a token")
 	}
 }
+
+// TestMicrosoftRefresh: Microsoft's token endpoint gets the scopes with the
+// refresh_token grant; its invalid_grant is ErrReauthRequired too.
+func TestMicrosoftRefresh(t *testing.T) {
+	e := newEnv(t)
+	ctx := context.Background()
+	ms := oauth.New(oauth.Options{Pool: e.pool, Keys: e.ring, PublicURL: "https://mail.silo.test", Providers: oauth.NewProviders(config.OAuthConfig{
+		MicrosoftClientID: oauthtest.ClientID, MicrosoftClientSecret: oauthtest.ClientSecret, MicrosoftTenant: "organizations",
+		MicrosoftAuthURL: e.fake.URL + "/authorize", MicrosoftTokenURL: e.fake.URL + "/token",
+	})})
+	if got := ms.Configured(); len(got) != 1 || got[0] != "microsoft" {
+		t.Fatalf("configured = %v", got)
+	}
+	authURL, state, err := ms.Start(ctx, "microsoft", oauth.StartRequest{UserID: e.user})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cb := e.fake.Authorize(t, authURL)
+	g, err := ms.Complete(ctx, "microsoft", state, cb.Query().Get("code"), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if g.Provider.AccountProvider != "microsoft" || g.Provider.SMTP.Port != 587 || g.Provider.SMTP.TLS != "starttls" ||
+		e.fake.LastAuthorize().Get("access_type") != "" {
+		t.Fatalf("grant %+v, authorize %v", g.Provider, e.fake.LastAuthorize())
+	}
+	var id int64
+	if err := e.pool.QueryRow(ctx, `
+INSERT INTO accounts (user_id, email, provider, imap_host, imap_port, imap_tls, smtp_host, smtp_port, smtp_tls, username, auth_type, secret_enc)
+VALUES ($1, $2::text, 'microsoft', 'outlook.office365.com', 993, 'implicit', 'smtp.office365.com', 587, 'starttls', $2::text, 'xoauth2', '\x00') RETURNING id`,
+		e.user, g.Email).Scan(&id); err != nil {
+		t.Fatal(err)
+	}
+	sealed, _ := e.ring.Encrypt([]byte(g.Token.RefreshToken), []byte(strconv.FormatInt(id, 10)))
+	if _, err := e.pool.Exec(ctx, `UPDATE accounts SET secret_enc = $2 WHERE id = $1`, id, sealed); err != nil {
+		t.Fatal(err)
+	}
+	tok, err := ms.Token(ctx, id)
+	if err != nil || !e.fake.ValidAccessToken(tok) {
+		t.Fatalf("token: %v", err)
+	}
+	if want := "https://outlook.office.com/IMAP.AccessAsUser.All https://outlook.office.com/SMTP.Send offline_access openid email"; e.fake.LastRefreshScope() != want {
+		t.Fatalf("refresh scope = %q", e.fake.LastRefreshScope())
+	}
+	e.fake.Set(func(s *oauthtest.Server) { s.FailRefresh = true })
+	ms.Forget(id)
+	if _, err := ms.Token(ctx, id); !errors.Is(err, oauth.ErrReauthRequired) {
+		t.Fatalf("invalid_grant: %v", err)
+	}
+}
