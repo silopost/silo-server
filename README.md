@@ -305,7 +305,11 @@ accept `50MB` style values, rates `5MB/s`, durations `5m`. Worth knowing:
   The session is checked with every `: ping`: once it is signed out (`DELETE /session`),
   revoked (`DELETE /sessions/{id}`), expired or its user disabled, the stream sends
   `event: session.expired` (`data: {}`) and closes; sign in again. At most 8 streams
-  per user are open at once, more answer `429 rate_limited` (use `/events/poll`).
+  per user are open at once; a stream over the limit answers `200 text/event-stream`
+  with one `event: stream.limit` (`data: {"retryAfter":30}`, plus `retry: 30000`) and
+  closes (an `EventSource` cannot see a `429`): close the `EventSource` and poll
+  `/events/poll` instead. `label.counts` with every label of an account follows
+  `account.status` `live` and the end of its initial sync.
 - Benchmark (nightly workflow): `SILO_BENCH_INBOX=true go test ./internal/mailview
   -run TestInboxListBenchmark -v` loads 100k threads / 300k messages and checks
   p95 < 50 ms and the `thread_labels_list` plan of the inbox query.
@@ -366,7 +370,8 @@ once, refilled evenly over the period; `off` disables a limit. `20/m` is the
 sign-in throttling of earlier releases (burst 20, one more every 3 s); the
 per-login limit of sign-in stays as it was. `/healthz` is not limited and
 `GET /events` (a long-lived stream) is limited to 8 open streams per user
-instead. Over the limit the answer is `429` `application/problem+json` with
+instead (over it: `event: stream.limit`, see Events). Over the other limits the
+answer is `429` `application/problem+json` with
 `code: "rate_limited"` and `Retry-After` in seconds.
 
 ### Response headers

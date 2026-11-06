@@ -1,8 +1,10 @@
 package api_test
 
 import (
+	"bufio"
 	"bytes"
 	"context"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -148,20 +150,28 @@ func TestEventStreamLimit(t *testing.T) {
 		}
 		return res
 	}
+	// Over the cap: 200 text/event-stream with one stream.limit event, then
+	// the end of the stream (an EventSource cannot see a 429).
 	res := third()
+	body, err := io.ReadAll(res.Body)
 	res.Body.Close()
-	if res.StatusCode != http.StatusTooManyRequests || res.Header.Get("Retry-After") == "" {
-		t.Fatalf("third stream: %d %v", res.StatusCode, res.Header)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "retry: 30000\nevent: stream.limit\ndata: {\"retryAfter\":30}\n\n"
+	if res.StatusCode != http.StatusOK || !strings.HasPrefix(res.Header.Get("Content-Type"), "text/event-stream") || string(body) != want {
+		t.Fatalf("third stream: %d %v %q", res.StatusCode, res.Header, body)
 	}
 	if !strings.Contains(he.logs.String(), "event=rate_limited ip=127.0.0.1 path=/api/v1/events login=s***@silo.test") {
 		t.Errorf("refused stream not logged:\n%s", he.logs)
 	}
-	// Closing a stream frees its slot.
+	// Closing a stream frees its slot: the next one is a real stream.
 	s1.cancel()
 	waitFor(t, 3*time.Second, "a free stream slot", func() bool {
 		res := third()
 		defer res.Body.Close()
-		return res.StatusCode == http.StatusOK
+		line, _ := bufio.NewReader(res.Body).ReadString('\n')
+		return res.StatusCode == http.StatusOK && line == ": connected\n"
 	})
 }
 

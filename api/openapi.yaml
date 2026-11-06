@@ -4204,7 +4204,7 @@ paths:
         - drafts
   /events:
     get:
-      description: "Pushes changes of the mailbox as they are committed. After a reconnect with Last-Event-ID the missed events (24 h retained) are replayed first; an id older than the retention yields a resync event. A ': ping' comment is sent every 25 s; with it the session is checked, and a stream whose session ended gets session.expired and is closed. A client that cannot keep up is disconnected and replays on reconnect. At most 8 streams per user are open at once; more answer 429 rate_limited (use /events/poll)."
+      description: "Pushes changes of the mailbox as they are committed. After a reconnect with Last-Event-ID the missed events (24 h retained) are replayed first; an id older than the retention yields a resync event. A ': ping' comment is sent every 25 s; with it the session is checked, and a stream whose session ended gets session.expired and is closed. A client that cannot keep up is disconnected and replays on reconnect. At most 8 streams per user are open at once; a stream over the limit answers 200 with a single stream.limit event ({retryAfter: 30}, seconds; a retry: 30000 field slows down an EventSource that is not closed) and ends: close the EventSource and use /events/poll."
       operationId: streamEvents
       parameters:
         - description: "Set by EventSource on reconnect: replays the events after it."
@@ -4226,7 +4226,7 @@ paths:
             text/event-stream:
               schema:
                 type: string
-          description: "A Server-Sent Events stream. Each event has id (sequence number), event (type) and data (JSON); types: message.new, thread.updated, thread.deleted, thread.merged, label.counts, label.changed, operation.failed, filter.applied ({filterId, accountId, messages, threads}: POST /filters/{id}/apply is done), settings.updated ({updatedAt}: reload GET /settings), account.status, account.sync_progress, account.error, resync, session.expired (the session was signed out, revoked, expired or its user disabled: the stream ends; sign in again). Events caused by a request that carried X-Silo-Client have origin set to that id."
+          description: "A Server-Sent Events stream. Each event has id (sequence number), event (type) and data (JSON); types: message.new, thread.updated, thread.deleted, thread.merged, label.counts, label.changed, operation.failed, filter.applied ({filterId, accountId, messages, threads}: POST /filters/{id}/apply is done), settings.updated ({updatedAt}: reload GET /settings), account.status, account.sync_progress, account.error, resync, session.expired (the session was signed out, revoked, expired or its user disabled: the stream ends; sign in again), stream.limit ({retryAfter}: too many open streams of the user, the stream ends; fall back to /events/poll). Events caused by a request that carried X-Silo-Client have origin set to that id."
         "401":
           content:
             application/problem+json:
@@ -4239,12 +4239,6 @@ paths:
               schema:
                 $ref: "#/components/schemas/Problem"
           description: Unprocessable Entity
-        "429":
-          content:
-            application/problem+json:
-              schema:
-                $ref: "#/components/schemas/Problem"
-          description: Too Many Requests
         "500":
           content:
             application/problem+json:

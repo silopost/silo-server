@@ -1,8 +1,12 @@
 package api
 
 import (
+	"io"
 	"net/http"
+	"strconv"
 	"sync"
+
+	"github.com/danielgtaylor/huma/v2"
 )
 
 // MaxStreamsPerUser is the default cap of concurrent GET /events streams of
@@ -10,10 +14,10 @@ import (
 const MaxStreamsPerUser = 8
 
 // streamSlots counts the open event streams per user. A stream over the cap is
-// refused with 429 rather than closing the oldest one: an EventSource that is
-// closed reconnects at once, so evicting would make two tabs take turns
-// forever, while a refused EventSource stops and the web client falls back
-// to GET /events/poll.
+// refused with stream.limit rather than closing the oldest one: an
+// EventSource whose stream is closed reconnects at once, so evicting would
+// make two tabs take turns forever, while the refused client closes its
+// EventSource and falls back to GET /events/poll.
 type streamSlots struct {
 	mu   sync.Mutex
 	max  int
@@ -47,8 +51,24 @@ func (s *streamSlots) acquire(userID int64) (release func(), ok bool) {
 	}, true
 }
 
-func errTooManyStreams() *Problem {
-	p := problem(http.StatusTooManyRequests, CodeRateLimited, "Too many open event streams; close a tab or use GET /events/poll.")
-	p.header = http.Header{"Retry-After": {"30"}}
-	return p
+// StreamLimitRetryAfter is the retryAfter (seconds) of stream.limit.
+const StreamLimitRetryAfter = 30
+
+// writeStreamLimit answers a stream over the cap. A 429 would be invisible to
+// an EventSource (it only reports a generic error), so the answer is a
+// normal event stream with one stream.limit event that the client can act
+// on, after which the stream ends. retry: makes an EventSource that is not
+// closed reconnect after 30 s instead of 3 s. The request is still noted as
+// 429 rate_limited for the security log.
+func writeStreamLimit(c huma.Context) {
+	noteProblem(c.Context(), problem(http.StatusTooManyRequests, CodeRateLimited, "Too many open event streams."))
+	c.SetHeader("Content-Type", "text/event-stream")
+	c.SetHeader("Cache-Control", "no-cache")
+	c.SetHeader("X-Accel-Buffering", "no")
+	c.SetStatus(http.StatusOK)
+	retry := strconv.Itoa(StreamLimitRetryAfter)
+	_, _ = io.WriteString(c.BodyWriter(), "retry: "+retry+"000\nevent: stream.limit\ndata: {\"retryAfter\":"+retry+"}\n\n")
+	if f, ok := c.BodyWriter().(http.Flusher); ok {
+		f.Flush()
+	}
 }

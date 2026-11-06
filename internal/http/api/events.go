@@ -43,7 +43,8 @@ var eventStreamDoc = map[string]*huma.Response{"200": {
 		"types: message.new, thread.updated, thread.deleted, thread.merged, label.counts, label.changed, operation.failed, " +
 		"filter.applied ({filterId, accountId, messages, threads}: POST /filters/{id}/apply is done), settings.updated " +
 		"({updatedAt}: reload GET /settings), account.status, account.sync_progress, account.error, resync, session.expired " +
-		"(the session was signed out, revoked, expired or its user disabled: the stream ends; sign in again). Events caused by a request that carried " +
+		"(the session was signed out, revoked, expired or its user disabled: the stream ends; sign in again), stream.limit " +
+		"({retryAfter}: too many open streams of the user, the stream ends; fall back to /events/poll). Events caused by a request that carried " +
 		"X-Silo-Client have origin set to that id.",
 	Content: map[string]*huma.MediaType{"text/event-stream": {Schema: &huma.Schema{Type: huma.TypeString}}},
 }}
@@ -56,8 +57,9 @@ func (d *deps) registerEvents(a huma.API) {
 			"missed events (24 h retained) are replayed first; an id older than the retention yields a resync event. " +
 			"A ': ping' comment is sent every 25 s; with it the session is checked, and a stream whose session ended gets session.expired " +
 			"and is closed. A client that cannot keep up is disconnected and replays on reconnect. At most 8 streams per user are open at " +
-			"once; more answer 429 rate_limited (use /events/poll).",
-		Responses: eventStreamDoc, Errors: []int{http.StatusUnauthorized, http.StatusTooManyRequests},
+			"once; a stream over the limit answers 200 with a single stream.limit event ({retryAfter: 30}, seconds; a retry: 30000 " +
+			"field slows down an EventSource that is not closed) and ends: close the EventSource and use /events/poll.",
+		Responses: eventStreamDoc, Errors: []int{http.StatusUnauthorized},
 	}), func(ctx context.Context, in *eventsInput) (*huma.StreamResponse, error) {
 		sess := sessionFrom(ctx)
 		userID := sess.UserID
@@ -94,7 +96,7 @@ func (d *deps) registerEvents(a huma.API) {
 			defer cl.Close()
 			release, ok := d.streams.acquire(userID)
 			if !ok {
-				writeProblem(c, errTooManyStreams())
+				writeStreamLimit(c)
 				return
 			}
 			defer release()
