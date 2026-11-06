@@ -40,6 +40,7 @@ const (
 	CodeNotSnoozed           = "not_snoozed"
 	CodeThumbnailUnsupported = "thumbnail_unsupported"
 	CodeRebuildBlocked       = "rebuild_blocked"
+	CodeInvalidParent        = "invalid_parent"
 	CodeInternal             = "internal_error"
 )
 

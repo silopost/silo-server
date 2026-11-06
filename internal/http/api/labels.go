@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"strings"
 
@@ -87,6 +88,19 @@ type UpdateLabelBody struct {
 	ColorBG    *string `json:"colorBg,omitempty" maxLength:"32" doc:"Empty string clears the colour."`
 	ColorText  *string `json:"colorText,omitempty" maxLength:"32"`
 	ShowInList *string `json:"showInList,omitempty" enum:"show,hide,show_if_unread"`
+	// ParentID: absent keeps the parent, null moves the label to the top level.
+	ParentID NullableLabelID `json:"parentId,omitempty"`
+}
+
+// NullableLabelID is an l_ id that may be absent, null or a string.
+type NullableLabelID struct{ NullableID }
+
+// Schema is a nullable l_ id.
+func (NullableLabelID) Schema(huma.Registry) *huma.Schema {
+	return &huma.Schema{Type: huma.TypeString, Nullable: true, Examples: []any{"l_12"},
+		Description: "User labels only: l_ id of the new parent (a user label of the same account, not the label " +
+			"itself or one of its descendants; else 422 invalid_parent); null moves the label to the top level. " +
+			"The name and the IMAP keyword do not change (the keyword comes from the leaf name)."}
 }
 
 type labelIDInput struct {
@@ -202,17 +216,34 @@ func (d *deps) registerLabels(a huma.API) {
 
 	huma.Register(a, d.secured(huma.Operation{
 		OperationID: "updateLabel", Method: http.MethodPatch, Path: "/labels/{id}", Tags: []string{"labels"},
-		Summary: "Rename, recolour or hide a label",
+		Summary: "Rename, move, recolour or hide a label",
 		Description: "Renaming a user label gives it a new IMAP keyword and moves its messages to it on the server " +
-			"(queued). System labels and folders cannot be renamed (400).",
-		Errors: []int{http.StatusBadRequest, http.StatusUnauthorized, http.StatusForbidden, http.StatusNotFound, http.StatusConflict},
+			"(queued). parentId moves a user label under another user label of the account (null: top level; " +
+			"the label itself, a descendant or any other label answers 422 invalid_parent); the keyword stays. " +
+			"System labels and folders cannot be renamed or moved (400).",
+		Errors: []int{http.StatusBadRequest, http.StatusUnauthorized, http.StatusForbidden, http.StatusNotFound,
+			http.StatusConflict, http.StatusUnprocessableEntity},
 	}), func(ctx context.Context, in *updateLabelInput) (*labelOutput, error) {
 		id, err := d.labelByID(ctx, in.ID, in.AccountID)
 		if err != nil {
 			return nil, err
 		}
-		l, err := d.ops.UpdateLabel(ctx, ops.UpdateLabel{UserID: sessionFrom(ctx).UserID, LabelID: id, Name: in.Body.Name,
-			ColorBG: in.Body.ColorBG, ColorText: in.Body.ColorText, ShowInList: in.Body.ShowInList, Origin: in.Client})
+		u := ops.UpdateLabel{UserID: sessionFrom(ctx).UserID, LabelID: id, Name: in.Body.Name,
+			ColorBG: in.Body.ColorBG, ColorText: in.Body.ColorText, ShowInList: in.Body.ShowInList, Origin: in.Client}
+		if in.Body.ParentID.Set {
+			u.SetParent = true
+			if v := in.Body.ParentID.Value; v != nil {
+				p, ok := parseID("l_", *v)
+				if !ok {
+					return nil, problem(http.StatusUnprocessableEntity, CodeInvalidParent, "parentId is not a label id.")
+				}
+				u.ParentID = &p
+			}
+		}
+		l, err := d.ops.UpdateLabel(ctx, u)
+		if errors.Is(err, ops.ErrInvalidParent) {
+			return nil, problem(http.StatusUnprocessableEntity, CodeInvalidParent, strings.TrimPrefix(err.Error(), "ops: invalid parent label: "))
+		}
 		if err != nil {
 			return nil, opsError(err)
 		}

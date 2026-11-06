@@ -18,6 +18,9 @@ var (
 	ErrExists = errors.New("ops: a label with this name already exists")
 	// ErrNotEmpty: only an empty folder can be deleted.
 	ErrNotEmpty = errors.New("ops: the folder is not empty")
+	// ErrInvalidParent: the new parent of a user label is not a user label of
+	// the same account, or is the label itself or one of its descendants.
+	ErrInvalidParent = errors.New("ops: invalid parent label")
 )
 
 // Label is a row of GET /labels with database ids.
@@ -216,10 +219,17 @@ type UpdateLabel struct {
 	// ColorBG / ColorText: a pointer to "" clears the colour.
 	ColorBG, ColorText *string
 	ShowInList         *string // show, hide, show_if_unread
-	Origin             string
+	// SetParent: ParentID is the new parent (nil = top level). Only user
+	// labels move; the parent must be a user label of the same account and
+	// not the label or one of its descendants (ErrInvalidParent). Name and
+	// IMAP keyword stay: the keyword comes from the leaf name only
+	// (labels.name holds no path, mail.AssignKeyword slugs it).
+	SetParent bool
+	ParentID  *int64
+	Origin    string
 }
 
-// UpdateLabel changes name, colours and visibility. Renaming a user label
+// UpdateLabel changes name, parent, colours and visibility. Renaming a user label
 // assigns a new IMAP keyword and moves the messages to it with one flags
 // operation (UID STORE +new -old; plan 3.7 keyword_rename); system labels and
 // folders cannot be renamed.
@@ -256,6 +266,14 @@ func (s *Service) UpdateLabel(ctx context.Context, in UpdateLabel) (*Label, erro
 				}
 			}
 		}
+		if in.SetParent {
+			if typ != "user" {
+				return fmt.Errorf("%w: only user labels can change their parent", ErrNotModifiable)
+			}
+			if err := setLabelParent(ctx, tx, accountID, in.LabelID, in.ParentID); err != nil {
+				return err
+			}
+		}
 		if in.ColorBG != nil || in.ColorText != nil {
 			if _, err := tx.Exec(ctx, `
 UPDATE labels SET color_bg = CASE WHEN $2::text IS NULL THEN color_bg ELSE NULLIF($2, '') END,
@@ -275,6 +293,32 @@ UPDATE labels SET color_bg = CASE WHEN $2::text IS NULL THEN color_bg ELSE NULLI
 		return nil, err
 	}
 	return s.GetLabel(ctx, in.UserID, in.LabelID)
+}
+
+// setLabelParent moves a user label under parent (nil = top level).
+func setLabelParent(ctx context.Context, tx pgx.Tx, accountID, labelID int64, parent *int64) error {
+	if parent != nil {
+		if *parent == labelID {
+			return fmt.Errorf("%w: a label cannot be its own parent", ErrInvalidParent)
+		}
+		var ok, cycle bool
+		if err := tx.QueryRow(ctx, `
+SELECT EXISTS (SELECT 1 FROM labels WHERE id = $1 AND account_id = $2 AND type = 'user'),
+       EXISTS (WITH RECURSIVE sub(id) AS (
+                 SELECT id FROM labels WHERE parent_id = $3
+                 UNION SELECT l.id FROM labels l JOIN sub ON l.parent_id = sub.id)
+               SELECT 1 FROM sub WHERE id = $1)`, *parent, accountID, labelID).Scan(&ok, &cycle); err != nil {
+			return err
+		}
+		if !ok {
+			return fmt.Errorf("%w: the parent must be a user label of the same account", ErrInvalidParent)
+		}
+		if cycle {
+			return fmt.Errorf("%w: a label cannot move under its own descendant", ErrInvalidParent)
+		}
+	}
+	_, err := tx.Exec(ctx, `UPDATE labels SET parent_id = $2 WHERE id = $1`, labelID, parent)
+	return err
 }
 
 func (s *Service) renameUserLabel(ctx context.Context, tx pgx.Tx, userID, accountID, labelID int64, newName string, oldKw *string, mirrored bool) error {

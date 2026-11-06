@@ -962,6 +962,77 @@ WHERE m.account_id = $1 AND m.subject = $2`, accID, subject).Scan(&folder, &uid)
 		if r := serve(s.h, as(req{method: "DELETE", path: "/labels/" + proj})); r.Code != http.StatusConflict || r.code() != api.CodeFolderNotEmpty {
 			t.Errorf("delete non-empty folder: %d %s", r.Code, r.Body)
 		}
+
+		// PATCH parentId moves a user label; the keyword stays.
+		mk := func(name string, parent *string) api.Label {
+			body := map[string]any{"name": name, "type": "user"}
+			if parent != nil {
+				body["parentId"] = *parent
+			}
+			var l api.Label
+			r := serve(s.h, as(req{method: "POST", path: "/labels", body: body}))
+			r.json(&l)
+			if r.Code != http.StatusCreated {
+				t.Fatalf("create %s: %d %s", name, r.Code, r.Body)
+			}
+			return l
+		}
+		top, mid := mk("Dom", nil), mk("Rachunki", nil)
+		leaf := mk("Prad", &mid.ID)
+		patch := func(id string, body map[string]any) (resp, api.Label) {
+			var l api.Label
+			r := serve(s.h, as(req{method: "PATCH", path: "/labels/" + id, body: body}))
+			r.json(&l)
+			return r, l
+		}
+		events := s.count(`SELECT count(*) FROM events WHERE type = 'label.changed'`)
+		if r, l := patch(mid.ID, map[string]any{"parentId": top.ID}); r.Code != http.StatusOK || l.ParentID == nil || *l.ParentID != top.ID || l.Name != "Rachunki" {
+			t.Errorf("move under a parent: %d %s", r.Code, r.Body)
+		}
+		if n := s.count(`SELECT count(*) FROM events WHERE type = 'label.changed'`); n != events+1 {
+			t.Errorf("label.changed after the move: %d, want %d", n, events+1)
+		}
+		midID, _ := strconv.ParseInt(strings.TrimPrefix(mid.ID, "l_"), 36, 64)
+		var midKw string
+		if err := s.pool.QueryRow(context.Background(), `SELECT imap_keyword FROM labels WHERE id = $1`, midID).Scan(&midKw); err != nil || midKw != "Rachunki" {
+			t.Errorf("keyword after the move: %q %v", midKw, err)
+		}
+		// Cycles: the label itself or a descendant (direct and deeper).
+		for _, c := range []struct{ id, parent string }{{top.ID, top.ID}, {mid.ID, leaf.ID}, {top.ID, leaf.ID}, {top.ID, mid.ID}} {
+			if r, _ := patch(c.id, map[string]any{"parentId": c.parent}); r.Code != http.StatusUnprocessableEntity || r.code() != api.CodeInvalidParent {
+				t.Errorf("cycle %s under %s: %d %s", c.id, c.parent, r.Code, r.Body)
+			}
+		}
+		// Not a user label of the account: a folder, a system label, an unknown id, garbage.
+		for _, p := range []string{proj, fl.ID, "l_zzzzzz", "INBOX"} {
+			if r, _ := patch(leaf.ID, map[string]any{"parentId": p}); r.Code != http.StatusUnprocessableEntity || r.code() != api.CodeInvalidParent {
+				t.Errorf("parent %s: %d %s", p, r.Code, r.Body)
+			}
+		}
+		// Folders and system labels cannot move.
+		if r, _ := patch(fl.ID, map[string]any{"parentId": top.ID}); r.Code != http.StatusBadRequest {
+			t.Errorf("move a folder: %d %s", r.Code, r.Body)
+		}
+		if r, _ := patch("INBOX?accountId="+accStr, map[string]any{"parentId": top.ID}); r.Code != http.StatusBadRequest {
+			t.Errorf("move INBOX: %d %s", r.Code, r.Body)
+		}
+		// Another user cannot move the label (404), nor use it as a parent.
+		other := newUserSession(t, s.env, "parent-other@silo.test")
+		if r := serve(s.h, req{method: "PATCH", path: "/labels/" + leaf.ID, cookie: other.cookie, csrf: other.csrf, body: map[string]any{"parentId": nil}}); r.Code != http.StatusNotFound {
+			t.Errorf("move as another user: %d %s", r.Code, r.Body)
+		}
+		// null: back to the top level; an absent parentId keeps it.
+		if r, l := patch(leaf.ID, map[string]any{"parentId": nil}); r.Code != http.StatusOK || l.ParentID != nil {
+			t.Errorf("move to the top level: %d %s", r.Code, r.Body)
+		}
+		if r, l := patch(mid.ID, map[string]any{"colorBg": "#00ff00"}); r.Code != http.StatusOK || l.ParentID == nil || *l.ParentID != top.ID {
+			t.Errorf("absent parentId: %d %s", r.Code, r.Body)
+		}
+		for _, l := range []api.Label{leaf, mid, top} {
+			if r := serve(s.h, as(req{method: "DELETE", path: "/labels/" + l.ID})); r.Code != http.StatusNoContent {
+				t.Errorf("delete %s: %d %s", l.Name, r.Code, r.Body)
+			}
+		}
 		if r := serve(s.h, as(req{method: "DELETE", path: "/labels/" + fl.ID})); r.Code != http.StatusNoContent {
 			t.Fatalf("delete empty folder: %d %s", r.Code, r.Body)
 		}
