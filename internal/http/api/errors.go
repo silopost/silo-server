@@ -169,6 +169,8 @@ func accountError(err error) error {
 		return problem(http.StatusUnprocessableEntity, CodeHostNotAllowed, "The mail server address is not allowed.")
 	case errors.Is(err, accounts.ErrLimitReached):
 		return problem(http.StatusConflict, CodeAccountLimit, "The account limit for this user is reached.")
+	case errors.Is(err, accounts.ErrPasswordNotAvailable):
+		return problem(http.StatusConflict, CodeNotAvailable, "This account signs in with OAuth; authorize it again instead of setting a password.")
 	case errors.Is(err, accounts.ErrExists):
 		return problem(http.StatusConflict, CodeAccountExists, "This account already exists.")
 	case errors.Is(err, accounts.ErrInvalid):

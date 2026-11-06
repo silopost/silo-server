@@ -18,6 +18,7 @@ type Account struct {
 	DisplayName string     `json:"displayName"`
 	Position    int        `json:"position" doc:"Order of the account among the user's accounts (0 first); account lists are sorted by it. silo-web maps /u/<n> to the n-th account."`
 	Provider    string     `json:"provider" enum:"generic,gmail,microsoft"`
+	AuthType    string     `json:"authType" enum:"password,xoauth2" doc:"How Silo signs in to the servers: the stored password, or OAuth2 (XOAUTH2; re-authorize with POST /oauth/{provider}/start and accountId after auth_failed)."`
 	Username    string     `json:"username"`
 	IMAPHost    string     `json:"imapHost"`
 	IMAPPort    int        `json:"imapPort"`
@@ -33,7 +34,7 @@ type Account struct {
 
 func accountOf(a sqlcgen.Account) Account {
 	out := Account{
-		ID: formatID("acc_", a.ID), Email: a.Email, DisplayName: a.DisplayName, Position: int(a.Position), Provider: a.Provider, Username: a.Username,
+		ID: formatID("acc_", a.ID), Email: a.Email, DisplayName: a.DisplayName, Position: int(a.Position), Provider: a.Provider, AuthType: a.AuthType, Username: a.Username,
 		IMAPHost: a.ImapHost, IMAPPort: int(a.ImapPort), IMAPTLS: a.ImapTls,
 		SMTPHost: a.SmtpHost, SMTPPort: int(a.SmtpPort), SMTPTLS: a.SmtpTls,
 		SentAppend: a.SentAppend, State: a.SyncState,

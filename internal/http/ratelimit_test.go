@@ -77,7 +77,7 @@ func TestRateLimit(t *testing.T) {
 	if rec := do("POST", "/api/v1/session", "1.2.3.4"); rec.Code == http.StatusTooManyRequests {
 		t.Errorf("first sign-in limited")
 	}
-	for _, path := range []string{"/api/v1/session", "/api/v1/session/password", "/api/v1/totp/enable"} {
+	for _, path := range []string{"/api/v1/session", "/api/v1/session/password", "/api/v1/totp/enable", "/api/v1/oauth/google/start"} {
 		if rec := do("POST", path, "1.2.3.4"); rec.Code != http.StatusTooManyRequests {
 			t.Errorf("POST %s after the auth burst: %d", path, rec.Code)
 		}

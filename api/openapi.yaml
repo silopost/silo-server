@@ -3,6 +3,12 @@ components:
     Account:
       additionalProperties: false
       properties:
+        authType:
+          description: "How Silo signs in to the servers: the stored password, or OAuth2 (XOAUTH2; re-authorize with POST /oauth/{provider}/start and accountId after auth_failed)."
+          enum:
+            - password
+            - xoauth2
+          type: string
         displayName:
           type: string
         email:
@@ -74,6 +80,7 @@ components:
         - displayName
         - position
         - provider
+        - authType
         - username
         - imapHost
         - imapPort
@@ -1512,6 +1519,13 @@ components:
           examples:
             - 0.3.0
           type: string
+        oauthProviders:
+          description: "OAuth2 providers configured on the instance (google, microsoft): silo-web offers \"Sign in with ...\" for them (POST /oauth/{provider}/start). Empty when none."
+          items:
+            type: string
+          type:
+            - array
+            - "null"
         serverVersion:
           description: Version of silo-server.
           examples:
@@ -1524,6 +1538,7 @@ components:
         - authMode
         - allowCustomServers
         - maxAttachmentBytes
+        - oauthProviders
       type: object
     ModifyBody:
       additionalProperties: false
@@ -1553,6 +1568,34 @@ components:
             - "null"
       required:
         - ids
+      type: object
+    OAuthStart:
+      additionalProperties: false
+      properties:
+        accountId:
+          description: "An OAuth account of the user to authorize again (after auth_failed); its address must be the one signed in with. Omitted: add an account."
+          examples:
+            - acc_1
+          type: string
+        returnTo:
+          description: Path of silo-web the browser returns to after the callback (default /); a relative path starting with a single /.
+          examples:
+            - /settings/accounts
+          maxLength: 1024
+          type: string
+      type: object
+    OauthStartOutputBody:
+      additionalProperties: false
+      properties:
+        state:
+          description: Opaque state of this authorization (valid 10 minutes, single use).
+          type: string
+        url:
+          description: Authorization URL of the provider; open it in the browser (top-level navigation).
+          type: string
+      required:
+        - url
+        - state
       type: object
     OperationResult:
       additionalProperties: false
@@ -5085,6 +5128,150 @@ paths:
       summary: Get server metadata
       tags:
         - meta
+  /oauth/{provider}/callback:
+    get:
+      description: "The provider redirects the browser here; no session is needed (the state identifies the user, the cookie set by start the browser). The code is exchanged, the account tested with XOAUTH2 and created (or its authorization renewed), then 303 to SILO_PUBLIC_URL + returnTo with `?oauth=ok&accountId=acc_X` or `?oauth=error&code=<code>`: oauth_denied, oauth_state_invalid, oauth_exchange_failed, oauth_no_email, oauth_account_mismatch, account_limit_reached, account_test_failed, internal_error. The admin registers SILO_PUBLIC_URL + /api/v1/oauth/{provider}/callback with the provider."
+      operationId: oauthCallback
+      parameters:
+        - in: path
+          name: provider
+          required: true
+          schema:
+            type: string
+        - explode: false
+          in: query
+          name: code
+          schema:
+            type: string
+        - explode: false
+          in: query
+          name: state
+          schema:
+            type: string
+        - description: Set by the provider instead of code when the user declined or the request failed.
+          explode: false
+          in: query
+          name: error
+          schema:
+            description: Set by the provider instead of code when the user declined or the request failed.
+            type: string
+        - explode: false
+          in: query
+          name: error_description
+          schema:
+            type: string
+        - in: cookie
+          name: silo_oauth_state
+          schema:
+            type: string
+      responses:
+        "303":
+          description: See Other
+          headers:
+            Cache-Control:
+              schema:
+                type: string
+            Location:
+              schema:
+                type: string
+            Set-Cookie:
+              schema:
+                type: string
+        "404":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Not Found
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Unprocessable Entity
+        "500":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Internal Server Error
+      summary: OAuth2 redirect URI (browser only)
+      tags:
+        - accounts
+  /oauth/{provider}/start:
+    post:
+      description: Returns the provider's authorization URL (authorization code flow with PKCE). The browser opens it; the provider sends it back to GET /oauth/{provider}/callback, which adds the account and redirects to SILO_PUBLIC_URL + returnTo. 404 when the provider is not configured on the instance, or for an accountId that is not an OAuth account of the user with this provider.
+      operationId: startOAuth
+      parameters:
+        - description: google or microsoft (as listed by GET /meta oauthProviders).
+          in: path
+          name: provider
+          required: true
+          schema:
+            description: google or microsoft (as listed by GET /meta oauthProviders).
+            examples:
+              - google
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/OAuthStart"
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OauthStartOutputBody"
+          description: OK
+          headers:
+            Set-Cookie:
+              schema:
+                description: Binds the authorization to this browser (read back by the callback).
+                type: string
+        "400":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Bad Request
+        "401":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Unauthorized
+        "403":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Forbidden
+        "404":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Not Found
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Unprocessable Entity
+        "500":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Internal Server Error
+      security:
+        - cookieAuth: []
+          csrfHeader: []
+        - bearerAuth: []
+      summary: Start adding (or re-authorizing) an account with OAuth2
+      tags:
+        - accounts
   /operations/{id}/undo:
     post:
       description: "Until undoUntil (while its jobs still wait) the operation is cancelled: the jobs are deleted and the threads return to the state of the mail server in the same transaction, so the server never sees the operation; operationId and undoUntil of the answer are null. Later (the operation is being sent or was executed, e.g. flag changes, which are sent at once) the server applies the inverse itself: messages go back to the folders they came from, flags and user labels that the operation changed are changed back. That is a new operation, with its own operationId and undoUntil, which can be undone in turn. Either way the answer is the threads after the undo and the usual thread.updated events (with origin) are written. An operation can be undone once, for 24 hours; later 409 undo_expired. A permanent delete (/threads/delete) can only be undone inside its window, later 409 operation_not_undoable. An unknown operation, or one of another user, is 404."

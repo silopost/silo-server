@@ -28,6 +28,7 @@ import (
 	"github.com/silopost/silo-server/internal/mail"
 	"github.com/silopost/silo-server/internal/mailview"
 	"github.com/silopost/silo-server/internal/netx"
+	"github.com/silopost/silo-server/internal/oauth"
 	"github.com/silopost/silo-server/internal/ops"
 	"github.com/silopost/silo-server/internal/secrets"
 	"github.com/silopost/silo-server/internal/store"
@@ -140,6 +141,7 @@ func serve(ctx context.Context, args []string) error {
 	}
 	authSvc := auth.New(auth.Options{Pool: pool, Keys: ring, Config: cfg, Logger: logger, IPLimit: authLimit})
 	accountSvc := accounts.New(accounts.Options{Pool: pool, Keys: ring, Config: cfg, Logger: logger})
+	oauthSvc := oauth.New(oauth.Options{Pool: pool, Keys: ring, Providers: oauth.NewProviders(cfg.OAuth), PublicURL: cfg.PublicURL, Logger: logger})
 
 	// One anti-SSRF dialer for the IMAP/SMTP connections of accounts: the
 	// default servers and hosts allowlisted by name are dialled unfiltered,
@@ -153,7 +155,7 @@ func serve(ctx context.Context, args []string) error {
 	// job handlers (account.initial_sync, account.reconnect, account.resync,
 	// orphan_gc) only wake the account's worker.
 	syncMgr := silosync.NewManager(silosync.Deps{
-		Pool: pool, Keys: ring, Blobs: blobs, Logger: logger,
+		Pool: pool, Keys: ring, Blobs: blobs, Logger: logger, OAuth: oauthSvc,
 		Settings: silosync.Settings{
 			MaxConnections:     cfg.SyncMaxConnectionsPerAcct,
 			InitialConcurrency: cfg.SyncInitialConcurrency,
@@ -171,7 +173,7 @@ func serve(ctx context.Context, args []string) error {
 	view := mailview.New(pool, blobs, syncMgr)
 	draftSvc := drafts.New(drafts.Options{
 		Pool: pool, Blobs: blobs, MaxUploadBytes: int64(cfg.MaxAttachmentBytes), Logger: logger,
-		Keys: ring, InsecureTransport: cfg.AllowInsecureTransport, DialContext: accountDialer.DialContext,
+		Keys: ring, InsecureTransport: cfg.AllowInsecureTransport, DialContext: accountDialer.DialContext, OAuth: oauthSvc,
 		OpenRaw: func(ctx context.Context, userID, messageID int64) (io.ReadCloser, error) {
 			r, err := view.OpenRaw(ctx, userID, messageID)
 			if err != nil {
@@ -189,7 +191,7 @@ func serve(ctx context.Context, args []string) error {
 	draftSvc.RegisterJobs(jobs, func(ctx context.Context, now time.Time) error {
 		_, err := opsSvc.PurgeOperations(ctx, now)
 		return err
-	})
+	}, oauthSvc.PurgeStates)
 	workerCtx, stopWorker := context.WithCancel(ctx)
 	workerDone := make(chan struct{})
 	go func() { defer close(workerDone); _ = jobs.Run(workerCtx) }()
@@ -231,6 +233,7 @@ func serve(ctx context.Context, args []string) error {
 				Events:             hub,
 				Admin:              admin.New(pool, authSvc),
 				Discovery:          discoveryOptions(cfg, logger),
+				OAuth:              oauthSvc,
 				PublicURL:          cfg.PublicURL,
 				Logger:             logger,
 			},

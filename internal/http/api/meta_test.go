@@ -43,8 +43,11 @@ func TestMeta(t *testing.T) {
 		"allowCustomServers": false,
 		"maxAttachmentBytes": float64(25 << 20),
 	}
-	if len(got) != len(want) {
-		t.Fatalf("got %v, want %v", got, want)
+	if p, ok := got["oauthProviders"].([]any); !ok || len(p) != 0 {
+		t.Fatalf("oauthProviders = %#v, want []", got["oauthProviders"])
+	}
+	if len(got) != len(want)+1 {
+		t.Fatalf("got %v, want %v and oauthProviders", got, want)
 	}
 	for k, v := range want {
 		if got[k] != v {

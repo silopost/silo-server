@@ -18,6 +18,7 @@ import (
 	"github.com/silopost/silo-server/internal/events"
 	"github.com/silopost/silo-server/internal/filters"
 	"github.com/silopost/silo-server/internal/mailview"
+	"github.com/silopost/silo-server/internal/oauth"
 	"github.com/silopost/silo-server/internal/ops"
 	silosync "github.com/silopost/silo-server/internal/sync"
 )
@@ -64,6 +65,9 @@ type Options struct {
 	Events *events.Hub
 	// Admin backs the /admin endpoints.
 	Admin *admin.Service
+	// OAuth backs /oauth/{provider}/... and GET /meta oauthProviders; nil:
+	// no provider configured.
+	OAuth *oauth.Service
 	// Discovery configures POST /accounts/discover.
 	Discovery DiscoveryOptions
 	// SSEHeartbeat is the interval of the ": ping" comment on /events (25 s when 0).
@@ -140,6 +144,7 @@ func Mount(root chi.Router, o Options) huma.API {
 		d.registerSession(a)
 		d.registerAccounts(a)
 		d.registerDiscover(a, o)
+		d.registerOAuth(a, o)
 		d.registerSync(a)
 		d.registerThreads(a)
 		d.registerSnooze(a)

@@ -61,7 +61,7 @@ func limiterFor(r *http.Request, apiLim, authLim *ratelimit.Limiter) *ratelimit.
 		return nil
 	}
 	if (r.Method == http.MethodPost && (rest == "session" || rest == "session/password")) ||
-		rest == "totp" || strings.HasPrefix(rest, "totp/") {
+		rest == "totp" || strings.HasPrefix(rest, "totp/") || strings.HasPrefix(rest, "oauth/") {
 		return authLim
 	}
 	return apiLim
