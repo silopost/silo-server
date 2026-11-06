@@ -246,6 +246,27 @@ func (d *deps) registerSession(a huma.API) {
 		}
 		return out, nil
 	})
+
+	huma.Register(a, d.secured(huma.Operation{
+		OperationID: "revokeOtherSessions", Method: http.MethodDelete, Path: "/sessions", Tags: []string{"session"},
+		Summary:       "Sign out everywhere else",
+		Description:   "Revokes every session of the user except the current one (their open event streams get session.expired). others=true is required.",
+		DefaultStatus: http.StatusNoContent,
+		Errors:        []int{http.StatusBadRequest, http.StatusUnauthorized, http.StatusForbidden},
+	}), func(ctx context.Context, in *revokeOthersInput) (*struct{}, error) {
+		if !in.Others {
+			return nil, problem(http.StatusBadRequest, CodeValidation, "Only others=true is supported (DELETE /session signs out the current session).")
+		}
+		cur := sessionFrom(ctx)
+		if _, err := d.auth.RevokeOthers(ctx, cur.UserID, cur.ID); err != nil {
+			return nil, errInternal(err)
+		}
+		return nil, nil
+	})
+}
+
+type revokeOthersInput struct {
+	Others bool `query:"others" required:"true" doc:"Must be true: revoke every session but the current one."`
 }
 
 func (d *deps) sessionBody(ctx context.Context, user sqlcgen.User, sess sqlcgen.Session) (SessionBody, error) {

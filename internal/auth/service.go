@@ -521,3 +521,9 @@ func (s *Service) SessionAlive(ctx context.Context, sessionID int64) bool {
 	}
 	return alive
 }
+
+// RevokeOthers deletes every session of the user except keepID (sign out
+// everywhere else) and returns how many were deleted.
+func (s *Service) RevokeOthers(ctx context.Context, userID, keepID int64) (int64, error) {
+	return sqlcgen.New(s.o.Pool).DeleteOtherUserSessions(ctx, sqlcgen.DeleteOtherUserSessionsParams{UserID: userID, ID: keepID})
+}

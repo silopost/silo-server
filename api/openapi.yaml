@@ -5726,6 +5726,58 @@ paths:
       tags:
         - session
   /sessions:
+    delete:
+      description: Revokes every session of the user except the current one (their open event streams get session.expired). others=true is required.
+      operationId: revokeOtherSessions
+      parameters:
+        - description: "Must be true: revoke every session but the current one."
+          explode: false
+          in: query
+          name: others
+          required: true
+          schema:
+            description: "Must be true: revoke every session but the current one."
+            type: boolean
+      responses:
+        "204":
+          description: No Content
+        "400":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Bad Request
+        "401":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Unauthorized
+        "403":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Forbidden
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Unprocessable Entity
+        "500":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Internal Server Error
+      security:
+        - cookieAuth: []
+          csrfHeader: []
+        - bearerAuth: []
+      summary: Sign out everywhere else
+      tags:
+        - session
     get:
       operationId: listSessions
       responses:

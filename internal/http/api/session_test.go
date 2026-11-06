@@ -423,6 +423,35 @@ func TestSessionAndAccounts(t *testing.T) {
 		}
 	})
 
+	t.Run("revoke other sessions", func(t *testing.T) {
+		o1, o2 := e.login(h, user, pass), e.login(h, user, pass)
+		if r := serve(h, req{method: "DELETE", path: "/sessions?others=true", cookie: first.cookie}); r.Code != http.StatusForbidden {
+			t.Errorf("without csrf: %d", r.Code)
+		}
+		for _, q := range []string{"", "?others=false"} {
+			if r := serve(h, req{method: "DELETE", path: "/sessions" + q, cookie: first.cookie, csrf: first.csrf}); r.Code != http.StatusBadRequest || r.code() != api.CodeValidation {
+				t.Errorf("DELETE /sessions%s: %d %s", q, r.Code, r.Body)
+			}
+		}
+		if r := serve(h, req{method: "GET", path: "/session", cookie: o1.cookie}); r.Code != http.StatusOK {
+			t.Fatalf("other session revoked by a rejected request: %d", r.Code)
+		}
+		if r := serve(h, req{method: "DELETE", path: "/sessions?others=true", cookie: first.cookie, csrf: first.csrf}); r.Code != http.StatusNoContent {
+			t.Fatalf("revoke others: %d %s", r.Code, r.Body)
+		}
+		for _, o := range []*http.Cookie{o1.cookie, o2.cookie} {
+			if r := serve(h, req{method: "GET", path: "/session", cookie: o}); r.Code != http.StatusUnauthorized {
+				t.Errorf("other session still valid: %d", r.Code)
+			}
+		}
+		r := serve(h, req{method: "GET", path: "/sessions", cookie: first.cookie})
+		var list struct{ Sessions []api.SessionInfo }
+		r.json(&list)
+		if r.Code != http.StatusOK || len(list.Sessions) != 1 || !list.Sessions[0].Current {
+			t.Errorf("after revoke others: %d %s", r.Code, r.Body)
+		}
+	})
+
 	t.Run("expiry", func(t *testing.T) {
 		for name, sql := range map[string]string{
 			"idle":     "UPDATE sessions SET expires_at = now() - interval '1 minute' WHERE token_hash = $1",
