@@ -332,6 +332,9 @@ accept `50MB` style values, rates `5MB/s`, durations `5m`. Worth knowing:
   In `SILO_AUTH_MODE=local` custom servers are always allowed (see below).
 - Account autoconfiguration (`POST /accounts/discover`): `SILO_AUTOCONFIG_ISPDB_URL`
   (ISPDB base URL, `off` to disable); see [Account autoconfiguration](#account-autoconfiguration).
+- OAuth2 accounts (Gmail, Microsoft 365): `SILO_OAUTH_GOOGLE_CLIENT_ID` /
+  `_CLIENT_SECRET`, `SILO_OAUTH_MICROSOFT_CLIENT_ID` / `_CLIENT_SECRET` /
+  `_TENANT`; see [OAuth2](#oauth2-gmail-microsoft-365).
 - Logging: `SILO_LOG_FORMAT` (`json`/`text`), `SILO_LOG_LEVEL`; listen address: `SILO_HTTP_ADDR`.
 - Reverse proxy, rate limits, headers: `SILO_TRUSTED_PROXIES`, `SILO_RATE_LIMIT_API`,
   `SILO_RATE_LIMIT_AUTH`, `SILO_HSTS`; see [Hardening](#hardening).
@@ -541,6 +544,123 @@ connection. Proxies from the environment are ignored, redirects are followed
 only to `https` on the same host or the ISPDB host (at most 3), and responses
 are cut at 256 kB. The discovered settings still go through `POST /accounts/test`
 and its checks before an account is saved.
+
+## OAuth2 (Gmail, Microsoft 365)
+
+Gmail and Microsoft 365 accounts can be added with "Sign in with Google /
+Microsoft" instead of a password (Exchange Online has basic auth turned off).
+Silo stores the OAuth2 refresh token, encrypted with `SILO_SECRET_KEY` like a
+password (AAD = account id, re-encrypted by `rotate-secrets`), and logs in to
+IMAP and SMTP with `AUTHENTICATE XOAUTH2` / `AUTH XOAUTH2` and a fresh access
+token. The admin registers one OAuth application per provider (instructions:
+`docs/admin/oauth.md` in the `silo` repository) and sets:
+
+| Variable | Meaning |
+|---|---|
+| `SILO_OAUTH_GOOGLE_CLIENT_ID`, `SILO_OAUTH_GOOGLE_CLIENT_SECRET` | Google OAuth client ("Web application") |
+| `SILO_OAUTH_MICROSOFT_CLIENT_ID`, `SILO_OAUTH_MICROSOFT_CLIENT_SECRET` | Entra ID app registration |
+| `SILO_OAUTH_MICROSOFT_TENANT` | `common` (default), `organizations`, `consumers` or a tenant id/domain |
+| `SILO_OAUTH_{GOOGLE,MICROSOFT}_{AUTH,TOKEN,USERINFO}_URL` | **test fields only**: override the official endpoints (a fake provider in tests); leave unset in production |
+
+A provider is enabled when both its client id and secret are set (one of
+them alone is a configuration error); `GET /meta` lists the enabled ones in
+`oauthProviders` (`[]` when none). The redirect URI to register with the
+provider is
+
+    SILO_PUBLIC_URL + /api/v1/oauth/{google|microsoft}/callback
+
+e.g. `https://mail.example.com/api/v1/oauth/google/callback`.
+
+| Provider | Scopes | IMAP | SMTP | `sentAppend` |
+|---|---|---|---|---|
+| Google (`provider: gmail`) | `https://mail.google.com/ openid email`, `access_type=offline`, `prompt=consent` | `imap.gmail.com:993` implicit TLS | `smtp.gmail.com:465` implicit TLS | off |
+| Microsoft (`provider: microsoft`) | `https://outlook.office.com/IMAP.AccessAsUser.All https://outlook.office.com/SMTP.Send offline_access openid email` | `outlook.office365.com:993` implicit TLS | `smtp.office365.com:587` STARTTLS | off |
+
+Gmail's SMTP is used on 465 (TLS from the first byte, nothing in clear text to
+strip) rather than 587; Microsoft offers only 587 + STARTTLS. Both providers
+store what is sent through their SMTP in Sent themselves (plan 3.9), so
+`sentAppend` is off; it can still be turned on with `PATCH /accounts/{id}`.
+`prompt=consent` makes Google return a refresh token on every sign-in, also a
+second one.
+
+Flow (authorization code with PKCE S256):
+
+1. silo-web calls `POST /api/v1/oauth/{provider}/start` (signed in) with
+   `{returnTo?, accountId?}` and opens the returned `url`. Silo stores the state
+   (32 random bytes), the PKCE verifier, the user and `returnTo` in
+   `oauth_states` for 10 minutes and sets the `silo_oauth_state` cookie
+   (HttpOnly, SameSite=Lax, path `/api/v1/oauth/`). `returnTo` must be a path
+   starting with a single `/` (`400 validation_failed` otherwise); an
+   unconfigured provider is `404 not_found`. The endpoints use the `auth`
+   rate-limit bucket.
+2. The provider sends the browser to `GET /api/v1/oauth/{provider}/callback`.
+   It needs no session (the state names the user), but the state must match
+   the cookie: an authorization started in another browser (a link to the
+   consent page sent by someone else) cannot add the victim's mailbox to the
+   sender's Silo user. The state is single use. Silo exchanges the code with the
+   verifier, takes the address from the `email` claim of the `id_token` (read
+   from the token endpoint over TLS, its signature is not checked; Microsoft
+   without `email`: `preferred_username`) or from userinfo, tests IMAP and SMTP
+   with XOAUTH2 (`POST /accounts`-style: on failure nothing is saved), creates
+   the account (`authType: xoauth2`, `username` = the address, `displayName`
+   from the `name` claim, within `SILO_MAX_ACCOUNTS_PER_USER`) and queues its
+   initial sync. A mailbox the user already has (same server and user name) is
+   updated instead: new refresh token, and a failing account reconnects.
+3. The callback answers `303` to `SILO_PUBLIC_URL + returnTo` with
+   `?oauth=ok&accountId=acc_…` or `?oauth=error&code=…`: `oauth_denied` (the
+   user declined), `oauth_state_invalid` (unknown, used, expired or from another
+   browser), `oauth_exchange_failed` (also: no refresh token), `oauth_no_email`,
+   `oauth_account_mismatch`, `account_limit_reached`, `account_test_failed`,
+   `internal_error`. Expired `oauth_states` are deleted by the hourly `blob_gc`.
+
+Tokens: before every IMAP or SMTP connection Silo asks for the account's
+access token; it is cached in memory per account and refreshed only when it
+expires within 60 s. A refresh token that the provider rotates is stored
+again. A refresh refused with `invalid_grant` (access revoked, password
+changed, Google's 7-day limit for apps in "Testing") puts the account in
+`auth_failed` with `error: "OAuth authorization expired; sign in again"` and
+an `account.error` event with code `auth_failed`; sync stops (no retries) and
+a send fails at once. Re-authorization: `POST /oauth/{provider}/start` with
+`accountId` (an OAuth account of the user with that provider, else `404`); the
+address signed in with must be the account's (`oauth_account_mismatch`
+otherwise). The account then reconnects. OAuth accounts have no password:
+`PATCH /accounts/{id}` with `password` is `409 not_available`. `Account` has
+`authType` (`password` / `xoauth2`).
+
+Manual test (entry for the compatibility matrix; there are no test accounts
+in CI): with the provider configured, (1) "Sign in with Google" adds the
+account and returns to silo-web with `oauth=ok`; (2) the initial sync ends in
+`live`, INBOX matches the webmail; (3) archive a thread: it leaves the Inbox in
+the webmail and stays in All Mail, no duplicate in Silo; (4) apply a label and
+check it on the server (a keyword, see below); (5) send a message: delivered,
+one copy in Sent; (6) reply from another client: the reply joins the thread
+in Silo; (7) revoke the app (Google account > Security > Third-party access):
+the account goes `auth_failed` on its next connection, re-authorization brings
+it back. Same steps for Microsoft 365 (Exchange Online needs SMTP AUTH enabled
+for the mailbox).
+
+### Gmail in generic mode
+
+The `provider=gmail` mode with Gmail's extensions (`X-GM-LABELS`, `X-GM-MSGID`,
+`X-GM-THRID`, syncing only All Mail, Trash and Spam) is postponed to 1.1. Gmail
+accounts, with OAuth or an app password, use the generic mode of plan 3.4:
+
+- Silo syncs INBOX and the special folders (`[Gmail]/All Mail` = `\All`, Sent
+  Mail, Drafts, Trash, Spam). A message in INBOX is also in All Mail; dedup
+  (`Message-ID` + size) keeps one message with both locations, one thread.
+- Archiving removes the INBOX copy (`\Deleted` + `UID EXPUNGE`, which is
+  Gmail's "remove the Inbox label"); the copy in All Mail stays and no
+  `Archive` folder is created. This applies when the account has an All Mail
+  folder under `[Gmail]/` or `[Google Mail]/` and no Archive folder; other
+  servers with `\All` keep archiving by MOVE to Archive. Removing a folder
+  label (a Gmail label shown as a folder) likewise only expunges its copy.
+- A message only in All Mail (archived in Gmail) has no `INBOX` label and is
+  shown under "All mail".
+- Missing without X-GM: Gmail labels other than the special folders are not
+  shown as Silo labels, and threads are built by Silo (JWZ over
+  `References`/`In-Reply-To`), not by Gmail's `X-GM-THRID`, so a few threads may
+  be grouped differently than in the Gmail web client. Silo's own labels are
+  IMAP keywords, which Gmail does not show as labels.
 
 ## Users, mode `local` and the admin panel
 
@@ -753,6 +873,8 @@ account `silo`). Profiles select what the server advertises:
 | `full` | Dovecot defaults: `CONDSTORE QRESYNC MOVE UIDPLUS IDLE SPECIAL-USE ...` | main sync path |
 | `no-condstore` | everything except `CONDSTORE QRESYNC` | full-scan fallback |
 | `no-move` | everything except `MOVE UIDPLUS` (and `IMAP4rev2`) | COPY + STORE + EXPUNGE fallback |
+| `gmail-like` | Dovecot defaults, Gmail's folders (`[Gmail]/All Mail` = `\All`, ...) | Gmail in generic mode (`internal/sync`) |
+| `oauth2` | Dovecot defaults plus `AUTH=XOAUTH2`; tokens checked at the fake provider of `testutil/oauthtest` (`imaptest.StartOAuth2`) | XOAUTH2 (`internal/imapx`, `internal/http/api`) |
 
 Config files and Dovecot 2.4 notes: `internal/testutil/imaptest/testdata/imap/README.md`.
 Same rules as Postgres tests: skipped with `-short` or without Docker, a failure
