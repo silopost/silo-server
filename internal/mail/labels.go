@@ -250,7 +250,7 @@ WHERE id = (SELECT id FROM labels WHERE account_id = $1 AND type = 'user' AND im
 RETURNING id`, idx.accountID, name, kw).Scan(&id)
 	if err == nil {
 		idx.keyword[strings.ToLower(kw)] = kwLabel{id: id, mirrored: true}
-		return id, nil
+		return id, keywordLabelChanged(ctx, db, idx, id)
 	}
 	if err != pgx.ErrNoRows {
 		return 0, fmt.Errorf("mail: adopt keyword label: %w", err)
@@ -265,7 +265,7 @@ INSERT INTO labels (user_id, account_id, name, type, imap_keyword, keyword_state
 VALUES ($1, $2, $3, 'user', $4, 'mirrored') ON CONFLICT DO NOTHING RETURNING id`, idx.userID, idx.accountID, n, kw).Scan(&id)
 		if err == nil {
 			idx.keyword[strings.ToLower(kw)] = kwLabel{id: id, mirrored: true}
-			return id, nil
+			return id, keywordLabelChanged(ctx, db, idx, id)
 		}
 		if err != pgx.ErrNoRows {
 			return 0, fmt.Errorf("mail: create keyword label: %w", err)
@@ -573,4 +573,13 @@ WHERE m.id = v.id AND m.is_unread IS DISTINCT FROM v.u`, plan.unreadMsg, plan.un
 		}
 	}
 	return plan, nil
+}
+
+// keywordLabelChanged tells clients (label.changed, plan 5.4) that a keyword
+// seen on the server created or adopted a label, so they reload /labels before
+// the thread.updated that carries the new label id is rendered.
+func keywordLabelChanged(ctx context.Context, db DB, idx *labelIndex, labelID int64) error {
+	return WriteEvent(ctx, db, idx.userID, EventLabelChanged, map[string]any{
+		"accountId": idx.accountID, "labelId": labelID,
+	})
 }

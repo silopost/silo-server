@@ -255,6 +255,10 @@ func TestKeywordsImportAndRemoval(t *testing.T) {
 	if n := e.count(`SELECT count(*) FROM labels WHERE account_id = $1 AND type = 'user'`, e.accountID); n != 3 {
 		t.Fatalf("user labels = %d (ignored keywords must not create labels)", n)
 	}
+	// Clients learn about the new labels before rendering their ids (plan 5.4).
+	if n := e.count(`SELECT count(*) FROM events WHERE user_id = $1 AND type = 'label.changed'`, e.userID); n != 3 {
+		t.Fatalf("label.changed events = %d, want one per created label", n)
+	}
 	var kw, state string
 	must(t, e.pool.QueryRow(e.ctx, `SELECT imap_keyword, keyword_state FROM labels WHERE account_id = $1 AND name = 'Ważne'`, e.accountID).Scan(&kw, &state))
 	if kw != "$label1" || state != "mirrored" {
@@ -272,6 +276,9 @@ func TestKeywordsImportAndRemoval(t *testing.T) {
 	if n := e.count(`SELECT count(*) FROM labels WHERE account_id = $1 AND type = 'user'`, e.accountID); n != 3 {
 		t.Fatalf("user labels = %d, keyword matching must be case-insensitive", n)
 	}
+	if n := e.count(`SELECT count(*) FROM events WHERE user_id = $1 AND type = 'label.changed'`, e.userID); n != 3 {
+		t.Fatalf("label.changed events = %d, a known keyword must not announce its label again", n)
+	}
 	e.reconcileClean()
 }
 
@@ -286,6 +293,9 @@ func TestKeywordAdoptsLocalLabelAndPrefix(t *testing.T) {
 		e.fetched("INBOX", e.one("a@example.com", "dev@silo.test", "B", "pre2@example.com", time.Hour), `$Silo.Nowa`))
 	if n := e.count(`SELECT count(*) FROM labels WHERE account_id = $1 AND type = 'user'`, e.accountID); n != 2 {
 		t.Fatalf("user labels = %d, want the local one adopted plus Nowa", n)
+	}
+	if n := e.count(`SELECT count(*) FROM events WHERE user_id = $1 AND type = 'label.changed'`, e.userID); n != 2 {
+		t.Fatalf("label.changed events = %d, want the adopted and the created label", n)
 	}
 	var kw string
 	must(t, e.pool.QueryRow(e.ctx, `SELECT imap_keyword FROM labels WHERE account_id = $1 AND name = 'Nowa'`, e.accountID).Scan(&kw))
