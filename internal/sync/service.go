@@ -17,8 +17,8 @@ import (
 
 // Errors of the Service.
 var (
-	ErrNotFound       = errors.New("sync: not found")
-	ErrInvalid        = errors.New("sync: invalid request")
+	ErrNotFound = errors.New("sync: not found")
+	ErrInvalid  = errors.New("sync: invalid request")
 	// ErrRebuildBlocked wraps mail.ErrRebuildBlocked with the reason.
 	ErrRebuildBlocked = mail.ErrRebuildBlocked
 )

@@ -503,4 +503,3 @@ WHERE m.account_id = $1 AND m.message_id_hdr = $2 AND NOT ('\Deleted' = ANY(l.fl
 	}
 	_ = strings.ToLower
 }
-
