@@ -96,15 +96,17 @@ type mailbox struct {
 	host       string
 	port       int
 	user, pass string
+	srv        *imaptest.Server
 }
 
 func newMailbox(t *testing.T, p imaptest.Profile) *mailbox {
 	t.Helper()
 	needDB(t)
-	addr, user, pass := imaptest.Start(t, p)
+	srv := imaptest.StartServer(t, p)
+	addr, user, pass := srv.Addr, imaptest.User, imaptest.Pass
 	host, ps, _ := net.SplitHostPort(addr)
 	port, _ := strconv.Atoi(ps)
-	return &mailbox{t: t, host: host, port: port, user: user, pass: pass}
+	return &mailbox{t: t, host: host, port: port, user: user, pass: pass, srv: srv}
 }
 
 // client opens an independent IMAP session ("another client", Thunderbird).

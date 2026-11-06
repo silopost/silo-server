@@ -8,12 +8,14 @@ import (
 	"context"
 	"embed"
 	"fmt"
+	"io"
 	"os"
 	"runtime"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/moby/moby/client"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/wait"
 )
@@ -63,7 +65,8 @@ var files embed.FS
 // SILO_REQUIRE_DOCKER=true (set in CI), in which case they fail.
 func Start(t *testing.T, profile Profile) (addr, user, pass string) {
 	t.Helper()
-	return start(t, profile, nil), User, Pass
+	addr, _ = start(t, profile, nil)
+	return addr, User, Pass
 }
 
 // StartOAuth2 launches profile OAuth2: Dovecot accepts a bearer token when
@@ -72,10 +75,11 @@ func Start(t *testing.T, profile Profile) (addr, user, pass string) {
 // The URL must be reachable from the container.
 func StartOAuth2(t *testing.T, introspectionURL string) (addr string) {
 	t.Helper()
-	return start(t, OAuth2, strings.NewReplacer("@INTROSPECTION_URL@", introspectionURL))
+	addr, _ = start(t, OAuth2, strings.NewReplacer("@INTROSPECTION_URL@", introspectionURL))
+	return addr
 }
 
-func start(t *testing.T, profile Profile, vars *strings.Replacer) string {
+func start(t *testing.T, profile Profile, vars *strings.Replacer) (string, testcontainers.Container) {
 	t.Helper()
 	if testing.Short() {
 		t.Skip("integration test skipped with -short")
@@ -134,7 +138,7 @@ func start(t *testing.T, profile Profile, vars *strings.Replacer) string {
 	if err != nil {
 		t.Fatalf("mapped port: %v", err)
 	}
-	return fmt.Sprintf("%s:%s", host, port.Port())
+	return fmt.Sprintf("%s:%s", host, port.Port()), ctr
 }
 
 func extraHosts() []string {
@@ -142,4 +146,40 @@ func extraHosts() []string {
 		return []string{"host.docker.internal:host-gateway"}
 	}
 	return nil
+}
+
+// Server is a started Dovecot container (StartServer).
+type Server struct {
+	Addr string // plaintext IMAP, host:port
+	ctr  testcontainers.Container
+}
+
+// StartServer is Start that also gives access to the container, for tests
+// that need to fill a mailbox faster than APPEND allows (CopyMaildir).
+func StartServer(t *testing.T, profile Profile) *Server {
+	t.Helper()
+	addr, ctr := start(t, profile, nil)
+	return &Server{Addr: addr, ctr: ctr}
+}
+
+// MailUID is the uid and gid of the mail files in the container (vmail).
+const MailUID = 1000
+
+// MaildirPath is the Maildir++ root of a user in the container: INBOX is
+// its cur/, another folder X is .X/cur/ (create it over IMAP first).
+func MaildirPath(user string) string { return "/tmp/home/" + user + "/mail" }
+
+// CopyTar extracts the tar stream r into dir of the container, keeping the
+// uid/gid of the headers (use MailUID). It streams: the archive is never
+// held in memory.
+func (s *Server) CopyTar(ctx context.Context, dir string, r io.Reader) error {
+	cli, err := testcontainers.NewDockerClientWithOpts(ctx)
+	if err != nil {
+		return err
+	}
+	defer cli.Close()
+	_, err = cli.CopyToContainer(ctx, s.ctr.GetContainerID(), client.CopyToContainerOptions{
+		DestinationPath: dir, Content: r, CopyUIDGID: true,
+	})
+	return err
 }

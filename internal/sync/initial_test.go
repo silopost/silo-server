@@ -6,6 +6,7 @@ import (
 	"math/rand/v2"
 	"os"
 	"runtime"
+	"runtime/debug"
 	"strconv"
 	stdsync "sync"
 	"sync/atomic"
@@ -48,9 +49,16 @@ func TestInitialSync(t *testing.T) {
 		t.Cleanup(func() { rep.TestFailed = t.Failed(); writeSyncReport(t, path, rep) })
 	}
 	t0 := time.Now()
-	recent := mb.populateAged(realisticAge, splitSpecs(n)...)
+	how := "IMAP APPEND"
+	var recent map[string]int
+	if n > appendLimit {
+		how = "Maildir files"
+		recent = mb.populateMaildir(realisticAge, splitSpecs(n)...)
+	} else {
+		recent = mb.populateAged(realisticAge, splitSpecs(n)...)
+	}
 	rep.PopulateSeconds = time.Since(t0).Seconds()
-	t.Logf("populated %d messages in %s", n, time.Since(t0).Round(time.Millisecond))
+	t.Logf("populated %d messages (%s) in %s", n, how, time.Since(t0).Round(time.Millisecond))
 
 	a := mb.account(mb.pass)
 	var warns, errs atomic.Int64
@@ -63,7 +71,7 @@ func TestInitialSync(t *testing.T) {
 	// The default timeouts fit the 2000-message run; large runs scale them.
 	liveTimeout := max(2*time.Minute, time.Duration(n)*3*time.Millisecond)
 	doneTimeout := max(5*time.Minute, time.Duration(n)*30*time.Millisecond)
-	runtime.GC()
+	debug.FreeOSMemory() // measure the sync, not what populating left behind
 	mem := startMemSampler(2*time.Second, os.Getenv("SILO_SYNC_TEST_PPROF"))
 	defer mem.finish()
 	t1 := time.Now()
