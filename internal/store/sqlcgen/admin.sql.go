@@ -25,7 +25,7 @@ func (q *Queries) AdminDeleteJob(ctx context.Context, id int64) (int64, error) {
 
 const adminListAccounts = `-- name: AdminListAccounts :many
 
-SELECT a.id, a.user_id, u.email AS user_email, a.email, a.display_name, a.imap_host,
+SELECT a.id, a.user_id, u.email AS user_email, a.email, a.display_name, a.imap_host, a.auth_type,
        a.sync_state, a.sync_error, a.last_sync_at, a.created_at,
        (SELECT count(*) FROM jobs j WHERE j.account_id = a.id AND j.status = 'pending' AND j.kind = 'imap_op')::int AS pending_ops,
        (SELECT count(*) FROM jobs j WHERE j.account_id = a.id AND j.status = 'dead')::int AS dead_ops
@@ -40,6 +40,7 @@ type AdminListAccountsRow struct {
 	Email       string
 	DisplayName string
 	ImapHost    string
+	AuthType    string
 	SyncState   string
 	SyncError   pgtype.Text
 	LastSyncAt  pgtype.Timestamptz
@@ -67,6 +68,7 @@ func (q *Queries) AdminListAccounts(ctx context.Context) ([]AdminListAccountsRow
 			&i.Email,
 			&i.DisplayName,
 			&i.ImapHost,
+			&i.AuthType,
 			&i.SyncState,
 			&i.SyncError,
 			&i.LastSyncAt,

@@ -119,6 +119,12 @@ components:
     AdminAccount:
       additionalProperties: false
       properties:
+        authType:
+          description: How Silo signs in to the servers (see Account.authType).
+          enum:
+            - password
+            - xoauth2
+          type: string
         createdAt:
           format: date-time
           type: string
@@ -172,6 +178,7 @@ components:
         - email
         - displayName
         - imapHost
+        - authType
         - state
         - error
         - lastSyncAt

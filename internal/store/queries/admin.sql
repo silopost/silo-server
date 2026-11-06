@@ -3,7 +3,7 @@
 
 -- name: AdminListAccounts :many
 -- tenancy: exempt admin panel lists the accounts of every user
-SELECT a.id, a.user_id, u.email AS user_email, a.email, a.display_name, a.imap_host,
+SELECT a.id, a.user_id, u.email AS user_email, a.email, a.display_name, a.imap_host, a.auth_type,
        a.sync_state, a.sync_error, a.last_sync_at, a.created_at,
        (SELECT count(*) FROM jobs j WHERE j.account_id = a.id AND j.status = 'pending' AND j.kind = 'imap_op')::int AS pending_ops,
        (SELECT count(*) FROM jobs j WHERE j.account_id = a.id AND j.status = 'dead')::int AS dead_ops

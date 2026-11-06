@@ -101,7 +101,7 @@ func TestAdminPanel(t *testing.T) {
 			t.Fatalf("accounts: %+v", accs.Accounts)
 		}
 		a := accs.Accounts[0]
-		if a.ID != accStr || a.UserID != uid(eveID) || a.UserEmail != "eve@local.test" || a.State != "live" || a.PendingOps != 1 || a.DeadOps != 1 {
+		if a.ID != accStr || a.UserID != uid(eveID) || a.UserEmail != "eve@local.test" || a.AuthType != "password" || a.State != "live" || a.PendingOps != 1 || a.DeadOps != 1 {
 			t.Errorf("account: %+v", a)
 		}
 	})

@@ -48,6 +48,7 @@ type AdminAccount struct {
 	Email       string     `json:"email"`
 	DisplayName string     `json:"displayName"`
 	IMAPHost    string     `json:"imapHost"`
+	AuthType    string     `json:"authType" enum:"password,xoauth2" doc:"How Silo signs in to the servers (see Account.authType)."`
 	State       string     `json:"state" enum:"connecting,discovering,initial_sync,live,backoff,auth_failed,disabled"`
 	Error       *string    `json:"error"`
 	LastSyncAt  *time.Time `json:"lastSyncAt"`
@@ -298,7 +299,7 @@ func (d *deps) registerAdmin(a huma.API) {
 		for _, r := range rows {
 			acc := AdminAccount{
 				ID: formatID("acc_", r.ID), UserID: formatID("u_", r.UserID), UserEmail: r.UserEmail,
-				Email: r.Email, DisplayName: r.DisplayName, IMAPHost: r.ImapHost, State: r.SyncState,
+				Email: r.Email, DisplayName: r.DisplayName, IMAPHost: r.ImapHost, AuthType: r.AuthType, State: r.SyncState,
 				PendingOps: int(r.PendingOps), DeadOps: int(r.DeadOps), CreatedAt: r.CreatedAt.Time,
 			}
 			if r.SyncError.Valid {
