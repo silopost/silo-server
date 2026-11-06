@@ -610,15 +610,20 @@ func (im *importer) importFilters() error {
 		if !ok {
 			continue
 		}
-		actions := f.Actions
-		if len(actions) == 0 || string(actions) == "null" {
-			actions = json.RawMessage("{}")
+		actions, err := im.filterActions(acc, f)
+		if err != nil {
+			return err
+		}
+		enabled := f.Enabled == nil || *f.Enabled
+		updated := f.CreatedAt
+		if f.UpdatedAt != nil {
+			updated = *f.UpdatedAt
 		}
 		tag, err := im.tx.Exec(im.ctx, `
-INSERT INTO filters (user_id, account_id, criteria, actions, position, created_at)
-SELECT $1, $2, $3, $4, $5, $6
-WHERE NOT EXISTS (SELECT 1 FROM filters WHERE account_id = $2 AND user_id = $1 AND criteria = $3 AND actions = $4::jsonb)`,
-			im.accUser[acc], acc, f.Criteria, []byte(actions), f.Position, f.CreatedAt)
+INSERT INTO filters (user_id, account_id, name, criteria, actions, enabled, position, created_at, updated_at)
+SELECT $1, $2, $3, $4, $5, $6, $7, $8, $9
+WHERE NOT EXISTS (SELECT 1 FROM filters WHERE account_id = $2 AND user_id = $1 AND criteria = $4 AND actions = $5::jsonb)`,
+			im.accUser[acc], acc, f.Name, f.Criteria, []byte(actions), enabled, f.Position, f.CreatedAt, updated)
 		if err != nil {
 			return fmt.Errorf("backup: insert filter: %w", err)
 		}
@@ -893,4 +898,48 @@ func (im *importer) finish() error {
 		}
 	}
 	return nil
+}
+
+// filterActions maps the label names of a filter's actions
+// (FilterActionLabels) to the ids of the account's user labels (imported
+// before the filters) as addLabelIds. A name without a label, and label ids
+// of an older export, are dropped with a warning.
+func (im *importer) filterActions(acc int64, f Filter) (json.RawMessage, error) {
+	if len(f.Actions) == 0 || string(f.Actions) == "null" {
+		return json.RawMessage("{}"), nil
+	}
+	var a map[string]json.RawMessage
+	if err := json.Unmarshal(f.Actions, &a); err != nil {
+		return nil, fmt.Errorf("backup: filter %q actions: %w", f.Name, err)
+	}
+	if _, ok := a[filterActionLabelIDs]; ok {
+		delete(a, filterActionLabelIDs)
+		im.st.warn("filter %q of %s: label ids of an older export cannot be mapped, left out of its actions", f.Name, f.Account.Username)
+	}
+	if raw, ok := a[FilterActionLabels]; ok {
+		delete(a, FilterActionLabels)
+		var names []string
+		if err := json.Unmarshal(raw, &names); err != nil {
+			return nil, fmt.Errorf("backup: filter %q addLabels: %w", f.Name, err)
+		}
+		ids := []int64{}
+		for _, n := range names {
+			var id int64
+			err := im.tx.QueryRow(im.ctx, `SELECT id FROM labels WHERE account_id = $1 AND type = 'user' AND name = $2 ORDER BY id LIMIT 1`,
+				acc, n).Scan(&id)
+			switch {
+			case errors.Is(err, pgx.ErrNoRows):
+				im.st.warn("filter %q of %s: no label %q, left out of its actions", f.Name, f.Account.Username, n)
+				continue
+			case err != nil:
+				return nil, err
+			}
+			ids = append(ids, id)
+		}
+		if len(ids) > 0 {
+			b, _ := json.Marshal(ids)
+			a[filterActionLabelIDs] = b
+		}
+	}
+	return json.Marshal(a)
 }

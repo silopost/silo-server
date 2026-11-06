@@ -15,6 +15,7 @@ import (
 
 	"github.com/silopost/silo-server/internal/backup"
 	"github.com/silopost/silo-server/internal/drafts"
+	"github.com/silopost/silo-server/internal/filters"
 	"github.com/silopost/silo-server/internal/mail"
 	"github.com/silopost/silo-server/internal/secrets"
 	"github.com/silopost/silo-server/internal/testutil/imaptest"
@@ -41,7 +42,13 @@ func (s *stack) snapshot(userA, accA, userB, accB int64) snapshot {
 		inboxA:  s.inbox(userA, accA),
 		inboxB:  s.inbox(userB, accB),
 		snoozes: s.snoozes(),
-		filters: s.strings(`SELECT u.email::text || '|' || f.criteria || '|' || f.actions::text FROM filters f JOIN users u ON u.id = f.user_id ORDER BY 1`),
+		// Label ids of filter actions differ between databases: compared by name.
+		filters: s.strings(`
+SELECT u.email::text || '|' || f.name || '|' || f.criteria || '|' || (f.actions - 'addLabelIds')::text || '|' ||
+       COALESCE((SELECT string_agg(l.name, ',' ORDER BY l.name) FROM labels l
+                 WHERE l.id IN (SELECT jsonb_array_elements_text(f.actions->'addLabelIds')::bigint)), '') || '|' ||
+       f.enabled::text || '|' || f.position || '|' || to_char(f.updated_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS')
+FROM filters f JOIN users u ON u.id = f.user_id ORDER BY 1`),
 		contacts: s.strings(`SELECT u.email::text || '|' || c.email::text || '|' || c.name FROM contacts c JOIN users u ON u.id = c.user_id
 WHERE c.is_manual ORDER BY 1`),
 		history: s.strings(`SELECT a.username || '|' || h.query FROM search_history h JOIN accounts a ON a.id = h.account_id ORDER BY 1`),
@@ -111,7 +118,7 @@ func TestExportImportRoundTrip(t *testing.T) {
 
 	// Labels: mirrored (keyword on the server), local only on a server with
 	// keywords, local only on an account marked without keywords.
-	src.labelMirrored(userA, accA, "Projekt", src.msgID(accA, "a1@test"), src.msgID(accA, "a2@test"))
+	projekt := src.labelMirrored(userA, accA, "Projekt", src.msgID(accA, "a1@test"), src.msgID(accA, "a2@test"))
 	src.labelLocal(userA, accA, "Prywatne", src.msgID(accA, "a3@test"))
 	src.exec(`UPDATE accounts SET keywords_supported = false WHERE id = $1`, accB)
 	src.labelLocal(userB, accB, "Lokalna", src.msgID(accB, "b1@test"), src.msgID(accB, "b2@test"))
@@ -146,14 +153,24 @@ func TestExportImportRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	src.exec(`INSERT INTO filters (user_id, account_id, criteria, actions, position) VALUES ($1, $2, 'from:szef@example.com', '{"skipInbox": true}', 0)`, userA, accA)
+	// Filters through the phase 4 service: one adds a label (exported by
+	// name, mapped to the new label id on import), one is disabled.
+	prywatne := src.id(`SELECT id FROM labels WHERE account_id = $1 AND name = 'Prywatne'`, accA)
+	if _, err := src.flt.Create(ctx, userA, filters.Input{AccountID: accA, Name: "Szef", Criteria: "from:szef@example.com",
+		Actions: filters.Actions{Archive: true, AddLabelIDs: []int64{projekt, prywatne}}, Enabled: true}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := src.flt.Create(ctx, userA, filters.Input{AccountID: accA, Name: "Newsletter", Criteria: "from:news@example.com",
+		Actions: filters.Actions{MarkRead: true}}); err != nil {
+		t.Fatal(err)
+	}
 	src.exec(`INSERT INTO contacts (user_id, email, name, is_manual) VALUES ($1, 'kontakt@example.com', 'Kontakt Ręczny', true)`, userB)
 	src.exec(`INSERT INTO contacts (user_id, email, name, received_count) VALUES ($1, 'auto@example.com', 'Automatyczny', 3)`, userB)
 	src.exec(`INSERT INTO search_history (user_id, account_id, query) VALUES ($1, $2, 'faktura')`, userA, accA)
 	src.waitSettled("labels and drafts written to the server")
 	before := src.snapshot(userA, accA, userB, accB)
 	if len(before.labels) != 5 || len(before.inboxA) != 2 || // the snoozed thread left INBOX
-		len(before.snoozes) != 1 || len(before.outbound) != 1 || len(before.attachments) != 1 {
+		len(before.snoozes) != 1 || len(before.outbound) != 1 || len(before.attachments) != 1 || len(before.filters) != 2 {
 		t.Fatalf("source state incomplete: %+v", before)
 	}
 	t.Logf("source state: %+v", before)
@@ -172,6 +189,9 @@ func TestExportImportRoundTrip(t *testing.T) {
 		t.Fatalf("export stats: %+v", st)
 	}
 	exported := buf.String()
+	if st.Filters != 2 || !strings.Contains(exported, `"addLabels":["Projekt","Prywatne"]`) || strings.Contains(exported, "addLabelIds") {
+		t.Errorf("filters export: %d, label names missing or ids left", st.Filters)
+	}
 	for _, secret := range []string{imaptest.Pass, imaptest.Pass2, `"id":`, "active_account_id"} {
 		if strings.Contains(exported, secret) {
 			t.Errorf("export contains %q", secret)

@@ -1,6 +1,6 @@
 // Package backup exports and imports the metadata of a Silo instance (plan
-// 3.3: what Postgres is the source of truth for) and rebuilds the mail cache
-// of an account from the IMAP server.
+// 3.3: what Postgres is the source of truth for). The cache rebuild of an
+// account is the sync engine's (phase 4, mail.WipeCache).
 //
 // The export is one JSON document: a header and named sections, each an
 // array. Rows are keyed by stable identities, never by local ids: users by
@@ -162,16 +162,30 @@ type Snooze struct {
 	SourceFolders map[string]string `json:"sourceFolders,omitempty"`
 }
 
-// Filter is one row of filters, columns as in the schema. Label ids inside
-// actions are local ids and are not translated (the filters slice of phase
-// 4 extends this section).
+// Filter is one row of filters (phase 4: name, enabled, updated_at).
+// Actions are filters.Actions as stored, except that the local label ids of
+// addLabelIds are replaced by FilterActionLabels: the names of user labels of
+// the account (labels are keyed by name in this format). An import maps
+// them back to the ids of the labels it imported; an addLabelIds left in
+// actions (an export before this change) cannot be mapped and is dropped
+// with a warning.
 type Filter struct {
 	Account   AccountRef      `json:"account"`
+	Name      string          `json:"name"`
 	Criteria  string          `json:"criteria"`
 	Actions   json.RawMessage `json:"actions"`
+	Enabled   *bool           `json:"enabled,omitempty"` // absent: true
 	Position  int32           `json:"position"`
 	CreatedAt time.Time       `json:"createdAt"`
+	UpdatedAt *time.Time      `json:"updatedAt,omitempty"`
 }
+
+// Keys of Filter.Actions: the stored local label ids and their names in the
+// document.
+const (
+	filterActionLabelIDs = "addLabelIds"
+	FilterActionLabels   = "addLabels"
+)
 
 // SearchHistory is one row of search_history.
 type SearchHistory struct {

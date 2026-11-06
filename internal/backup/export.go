@@ -384,8 +384,25 @@ func (e *exporter) exportSnoozes() error {
 }
 
 func (e *exporter) exportFilters() error {
+	names := map[int64]string{} // user label id -> name
+	lrows, err := e.tx.Query(e.ctx, `SELECT id, name FROM labels WHERE account_id = ANY($1) AND type = 'user'`, e.accountIDs)
+	if err != nil {
+		return err
+	}
+	for lrows.Next() {
+		var id int64
+		var name string
+		if err := lrows.Scan(&id, &name); err != nil {
+			lrows.Close()
+			return err
+		}
+		names[id] = name
+	}
+	if err := lrows.Err(); err != nil {
+		return err
+	}
 	rows, err := e.tx.Query(e.ctx, `
-SELECT account_id, criteria, actions, position, created_at FROM filters
+SELECT account_id, name, criteria, actions, enabled, position, created_at, updated_at FROM filters
 WHERE account_id = ANY($1) ORDER BY account_id, position, id`, e.accountIDs)
 	if err != nil {
 		return err
@@ -394,10 +411,18 @@ WHERE account_id = ANY($1) ORDER BY account_id, position, id`, e.accountIDs)
 	for rows.Next() {
 		var acc int64
 		var f Filter
-		if err := rows.Scan(&acc, &f.Criteria, &f.Actions, &f.Position, &f.CreatedAt); err != nil {
+		var enabled bool
+		var updated time.Time
+		if err := rows.Scan(&acc, &f.Name, &f.Criteria, &f.Actions, &enabled, &f.Position, &f.CreatedAt, &updated); err != nil {
 			return err
 		}
+		f.Enabled, f.UpdatedAt = &enabled, &updated
 		f.Account = e.accounts[acc]
+		if f.Actions, err = exportFilterActions(f.Actions, names, func(id int64) {
+			e.st.warn("filter %q of %s: label %d is gone, left out of its actions", f.Name, f.Account.Username, id)
+		}); err != nil {
+			return err
+		}
 		if err := e.item(f); err != nil {
 			return err
 		}
@@ -605,4 +630,39 @@ ORDER BY o.account_id, o.id`, e.accountIDs)
 		e.st.Outbound++
 	}
 	return rows.Err()
+}
+
+// exportFilterActions replaces the label ids of addLabelIds by the names of
+// the labels (FilterActionLabels); ids without a user label are reported to
+// missing and left out.
+func exportFilterActions(raw json.RawMessage, names map[int64]string, missing func(int64)) (json.RawMessage, error) {
+	var a map[string]json.RawMessage
+	if len(raw) == 0 || string(raw) == "null" {
+		return json.RawMessage("{}"), nil
+	}
+	if err := json.Unmarshal(raw, &a); err != nil {
+		return nil, fmt.Errorf("backup: filter actions: %w", err)
+	}
+	ids, ok := a[filterActionLabelIDs]
+	if !ok {
+		return raw, nil
+	}
+	delete(a, filterActionLabelIDs)
+	var list []int64
+	if err := json.Unmarshal(ids, &list); err != nil {
+		return nil, fmt.Errorf("backup: filter addLabelIds: %w", err)
+	}
+	labels := []string{}
+	for _, id := range list {
+		if n, ok := names[id]; ok {
+			labels = append(labels, n)
+		} else {
+			missing(id)
+		}
+	}
+	if len(labels) > 0 {
+		b, _ := json.Marshal(labels)
+		a[FilterActionLabels] = b
+	}
+	return json.Marshal(a)
 }

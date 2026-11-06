@@ -761,7 +761,10 @@ configuration, the sealed mailbox password; no sync state), user labels
 (name, keyword, colour, nesting), user-label assignments and snoozes keyed by
 Message-ID, drafts and messages waiting to be sent (with their attachments
 and stored MIME inline as base64; `--no-local-blobs` keeps only the sha256),
-filters, manual contacts and search history. Not in it: sessions, events,
+filters (name, criteria, actions, enabled, order; the labels a filter adds
+are written by name in `actions.addLabels` and mapped to the imported labels,
+a name without a label is dropped with a warning), manual contacts and search
+history. Not in it: sessions, events,
 jobs, write-back operations and the cache. Rows are keyed by stable identities
 (user email; account = user + IMAP host + username; label = account + name;
 message = Message-ID), never by local ids. The format is versioned and
@@ -785,8 +788,7 @@ empty.
   messages are queued again for their time (at once if it has passed).
 - **Limits.** Write-back operations still pending (`imap_op`, e.g. an archive
   inside the undo window) are not in the backup: they run within seconds,
-  `backup.sh` waits until the account queue is empty. Label ids inside
-  `filters.actions` are copied as they are. A draft opened from another
+  `backup.sh` waits until the account queue is empty. A draft opened from another
   client's Drafts copy (no `X-Silo-Draft-Id`) comes back as a local draft next
   to that copy. A snooze already due is restored as is (woken by the snooze job).
 
