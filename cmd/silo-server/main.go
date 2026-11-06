@@ -80,7 +80,7 @@ func main() {
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "usage: silo-server <command>\n\ncommands:\n  serve    run the HTTP server (--migrate=false skips migrations)\n  migrate  up, down --yes or version: manage the database schema\n  rotate-secrets  re-encrypt account and TOTP secrets after a key change\n  reconcile  compare derived mail data with its sources (--account ID)\n  rebuild-cache  --account ID [--yes]: drop the cached mail of an account and sync it again\n  user     add, passwd, admin or list: manage Silo users (see `silo-server user`)\n  export-metadata  write the metadata backup (JSON): --out FILE|-, --user EMAIL, --no-local-blobs\n  import-metadata  restore a metadata backup: --in FILE|-, --merge\n  version  print the version")
+	fmt.Fprintln(os.Stderr, "usage: silo-server <command>\n\ncommands:\n  serve    run the HTTP server (--migrate=false skips migrations)\n  migrate  up, down --yes or version: manage the database schema\n  rotate-secrets  re-encrypt account and TOTP secrets after a key change\n  reconcile  compare derived mail data with its sources (--account ID)\n  rebuild-cache  --account ID|--all [--yes]: drop the cached mail of an account and sync it again\n  user     add, passwd, admin or list: manage Silo users (see `silo-server user`)\n  export-metadata  write the metadata backup (JSON): --out FILE|-, --user EMAIL, --no-local-blobs\n  import-metadata  restore a metadata backup: --in FILE|-, --merge\n  version  print the version")
 }
 
 func serve(ctx context.Context, args []string) error {

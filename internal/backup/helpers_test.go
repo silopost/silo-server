@@ -24,6 +24,7 @@ import (
 	"github.com/silopost/silo-server/internal/backup"
 	"github.com/silopost/silo-server/internal/blob"
 	"github.com/silopost/silo-server/internal/drafts"
+	"github.com/silopost/silo-server/internal/filters"
 	"github.com/silopost/silo-server/internal/imapx"
 	"github.com/silopost/silo-server/internal/mail"
 	"github.com/silopost/silo-server/internal/mailview"
@@ -63,13 +64,15 @@ func newDB(t *testing.T) *pgxpool.Pool {
 }
 
 // stack is the part of the server the tests need: job worker, sync engine,
-// drafts, write-back and the metadata_restore job over one database.
+// drafts, write-back, snooze and filter jobs and the metadata_restore job
+// over one database.
 type stack struct {
 	t     *testing.T
 	pool  *pgxpool.Pool
 	ring  *secrets.Keyring
 	blobs blob.BlobStore
 	ops   *ops.Service
+	flt   *filters.Service
 	dr    *drafts.Service
 	view  *mailview.View
 	sync  *silosync.Service
@@ -107,6 +110,10 @@ func startStack(t *testing.T, pool *pgxpool.Pool, blobs blob.BlobStore) *stack {
 			}
 			return r.Body, nil
 		}})
+	opsSvc := ops.NewService(pool, 0)
+	opsSvc.RegisterJobs(jobs)
+	flt := filters.New(filters.Options{Pool: pool, Ops: opsSvc, Bodies: mgr, Forward: dr, Logger: logger})
+	flt.RegisterJobs(jobs)
 	dr.RegisterJobs(jobs)
 	backup.RegisterJobs(jobs, backup.RestoreOptions{Pool: pool, Logger: logger, RetryEvery: 300 * time.Millisecond})
 	ctx, cancel := context.WithCancel(context.Background())
@@ -114,7 +121,7 @@ func startStack(t *testing.T, pool *pgxpool.Pool, blobs blob.BlobStore) *stack {
 	go func() { _ = jobs.Run(ctx); done <- struct{}{} }()
 	go func() { _ = mgr.Run(ctx); done <- struct{}{} }()
 	var once stdsync.Once
-	s := &stack{t: t, pool: pool, ring: ring, blobs: blobs, ops: ops.NewService(pool, 0), dr: dr, view: view,
+	s := &stack{t: t, pool: pool, ring: ring, blobs: blobs, ops: opsSvc, flt: flt, dr: dr, view: view,
 		sync: silosync.NewService(pool)}
 	s.stop = func() {
 		once.Do(func() {
@@ -354,28 +361,16 @@ func (s *stack) labelMirrored(userID, accountID int64, name string, msgIDs ...in
 	return l.ID
 }
 
-// snooze snoozes the thread of a message directly in the tables (the snooze
-// API belongs to phase 4).
-func (s *stack) snooze(userID, accountID, msgID int64, wake time.Time) {
+// snooze snoozes the thread of a message through the phase 4 operation (the
+// messages move to the Snoozed folder on the server).
+func (s *stack) snooze(userID, msgID int64, wake time.Time) {
 	s.t.Helper()
 	ctx := context.Background()
-	err := pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
-		var thread, id int64
-		if err := tx.QueryRow(ctx, `SELECT thread_id FROM messages WHERE id = $1`, msgID).Scan(&thread); err != nil {
-			return err
-		}
-		if err := tx.QueryRow(ctx, `INSERT INTO snoozes (user_id, account_id, thread_id, wake_at) VALUES ($1, $2, $3, $4) RETURNING id`,
-			userID, accountID, thread, wake).Scan(&id); err != nil {
-			return err
-		}
-		if _, err := tx.Exec(ctx, `
-INSERT INTO snooze_items (snooze_id, message_id, source_folder_id)
-SELECT $1, $2, (SELECT f.id FROM mailbox_folders f WHERE f.account_id = $3 AND f.role = 'inbox')`, id, msgID, accountID); err != nil {
-			return err
-		}
-		return mail.RecomputeThread(ctx, tx, thread)
-	})
-	if err != nil {
+	var thread int64
+	if err := s.pool.QueryRow(ctx, `SELECT thread_id FROM messages WHERE id = $1`, msgID).Scan(&thread); err != nil {
+		s.t.Fatal(err)
+	}
+	if _, err := s.ops.Snooze(ctx, userID, thread, wake, "test"); err != nil {
 		s.t.Fatal(err)
 	}
 }

@@ -32,7 +32,7 @@ const EventResync = "resync"
 
 // Why a rebuild is refused now (ErrRebuildBlocked carries one of these).
 const (
-	RebuildBlockedOutbound   = "outbound"   // a message is queued or being sent
+	RebuildBlockedOutbound   = "outbound"   // a message is being sent or due within RebuildSendMargin
 	RebuildBlockedOperations = "operations" // imap_op jobs wait for write-back
 )
 
@@ -40,14 +40,23 @@ const (
 // the server; they would be lost with the messages they point to.
 var ErrRebuildBlocked = errors.New("mail: rebuild blocked")
 
+// RebuildSendMargin: a queued send due later than this does not block a
+// rebuild. Scheduled mail (schedule send) stays local until its time and is
+// kept by WipeCache like a draft; only sends in flight or about to start
+// (undo window, a schedule that is due) wait.
+const RebuildSendMargin = time.Minute
+
 // RebuildBlocker returns why the cache of the account cannot be rebuilt now
-// ("" when it can): sends in flight (outbound queued/sending) and operations
-// waiting for write-back (imap_op pending or running).
+// ("" when it can): sends in flight (outbound sending, or queued and due
+// within RebuildSendMargin) and operations waiting for write-back (imap_op
+// pending or running).
 func RebuildBlocker(ctx context.Context, db DB, accountID int64) (string, error) {
 	var outbound, ops bool
 	err := db.QueryRow(ctx, `
-SELECT EXISTS (SELECT 1 FROM outbound WHERE account_id = $1 AND status IN ('queued', 'sending')),
-       EXISTS (SELECT 1 FROM jobs WHERE account_id = $1 AND kind = 'imap_op' AND status IN ('pending', 'running'))`, accountID).
+SELECT EXISTS (SELECT 1 FROM outbound WHERE account_id = $1
+                AND (status = 'sending' OR status = 'queued' AND send_at <= now() + make_interval(secs => $2))),
+       EXISTS (SELECT 1 FROM jobs WHERE account_id = $1 AND kind = 'imap_op' AND status IN ('pending', 'running'))`, accountID,
+		RebuildSendMargin.Seconds()).
 		Scan(&outbound, &ops)
 	switch {
 	case err != nil:

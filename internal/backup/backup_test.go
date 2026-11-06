@@ -115,7 +115,7 @@ func TestExportImportRoundTrip(t *testing.T) {
 	src.labelLocal(userA, accA, "Prywatne", src.msgID(accA, "a3@test"))
 	src.exec(`UPDATE accounts SET keywords_supported = false WHERE id = $1`, accB)
 	src.labelLocal(userB, accB, "Lokalna", src.msgID(accB, "b1@test"), src.msgID(accB, "b2@test"))
-	src.snooze(userA, accA, src.msgID(accA, "a4@test"), time.Now().Add(2*time.Hour).Truncate(time.Second))
+	src.snooze(userA, src.msgID(accA, "a4@test"), time.Now().Add(2*time.Hour).Truncate(time.Second))
 
 	// A draft with an attachment and a message scheduled in an hour.
 	pdf := bytes.Repeat([]byte("%PDF-1.4 plan "), 4000)
@@ -152,7 +152,8 @@ func TestExportImportRoundTrip(t *testing.T) {
 	src.exec(`INSERT INTO search_history (user_id, account_id, query) VALUES ($1, $2, 'faktura')`, userA, accA)
 	src.waitSettled("labels and drafts written to the server")
 	before := src.snapshot(userA, accA, userB, accB)
-	if len(before.labels) != 5 || len(before.inboxA) != 3 || len(before.snoozes) != 1 || len(before.outbound) != 1 || len(before.attachments) != 1 {
+	if len(before.labels) != 5 || len(before.inboxA) != 2 || // the snoozed thread left INBOX
+		len(before.snoozes) != 1 || len(before.outbound) != 1 || len(before.attachments) != 1 {
 		t.Fatalf("source state incomplete: %+v", before)
 	}
 	t.Logf("source state: %+v", before)

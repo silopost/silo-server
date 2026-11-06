@@ -59,7 +59,7 @@ type syncStatusOutput struct{ Body SyncStatus }
 
 // Resync is the body of POST /accounts/{id}/resync.
 type Resync struct {
-	Mode string `json:"mode,omitempty" enum:"incremental,full,rebuild" default:"incremental" doc:"incremental: sync all folders now; full: also compare every flag; rebuild: drop the cache of the account and run the initial sync from scratch (labels, filters, settings, search history and local drafts stay; snoozes and labels that are local only are re-attached by Message-ID and size; user labels come back from the IMAP keywords). Refused with 409 rebuild_blocked while a send is queued or operations wait for write-back."`
+	Mode string `json:"mode,omitempty" enum:"incremental,full,rebuild" default:"incremental" doc:"incremental: sync all folders now; full: also compare every flag; rebuild: drop the cache of the account and run the initial sync from scratch (labels, filters, settings, search history and local drafts stay; snoozes and labels that are local only are re-attached by Message-ID and size; user labels come back from the IMAP keywords). Scheduled mail stays; refused with 409 rebuild_blocked while a send is in flight or due within a minute, or operations wait for write-back."`
 }
 
 type resyncInput struct {
@@ -108,7 +108,7 @@ func syncError(err error) error {
 	case errors.Is(err, silosync.ErrNotFound):
 		return errNotFound()
 	case errors.Is(err, silosync.ErrRebuildBlocked):
-		return problem(http.StatusConflict, CodeRebuildBlocked, "The cache cannot be rebuilt while a send is queued or operations wait for the server ("+
+		return problem(http.StatusConflict, CodeRebuildBlocked, "The cache cannot be rebuilt while a send is in flight or due or operations wait for the server ("+
 			strings.TrimPrefix(err.Error(), silosync.ErrRebuildBlocked.Error()+": ")+"); try again when they are done.")
 	case errors.Is(err, silosync.ErrInvalid):
 		return problem(http.StatusUnprocessableEntity, CodeValidation, strings.TrimPrefix(err.Error(), "sync: invalid request: "))

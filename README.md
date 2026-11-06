@@ -22,11 +22,10 @@ silo-server migrate down --yes        # revert everything (drops all data)
 silo-server migrate version           # current schema version
 silo-server rotate-secrets           # re-encrypt account secrets after a key change
 silo-server reconcile [--account ID] # report drift of derived mail data (threads, labels)
-silo-server rebuild-cache --account ID [--yes] # drop the cached mail of an account, sync it again
+silo-server rebuild-cache --account ID|--all [--yes] # drop the cached mail, sync it again
 silo-server user add|passwd|admin|list   # manage Silo users (see below)
 silo-server export-metadata [--out FILE|-] [--user EMAIL] [--no-local-blobs]   # metadata backup (JSON)
 silo-server import-metadata --in FILE|- [--merge]   # restore a metadata backup
-silo-server rebuild-cache --account ID|--all        # drop the mail cache and sync it again
 silo-server version
 ```
 
@@ -473,7 +472,8 @@ cache rebuild gets them back (plan 3.7).
 ## Cache rebuild
 
 `POST /accounts/{id}/resync` with `{"mode": "rebuild"}` (or `silo-server rebuild-cache
---account ID`, for an administrator, also after `TRUNCATE` of cache tables) drops what
+--account ID`, or `--all` for every account that is not disabled, for an administrator,
+also after `TRUNCATE` of cache tables or a cache-only migration) drops what
 Silo mirrors for the account and runs the initial sync from scratch. The request is
 recorded in `account_rebuilds` and done by the account's worker (on the running server,
 or on the next `serve`): the live session ends, the cache is wiped in one transaction,
@@ -493,9 +493,11 @@ events follow.
 - User labels with keywords come back from the server; without the `labels` rows
   (no metadata) they are created again, named after their keywords.
 - Lost: undo of operations made before the rebuild.
-- Refused with `409 rebuild_blocked` while a message is queued or being sent
-  (`outbound`) or operations wait for write-back (`imap_op` jobs); try again when
-  `sync-status.pendingOps` is 0.
+- Refused with `409 rebuild_blocked` while a message is being sent or due within a
+  minute (`outbound`; mail scheduled for later stays local and queued) or operations
+  wait for write-back (`imap_op` jobs); try again when `sync-status.pendingOps` is 0.
+  The worker checks again under the account lock before it wipes, and waits while
+  something blocks. `rebuild-cache --all` goes on past a refused account and reports it.
 
 ## Account autoconfiguration
 
@@ -788,21 +790,6 @@ empty.
   client's Drafts copy (no `X-Silo-Draft-Id`) comes back as a local draft next
   to that copy. A snooze already due is restored as is (woken by the snooze job).
 
-## rebuild-cache
-
-`silo-server rebuild-cache --account ID` (or `--all`; API:
-`POST /accounts/{id}/resync {"mode":"rebuild"}`) drops the mirror of an
-account and syncs it again from scratch: needed after a cache-only migration
-or a suspected corruption. In one transaction it stages the user-label
-assignments and snoozes by Message-ID (as an import does), deletes folders,
-cache messages, their threads and system labels (blob references are released;
-`blob_gc` deletes the mirror blobs), keeps drafts and messages waiting to be
-sent with their threads, and sets the account back to `connecting`. A running
-server restarts the account's sync worker; meanwhile lists show the partial
-state and `sync-status` reports `initial_sync`. Threading is deterministic, so
-the conversations come back the same, a reply draft included. An account with
-write-back operations still pending is refused (`409`, retry when they are done).
-
 ## S3Store
 
 `SILO_BLOB_BACKEND=s3` keeps blobs in an S3-compatible bucket (MinIO, AWS S3,
@@ -846,6 +833,14 @@ Migrations of Faza 4 (all additive: new columns, tables and indexes):
 | `000008_thumbnails` | table `thumbnails` (cache of attachment thumbnails per source blob and size) |
 | `000009_label_folders_rebuild` | `label_folder_state` (per-folder keyword state, `keywordState: partial`) and `account_rebuilds` (cache rebuild of an account) |
 
+Migrations of Faza 5 (numbered from `000050`, after the Faza 4 range; additive):
+
+| Migration | Adds |
+|---|---|
+| `000050_local_auth_totp` | `users` columns of mode `local` and TOTP (`totp_secret_enc`, `totp_enabled_at`, `totp_last_step`, `totp_backup_codes`, `disabled_at`, `password_changed_at`) |
+| `000051_metadata_restores` | `metadata_restores` (label assignments and snoozes of an `import-metadata` waiting for their messages) |
+| `000052_oauth` | `oauth_states` (OAuth2 sign-in in progress, 10 min) |
+
 General jobs (table `jobs`, run by the worker of `serve`; per-account sync work and the
 cache rebuild run in the sync engine):
 
@@ -853,10 +848,11 @@ cache rebuild run in the sync engine):
 |---|---|---|
 | `imap_op` | label/move/flag operations, folders, drafts | writes changes back to the mail server (after the undo window for folder moves) |
 | `send` | `POST /drafts/{id}/send` | SMTP send at `sendAt` (undo-send window or schedule), then Sent append |
-| `blob_gc` | hourly | drafts GC, unreferenced blobs and thumbnails, interrupted sends, old operations |
+| `blob_gc` | hourly | drafts GC, unreferenced blobs and thumbnails, interrupted sends, old operations and expired `oauth_states` |
 | `snooze_wake` | every 30 s and ingest | wakes due snoozes, drops snoozes taken out of Snoozed elsewhere |
 | `filter_eval` | ingest (new INBOX mail of accounts with filters) | runs the enabled filters on new messages |
 | `filter_apply` | `POST /filters/{id}/apply` | applies a filter to existing mail, then `filter.applied` |
+| `metadata_restore` | `import-metadata` | applies staged label assignments and snoozes as the sync ingests their messages (every minute, gives up after 24 h) |
 
 The search re-index (`search_ver`) is not a job: `serve` runs it once in the
 background at start-up until no row has an older tokenizer version.

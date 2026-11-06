@@ -1807,7 +1807,7 @@ components:
       properties:
         mode:
           default: incremental
-          description: "incremental: sync all folders now; full: also compare every flag; rebuild: drop the cache of the account and run the initial sync from scratch (labels, filters, settings, search history and local drafts stay; snoozes and labels that are local only are re-attached by Message-ID and size; user labels come back from the IMAP keywords). Refused with 409 rebuild_blocked while a send is queued or operations wait for write-back."
+          description: "incremental: sync all folders now; full: also compare every flag; rebuild: drop the cache of the account and run the initial sync from scratch (labels, filters, settings, search history and local drafts stay; snoozes and labels that are local only are re-attached by Message-ID and size; user labels come back from the IMAP keywords). Scheduled mail stays; refused with 409 rebuild_blocked while a send is in flight or due within a minute, or operations wait for write-back."
           enum:
             - incremental
             - full
