@@ -258,6 +258,10 @@ ORDER BY l.message_id, l.folder_id`, msgIDs)
 		}
 	}
 
+	if p.Op == mail.OpMove && p.ToRole == RoleArchive && p.ToFolderID == 0 && archiveIsUnInbox(folders) {
+		p.Op = mail.OpExpunge // Gmail: archive = drop the INBOX copy (gmail.go)
+	}
+
 	// Server commands; their effects are applied to the mirror in fin.
 	var fin []func(tx pgx.Tx) error
 	touched := map[int64]bool{}
