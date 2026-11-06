@@ -53,6 +53,37 @@ Version: `GET /meta` reports `internal/version.Version`, set at link time. `make
 Docker: `docker build --target prod -t silo-server .` (or `--target dev` for
 hot reload with air; mount the repo at `/src`).
 
+## Features (Faza 4)
+
+What phase 4 of the plan added; the details are in the sections linked.
+
+- **Search** (`GET /threads?q=`, Gmail syntax parsed on the server, suggestions and
+  history, `indexing`/`approximate`): bullet "Search" in [Configuration](#configuration).
+- **Snooze** (`POST/DELETE /threads/{id}/snooze`, `GET /snooze/presets`, folder of role
+  `snoozed`, job `snooze_wake`): bullet "Snooze" in [Configuration](#configuration).
+- **Schedule send** (`sendAt`, list `SCHEDULED`, `scheduledAt`/`outboundId` on threads):
+  bullet "Schedule send" in [Configuration](#configuration).
+- **Filters** (`/filters` CRUD, `filter_eval` on ingest, `POST /filters/{id}/apply`):
+  bullet "Filters" in [Configuration](#configuration).
+- **Settings** (`GET/PATCH /settings`, `settings.updated`): bullet "Settings" in
+  [Configuration](#configuration).
+- **Compose media** (inline `cid:` uploads, thumbnails, reply/forward with the quoted
+  HTML and the original attachments, `Draft.warnings`): bullet "Compose media" in
+  [Configuration](#configuration).
+- **Labels as IMAP keywords** (`keywordState` `mirrored|local_only|partial`,
+  `localOnlyFolders`, the maildir limit `SILO_SYNC_KEYWORD_FOLDER_LIMIT`, `PATCH
+  /labels/{id}` with `name`/`parentId`/colours): [Labels and IMAP keywords](#labels-and-imap-keywords).
+  `parentId` moves a user label under another user label of the account (`null`: top
+  level; itself, a descendant or anything else is `422 invalid_parent`); the name and
+  the keyword stay, since the keyword is the slug of the leaf name only (`labels.name`
+  holds no path; renaming assigns a new keyword from the new leaf name).
+- **Cache rebuild** (`POST /accounts/{id}/resync {mode: rebuild}`, `silo-server
+  rebuild-cache`): [Cache rebuild](#cache-rebuild).
+- New migrations and background jobs: [Migrations and background jobs](#migrations-and-background-jobs).
+
+Not done in Faza 4: PDF thumbnails (no cgo-free renderer: `415 thumbnail_unsupported`),
+bounce/DSN handling.
+
 ## Configuration
 
 All settings are `SILO_*` environment variables; the full table (names,
@@ -358,6 +389,32 @@ events follow.
   Postgres (testcontainers). They are skipped with `-short` or when Docker is
   unavailable; set `SILO_REQUIRE_DOCKER=true` to make that a failure (CI does).
   `make test` uses `-race`, which needs a C compiler.
+
+### Migrations and background jobs
+
+Migrations of Faza 4 (all additive: new columns, tables and indexes):
+
+| Migration | Adds |
+|---|---|
+| `000006_search_index` | `messages.search_ver` (tokenizer version) and partial indexes for search; `search_tsv` is rebuilt by the application tokenizer — rows below the current version are re-indexed **in the background at start-up** (`mail.ReindexSearch`, batches of 500), so search over older mail is incomplete until it finishes |
+| `000007_filters` | `filters.name`, `enabled`, `updated_at` and an index per user |
+| `000008_thumbnails` | table `thumbnails` (cache of attachment thumbnails per source blob and size) |
+| `000009_label_folders_rebuild` | `label_folder_state` (per-folder keyword state, `keywordState: partial`) and `account_rebuilds` (cache rebuild of an account) |
+
+General jobs (table `jobs`, run by the worker of `serve`; per-account sync work and the
+cache rebuild run in the sync engine):
+
+| Job | Queued by | Does |
+|---|---|---|
+| `imap_op` | label/move/flag operations, folders, drafts | writes changes back to the mail server (after the undo window for folder moves) |
+| `send` | `POST /drafts/{id}/send` | SMTP send at `sendAt` (undo-send window or schedule), then Sent append |
+| `blob_gc` | hourly | drafts GC, unreferenced blobs and thumbnails, interrupted sends, old operations |
+| `snooze_wake` | every 30 s and ingest | wakes due snoozes, drops snoozes taken out of Snoozed elsewhere |
+| `filter_eval` | ingest (new INBOX mail of accounts with filters) | runs the enabled filters on new messages |
+| `filter_apply` | `POST /filters/{id}/apply` | applies a filter to existing mail, then `filter.applied` |
+
+The search re-index (`search_ver`) is not a job: `serve` runs it once in the
+background at start-up until no row has an older tokenizer version.
 
 ### IMAP integration tests
 
