@@ -230,6 +230,7 @@ func serve(ctx context.Context, args []string) error {
 				Filters:            filterSvc,
 				Events:             hub,
 				Admin:              admin.New(pool, authSvc),
+				Discovery:          discoveryOptions(cfg, logger),
 				PublicURL:          cfg.PublicURL,
 				Logger:             logger,
 			},

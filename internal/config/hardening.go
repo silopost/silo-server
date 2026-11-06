@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"net/netip"
+	"net/url"
 	"strings"
 
 	"github.com/silopost/silo-server/internal/ratelimit"
@@ -74,5 +75,10 @@ func (c Config) validateHardening(errs *[]error) {
 	}
 	if _, err := c.AuthRateLimit(); err != nil {
 		*errs = append(*errs, err)
+	}
+	if v := strings.TrimSpace(c.AutoconfigISPDBURL); v != "" && v != "off" {
+		if u, err := url.Parse(v); err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" {
+			*errs = append(*errs, fmt.Errorf("SILO_AUTOCONFIG_ISPDB_URL must be an http(s) URL or off, got %q", v))
+		}
 	}
 }

@@ -197,8 +197,18 @@ func TestHardeningSettings(t *testing.T) {
 		t.Fatalf("defaults: api=%+v auth=%+v %v %v", api, auth, err1, err2)
 	}
 	var errs []error
-	Config{TrustedProxies: []string{"proxy.local"}, RateLimitAPI: "lots", RateLimitAuth: "5/x"}.validateHardening(&errs)
-	if len(errs) != 3 {
+	Config{TrustedProxies: []string{"proxy.local"}, RateLimitAPI: "lots", RateLimitAuth: "5/x", AutoconfigISPDBURL: "ftp://x"}.validateHardening(&errs)
+	if len(errs) != 4 {
 		t.Fatalf("errors = %v", errs)
+	}
+}
+
+func TestAutoconfigISPDBURL(t *testing.T) {
+	for v, ok := range map[string]bool{"": true, "off": true, "https://ispdb.example/v1.1/": true, "http://10.0.0.2:8080/": true, "ispdb.example": false, "ftp://x/": false} {
+		var errs []error
+		Config{AutoconfigISPDBURL: v}.validateHardening(&errs)
+		if (len(errs) == 0) != ok {
+			t.Errorf("SILO_AUTOCONFIG_ISPDB_URL=%q: errors %v", v, errs)
+		}
 	}
 }

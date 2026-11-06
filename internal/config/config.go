@@ -67,6 +67,9 @@ type Config struct {
 	CustomServerAllowlist  []string `env:"SILO_CUSTOM_SERVER_ALLOWLIST" envSeparator:","`
 	AllowInsecureTransport bool     `env:"SILO_ALLOW_INSECURE_TRANSPORT"`
 	MaxAccountsPerUser     int      `env:"SILO_MAX_ACCOUNTS_PER_USER" envDefault:"5"`
+	// AutoconfigISPDBURL is the ISPDB base URL of account autoconfiguration
+	// (POST /accounts/discover); empty: the Thunderbird ISPDB, "off": none.
+	AutoconfigISPDBURL string `env:"SILO_AUTOCONFIG_ISPDB_URL"`
 
 	MirrorMaxMessageBytes ByteSize `env:"SILO_MIRROR_MAX_MESSAGE_BYTES" envDefault:"50MB"`
 	MirrorQuotaPerAccount ByteSize `env:"SILO_MIRROR_QUOTA_PER_ACCOUNT" envDefault:"0"`

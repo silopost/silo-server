@@ -608,6 +608,152 @@ components:
         - name
         - type
       type: object
+    DiscoverRequest:
+      additionalProperties: false
+      properties:
+        email:
+          description: Address of the account to configure.
+          maxLength: 254
+          type: string
+      required:
+        - email
+      type: object
+    DiscoveredParams:
+      additionalProperties: false
+      properties:
+        email:
+          type: string
+        imapHost:
+          type: string
+        imapPort:
+          format: int64
+          type: integer
+        imapTls:
+          enum:
+            - implicit
+            - starttls
+            - none
+          type: string
+        smtpHost:
+          type: string
+        smtpPort:
+          format: int64
+          type: integer
+        smtpTls:
+          enum:
+            - implicit
+            - starttls
+            - none
+          type: string
+        username:
+          type: string
+      required:
+        - email
+        - username
+      type: object
+    DiscoveredServer:
+      additionalProperties: false
+      properties:
+        host:
+          type: string
+        port:
+          format: int64
+          maximum: 65535
+          minimum: 1
+          type: integer
+        tls:
+          description: none only for the default servers of the instance (source default); discovery never returns an unencrypted server.
+          enum:
+            - implicit
+            - starttls
+            - none
+          type: string
+      required:
+        - host
+        - port
+        - tls
+      type:
+        - object
+        - "null"
+    Discovery:
+      additionalProperties: false
+      properties:
+        displayName:
+          description: Name of the mail provider, when the source gives one.
+          type: string
+        domain:
+          type: string
+        email:
+          type: string
+        imap:
+          $ref: "#/components/schemas/DiscoveredServer"
+          description: Null when no source found an IMAP server.
+        loginFormat:
+          enum:
+            - email
+            - localpart
+          type: string
+        params:
+          $ref: "#/components/schemas/DiscoveredParams"
+          description: The same settings as ConnectionParams fields.
+        provider:
+          description: gmail and microsoft are the providers with OAuth2 and provider-specific sync.
+          enum:
+            - generic
+            - gmail
+            - microsoft
+          type: string
+        smtp:
+          $ref: "#/components/schemas/DiscoveredServer"
+          description: Null when no source found an SMTP server.
+        source:
+          description: "ispdb, autoconfig, srv, guess or default: the source of the IMAP server (else of the SMTP server); null when nothing was found."
+          type:
+            - string
+            - "null"
+        sources:
+          description: Every source consulted, in order of preference.
+          items:
+            $ref: "#/components/schemas/DiscoverySource"
+          type:
+            - array
+            - "null"
+        username:
+          description: Login name to use (the address or its local part).
+          type: string
+      required:
+        - email
+        - domain
+        - imap
+        - smtp
+        - username
+        - loginFormat
+        - source
+        - sources
+        - provider
+        - params
+      type: object
+    DiscoverySource:
+      additionalProperties: false
+      properties:
+        detail:
+          description: What was found, or why the source gave nothing (for people, not for parsing).
+          type: string
+        ok:
+          type: boolean
+        source:
+          enum:
+            - ispdb
+            - autoconfig
+            - srv
+            - guess
+            - default
+          type: string
+      required:
+        - source
+        - ok
+        - detail
+      type: object
     Draft:
       additionalProperties: false
       properties:
@@ -2539,6 +2685,66 @@ paths:
           csrfHeader: []
         - bearerAuth: []
       summary: Add an account
+      tags:
+        - accounts
+  /accounts/discover:
+    post:
+      description: "Looks the address up in the Thunderbird ISPDB, the autoconfig file of its domain (autoconfig.<domain>, /.well-known/autoconfig), its SRV records (RFC 6186) and, last, the usual host names checked by a TLS handshake (no login), within 8 s. The response is 200 even when nothing is found (`imap` and `smtp` null, reasons in `sources`). `params` plus a password is a ConnectionParams body for POST /accounts/test. When the instance only allows its default servers (SILO_ALLOW_CUSTOM_SERVERS=false in mode imap) it answers with them at once (`source: default`) without contacting anything. Limited per user (10 per minute): 429 rate_limited."
+      operationId: discoverAccount
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DiscoverRequest"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Discovery"
+          description: OK
+        "400":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Bad Request
+        "401":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Unauthorized
+        "403":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Forbidden
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Unprocessable Entity
+        "429":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Too Many Requests
+        "500":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Internal Server Error
+      security:
+        - cookieAuth: []
+          csrfHeader: []
+        - bearerAuth: []
+      summary: Find the server settings of an address
       tags:
         - accounts
   /accounts/test:

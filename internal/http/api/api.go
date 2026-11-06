@@ -64,6 +64,8 @@ type Options struct {
 	Events *events.Hub
 	// Admin backs the /admin endpoints.
 	Admin *admin.Service
+	// Discovery configures POST /accounts/discover.
+	Discovery DiscoveryOptions
 	// SSEHeartbeat is the interval of the ": ping" comment on /events (25 s when 0).
 	SSEHeartbeat time.Duration
 	// PublicURL (SILO_PUBLIC_URL) is the origin browsers use; it feeds the Origin
@@ -137,6 +139,7 @@ func Mount(root chi.Router, o Options) huma.API {
 		registerMeta(a, o)
 		d.registerSession(a)
 		d.registerAccounts(a)
+		d.registerDiscover(a, o)
 		d.registerSync(a)
 		d.registerThreads(a)
 		d.registerSnooze(a)
