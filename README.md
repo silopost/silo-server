@@ -87,6 +87,67 @@ What phase 4 of the plan added; the details are in the sections linked.
 Not done in Faza 4: PDF thumbnails (no cgo-free renderer: `415 thumbnail_unsupported`),
 bounce/DSN handling.
 
+## Features (Faza 5)
+
+What phase 5 of the plan added; the details are in the sections linked.
+
+- **Several accounts per user, isolated users** (`SILO_MAX_ACCOUNTS_PER_USER`, default 5;
+  over it `409 account_limit_reached`): [Multiple accounts](#multiple-accounts).
+- **Mode `local`, TOTP, admin panel, `user` command** (`SILO_AUTH_MODE=local`, `POST
+  /session/password`, `/totp/*`, `/admin/users|accounts|jobs`): [Users, mode `local` and
+  the admin panel](#users-mode-local-and-the-admin-panel).
+- **Sessions**: `GET /sessions`, `DELETE /sessions/{id}` and `DELETE /sessions?others=true`
+  (sign out everywhere else, `204`); a stream of a session that ends gets
+  `session.expired`: bullet "Events" in [Configuration](#configuration).
+- **Backup and import of metadata** (`export-metadata`, `import-metadata [--merge]`,
+  format `silo-metadata` v1, job `metadata_restore`): [Backup and restore](#backup-and-restore).
+- **S3Store** (`SILO_BLOB_BACKEND=s3`, `SILO_BLOB_S3_*`): [S3Store](#s3store).
+- **Hardening**: trusted proxies and client IP, rate limits (`429 rate_limited`,
+  `Retry-After`), at most 8 event streams per user (`stream.limit`), security headers and
+  CSP, the security log for fail2ban, anti-SSRF dialing (`internal/netx`): [Hardening](#hardening).
+- **Account autoconfiguration** (`POST /accounts/discover`: ISPDB, autoconfig, SRV,
+  guesses): [Account autoconfiguration](#account-autoconfiguration).
+- **OAuth2 accounts** (Google, Microsoft 365; XOAUTH2 for IMAP and SMTP, `authType`,
+  re-authorization after `auth_failed`) and **Gmail in generic mode** (`\All`, archive as
+  expunge from INBOX): [OAuth2](#oauth2-gmail-microsoft-365).
+- **Upgrade test** (`scripts/upgrade-test.sh`, previous release -> working tree on the
+  same database): [Upgrades](#upgrades).
+- **Large mailboxes**: `TestInitialSync` with `SILO_SYNC_TEST_MESSAGES=200000` reports
+  the memory of the initial sync: [IMAP integration tests](#imap-integration-tests).
+- New migrations (`000050`-`000052`) and the job `metadata_restore`:
+  [Migrations and background jobs](#migrations-and-background-jobs).
+
+### Deferred to 1.1
+
+- **`provider=gmail` mode** (`X-GM-LABELS`, `X-GM-MSGID`, `X-GM-THRID`): Gmail accounts
+  sync in generic mode (folders, `\All` with dedup); Gmail labels are not mapped to Silo
+  labels and threads come from Silo's own threading. No test account and no X-GM
+  simulator (Dovecot does not offer `X-GM-EXT-1`).
+- **ManageSieve**: filters run in Silo only (on new INBOX mail while Silo runs); they are
+  not exported to the mail server as Sieve scripts.
+- **OAuth2 for native clients**: the sign-in is bound to the browser that started it by
+  the `silo_oauth_state` cookie (protection against login CSRF), so a bearer client that
+  opens an external browser gets `oauth_state_invalid`; it needs a variant with the
+  app's redirect URI (silo-mobile, Faza 6).
+
+## Multiple accounts
+
+A user has up to `SILO_MAX_ACCOUNTS_PER_USER` mail accounts (default 5; `POST
+/accounts` over it, or an OAuth2 sign-in adding one, is `409 account_limit_reached`).
+Accounts are ordered by `position`; `settings.activeAccountId` (`PATCH /settings`) is
+the account the client opens (unset: the first one). Every list, label, count and event
+names its account: `label.counts`, `thread.updated` and `account.*` carry `accountId`.
+
+- **From**: `PUT /drafts/{id}` with `accountId` sends a new message from another account
+  of the user. The draft moves there as a new draft (new `id`, `messageId` and
+  `threadId`, `draft.updated` with `previousDraftId`; the copy in the old account's
+  Drafts is deleted); a reply or forward stays with its account (`409
+  draft_account_locked`).
+- **Isolation**: ids of another user's objects in a path answer `404` exactly like ids
+  that do not exist; in a body (`addLabelIds`, `parentId`, attachments, folders) they
+  are `400`/`422` like unknown ids; events and polls only ever carry the user's own
+  data. `internal/http/api` `TestUserIsolation` checks every endpoint both ways.
+
 ## Configuration
 
 All settings are `SILO_*` environment variables; the full table (names,
@@ -264,7 +325,7 @@ accept `50MB` style values, rates `5MB/s`, durations `5m`. Worth knowing:
   for its own permission); other bad values are `422 invalid_setting`. The answer carries
   `updatedAt` (`users.settings.updated_at`); other sessions get `settings.updated
   {updatedAt}` and reload.
-- Sessions and accounts (`internal/auth`, `internal/accounts`): `POST/GET/DELETE /session`, `GET /sessions`, `DELETE /sessions/{id}`, `GET/POST /accounts`, `POST /accounts/test`, `GET/PATCH/DELETE /accounts/{id}`, `GET /accounts/{id}/folders`, `POST /accounts/{id}/resync`, `GET /accounts/{id}/sync-status`, `GET /meta`. Accounts carry `position` and are listed in that order (`GET /session`, `GET /accounts`). Migration `000005` turns `sent_append` on for generic accounts created before sending existed. The full list is `api/openapi.yaml`.
+- Sessions and accounts (`internal/auth`, `internal/accounts`): `POST/GET/DELETE /session`, `GET /sessions`, `DELETE /sessions/{id}`, `DELETE /sessions?others=true` (every session but the current one), `GET/POST /accounts`, `POST /accounts/test`, `GET/PATCH/DELETE /accounts/{id}`, `GET /accounts/{id}/folders`, `POST /accounts/{id}/resync`, `GET /accounts/{id}/sync-status`, `GET /meta`. Accounts carry `position` and are listed in that order (`GET /session`, `GET /accounts`). Migration `000005` turns `sent_append` on for generic accounts created before sending existed. The full list is `api/openapi.yaml`.
 - Reading the mailbox (`internal/mailview`): `GET /labels` (counters, pseudo label
   `UNREAD`), `POST /labels` (user label with an IMAP keyword, or a folder: `CREATE`
   queued as an `imap_op` job), `PATCH`/`DELETE /labels/{id}` (a rename moves the
@@ -431,16 +492,18 @@ client behind a shared NAT may hit the API limit legitimately.
 `scripts/upgrade-test.sh` checks the upgrade path end to end with Docker:
 the previous release (`PREVIOUS_TAG`, default the last `v*` tag on `main`) is
 built from `git archive`, migrated, started against Postgres 17 and Dovecot,
-seeded through the API (sign-in, three messages, a user label on a thread);
+seeded through the API (sign-in, four messages, a user label on a thread and,
+from `v0.4.0` on, a filter and a thread snoozed for an hour);
 then the image of the working tree migrates the same database (the schema
 version must grow), starts, signs the same user in, must list the same INBOX
-with the label, report its own version in `/meta` and pass `reconcile`.
+with the label, still list the snoozed thread under `SNOOZED` with the same wake
+time, still have the filter, report its own version in `/meta` and pass `reconcile`.
 Containers, volume, network and images are named `silo-upg-*` and removed at
 the end (`KEEP=1` keeps them). It runs in CI as `.github/workflows/upgrade.yml`
 (also by hand with a `previous_tag` input).
 
 ```sh
-PREVIOUS_TAG=v0.3.0 scripts/upgrade-test.sh
+PREVIOUS_TAG=v0.4.0 scripts/upgrade-test.sh
 ```
 
 ## Labels and IMAP keywords
@@ -739,7 +802,7 @@ Endpoints for users with `is_admin` (others get `403 forbidden`), in both modes:
 | `PATCH /admin/users/{id} {disabled?, isAdmin?, displayName?, password?}` | disabling signs the user out and sets their accounts to `disabled` (sync stops); enabling reconnects them; `password` only in mode `local` |
 | `POST /admin/users/{id}/totp/reset` | turns the user's TOTP off (lost device) |
 | `DELETE /admin/users/{id}` | removes the user and everything Silo keeps for them (mail servers untouched) |
-| `GET /admin/accounts` | every account with state, error, `pendingOps` and `deadOps` |
+| `GET /admin/accounts` | every account with `authType`, state, error, `pendingOps` and `deadOps` |
 | `GET /admin/jobs?status=dead\|pending&accountId=` | newest 200 jobs, without payloads |
 | `POST /admin/jobs/{id}/retry` | a dead job runs again (attempts reset) |
 | `DELETE /admin/jobs/{id}` | discards a job that is not running |
@@ -868,8 +931,9 @@ background at start-up until no row has an older tokenizer version.
 
 `internal/imapx` and the future sync engine are tested against a real Dovecot
 (`dovecot/dovecot:2.4.5`, pinned) started per test by `internal/testutil/imaptest`
-(`imaptest.Start(t, profile)` returns address, user and password; plaintext IMAP,
-account `silo`). Profiles select what the server advertises:
+(`imaptest.Start(t, profile)` returns address, user and password, `StartServer` also
+gives access to the container; plaintext IMAP, account `silo`). Profiles select what
+the server advertises:
 
 | Profile | Advertises | Used for |
 |---|---|---|
@@ -878,6 +942,23 @@ account `silo`). Profiles select what the server advertises:
 | `no-move` | everything except `MOVE UIDPLUS` (and `IMAP4rev2`) | COPY + STORE + EXPUNGE fallback |
 | `gmail-like` | Dovecot defaults, Gmail's folders (`[Gmail]/All Mail` = `\All`, ...) | Gmail in generic mode (`internal/sync`) |
 | `oauth2` | Dovecot defaults plus `AUTH=XOAUTH2`; tokens checked at the fake provider of `testutil/oauthtest` (`imaptest.StartOAuth2`) | XOAUTH2 (`internal/imapx`, `internal/http/api`) |
+
+Large mailbox (DoD of Faza 5: 200k messages, RAM < 512 MB): `TestInitialSync` takes
+its size from `SILO_SYNC_TEST_MESSAGES` (default 2000) and samples the memory of the
+test process every 2 s while the initial sync runs (Go `Sys`/`HeapInuse` and the
+resident set: `GetProcessMemoryInfo` on Windows, `/proc/self/status` on Linux).
+`SILO_SYNC_TEST_REPORT=<file>` writes the peaks, timings and the count of WARN/ERROR
+log records as JSON; `SILO_SYNC_TEST_PPROF=<file>` keeps a heap profile at the
+`HeapInuse` peak. The process also holds the test's IMAP client and Postgres pool, so
+its RSS is an upper bound for `silo-server` (Dovecot and Postgres run in containers).
+Above 20000 messages the mailbox is written as Maildir files into the container
+(`imaptest.StartServer`, `CopyTar`) instead of `APPEND`, which slows down with the
+size of a Maildir folder.
+
+```sh
+SILO_SYNC_TEST_MESSAGES=200000 SILO_SYNC_TEST_REPORT=report.json SILO_REQUIRE_DOCKER=true \
+  go test ./internal/sync -run '^TestInitialSync$' -count=1 -v -timeout 3h
+```
 
 Config files and Dovecot 2.4 notes: `internal/testutil/imaptest/testdata/imap/README.md`.
 Same rules as Postgres tests: skipped with `-short` or without Docker, a failure
