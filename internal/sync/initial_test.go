@@ -45,8 +45,18 @@ func TestInitialSync(t *testing.T) {
 	n := initialSize()
 	rep := syncReport{Messages: n, GOOS: runtime.GOOS,
 		Note: "RSS of the go test process (sync worker + test IMAP client + pgx pool); Dovecot and Postgres run in containers"}
+	var warns, errs atomic.Int64
+	var mem *memSampler
+	fill := func() {
+		if mem != nil {
+			mem.finish()
+			rep.MaxRSSBytes, rep.PeakRSSBytes, rep.MaxSysBytes, rep.MaxHeapInuseBytes, rep.Samples = mem.maxRSS, mem.peakRSS, mem.maxSys, mem.maxHeapInuse, mem.samples
+		}
+		rep.LogErrors, rep.LogWarnings = errs.Load(), warns.Load()
+	}
 	if path := os.Getenv("SILO_SYNC_TEST_REPORT"); path != "" {
-		t.Cleanup(func() { rep.TestFailed = t.Failed(); writeSyncReport(t, path, rep) })
+		// Written also when the test fails (a timeout keeps the peaks so far).
+		t.Cleanup(func() { fill(); rep.TestFailed = t.Failed(); writeSyncReport(t, path, rep) })
 	}
 	t0 := time.Now()
 	how := "IMAP APPEND"
@@ -61,7 +71,6 @@ func TestInitialSync(t *testing.T) {
 	t.Logf("populated %d messages (%s) in %s", n, how, time.Since(t0).Round(time.Millisecond))
 
 	a := mb.account(mb.pass)
-	var warns, errs atomic.Int64
 	a.deps.Logger = slog.New(countingHandler{a.deps.Logger.Handler(), &warns, &errs})
 	var batches stdsync.Map
 	a.deps.Hooks.AfterBatch = func(phase string, k int) {
@@ -70,9 +79,9 @@ func TestInitialSync(t *testing.T) {
 	}
 	// The default timeouts fit the 2000-message run; large runs scale them.
 	liveTimeout := max(2*time.Minute, time.Duration(n)*3*time.Millisecond)
-	doneTimeout := max(5*time.Minute, time.Duration(n)*30*time.Millisecond)
+	doneTimeout := max(5*time.Minute, time.Duration(n)*45*time.Millisecond)
 	debug.FreeOSMemory() // measure the sync, not what populating left behind
-	mem := startMemSampler(2*time.Second, os.Getenv("SILO_SYNC_TEST_PPROF"))
+	mem = startMemSampler(2*time.Second, os.Getenv("SILO_SYNC_TEST_PPROF"))
 	defer mem.finish()
 	t1 := time.Now()
 	a.start()
@@ -97,8 +106,7 @@ WHERE t.account_id = $1 AND l.system_key = 'INBOX'`, a.id) == 0 {
 	complete := time.Since(t1)
 	mem.finish()
 	rep.InitialSeconds = complete.Seconds()
-	rep.MaxRSSBytes, rep.PeakRSSBytes, rep.MaxSysBytes, rep.MaxHeapInuseBytes, rep.Samples = mem.maxRSS, mem.peakRSS, mem.maxSys, mem.maxHeapInuse, mem.samples
-	rep.LogErrors, rep.LogWarnings = errs.Load(), warns.Load()
+	fill()
 	t.Logf("initial sync of %d messages: live after %s, complete after %s", n, live.Round(time.Millisecond), complete.Round(time.Millisecond))
 	t.Logf("memory during sync (%d samples): max RSS %d MiB (OS peak %d MiB, measured=%v), max Go Sys %d MiB, max HeapInuse %d MiB; worker log: %d errors, %d warnings",
 		mem.samples, mem.maxRSS>>20, mem.peakRSS>>20, mem.rssOK, mem.maxSys>>20, mem.maxHeapInuse>>20, rep.LogErrors, rep.LogWarnings)
