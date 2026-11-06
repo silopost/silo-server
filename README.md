@@ -330,6 +330,8 @@ accept `50MB` style values, rates `5MB/s`, durations `5m`. Worth knowing:
   The check is repeated on the address actually dialled (IMAP, SMTP, connection test):
   a host that resolves to an internal address later (DNS rebinding) is not contacted.
   In `SILO_AUTH_MODE=local` custom servers are always allowed (see below).
+- Account autoconfiguration (`POST /accounts/discover`): `SILO_AUTOCONFIG_ISPDB_URL`
+  (ISPDB base URL, `off` to disable); see [Account autoconfiguration](#account-autoconfiguration).
 - Logging: `SILO_LOG_FORMAT` (`json`/`text`), `SILO_LOG_LEVEL`; listen address: `SILO_HTTP_ADDR`.
 - Reverse proxy, rate limits, headers: `SILO_TRUSTED_PROXIES`, `SILO_RATE_LIMIT_API`,
   `SILO_RATE_LIMIT_AUTH`, `SILO_HSTS`; see [Hardening](#hardening).
@@ -491,6 +493,54 @@ events follow.
 - Refused with `409 rebuild_blocked` while a message is queued or being sent
   (`outbound`) or operations wait for write-back (`imap_op` jobs); try again when
   `sync-status.pendingOps` is 0.
+
+## Account autoconfiguration
+
+`POST /api/v1/accounts/discover {"email": "..."}` (signed in) suggests the IMAP
+and SMTP settings of an address before an account is added. The answer has
+`imap` / `smtp` (`host`, `port`, `tls`: `implicit` or `starttls`, never `none`),
+`username` with `loginFormat` (`email` / `localpart`), `provider`
+(`generic`, `gmail`, `microsoft`), the winning `source` and every source tried
+in `sources` with `ok` and a reason. `params` holds the same settings under the
+field names of `POST /accounts/test`: add `password` and send it. Nothing found
+is still `200`, with `imap`, `smtp` and `source` null.
+
+Sources, ranked in this order:
+
+1. the Thunderbird ISPDB, `GET <SILO_AUTOCONFIG_ISPDB_URL><domain>`
+   (default `https://autoconfig.thunderbird.net/v1.1/`; `off` disables it);
+2. the domain's own autoconfig file:
+   `https://autoconfig.<domain>/mail/config-v1.1.xml?emailaddress=<email>`, then
+   `https://<domain>/.well-known/autoconfig/mail/config-v1.1.xml`;
+3. DNS SRV records (RFC 6186): `_imaps._tcp` (implicit TLS), `_imap._tcp`
+   (STARTTLS), `_submissions._tcp` (implicit), `_submission._tcp` (STARTTLS);
+   lowest priority, then highest weight; a `.` target is skipped;
+4. guesses, only for a protocol still missing: `imap.<domain>:993`,
+   `mail.<domain>:993`, `mail.<domain>:143` (STARTTLS); `smtp.<domain>:587`,
+   `mail.<domain>:587` (STARTTLS), `smtp.<domain>:465`. A guess counts only after a
+   TLS handshake with a certificate valid for the name; Silo never logs in.
+
+Sources 1 to 3 run in parallel with 3 s each; the first one (in rank order) that
+has both servers cancels the worse ones. Guesses get another 3 s, the whole call
+at most 8 s. In the autoconfig format POP3 servers, `socketType` `plain` and
+servers without a password or OAuth2 method are skipped (with the reason in
+`sources`); OAuth2 is noted there for the OAuth2 work of phase 5.
+
+With `SILO_ALLOW_CUSTOM_SERVERS=false` in mode `imap` users can only add the
+default servers, so the endpoint contacts nothing and answers at once with
+`SILO_DEFAULT_*` (`source: "default"`, username after
+`SILO_DEFAULT_LOGIN_FORMAT`). In mode `local` or with custom servers allowed it
+runs the full discovery. It is limited to 10 calls per minute and user (429
+`rate_limited`), on top of the per-IP API limit.
+
+Anti-SSRF: every request and handshake of the discovery, ISPDB included, goes
+through the same dialer as custom mail servers: the host is resolved by Silo and
+only public addresses (or entries of `SILO_CUSTOM_SERVER_ALLOWLIST`) are dialled,
+so `autoconfig.<domain>` pointing at an internal address is refused before any
+connection. Proxies from the environment are ignored, redirects are followed
+only to `https` on the same host or the ISPDB host (at most 3), and responses
+are cut at 256 kB. The discovered settings still go through `POST /accounts/test`
+and its checks before an account is saved.
 
 ## Users, mode `local` and the admin panel
 
