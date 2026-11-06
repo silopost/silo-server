@@ -186,3 +186,22 @@ func LockAccount(ctx context.Context, db DB, accountID int64) error {
 // EventLabelChanged is written when a label is created, renamed, recoloured
 // or deleted (plan 5.4): {accountId, labelId}.
 const EventLabelChanged = "label.changed"
+
+// WriteAccountLabelCounts writes one label.counts event with every label of
+// an account, in the caller's transaction. The sync engine calls it when an
+// account goes live and when its initial sync completes, so that clients
+// get the counters of a new account without refetching the labels.
+func WriteAccountLabelCounts(ctx context.Context, db DB, accountID int64) error {
+	var userID int64
+	var labels []int64
+	if err := db.QueryRow(ctx, `
+SELECT a.user_id, COALESCE((SELECT array_agg(l.id ORDER BY l.id) FROM labels l WHERE l.account_id = a.id), '{}')
+FROM accounts a WHERE a.id = $1`, accountID).Scan(&userID, &labels); err != nil {
+		return fmt.Errorf("mail: load labels of account %d: %w", accountID, err)
+	}
+	ev := &eventBuf{userID: userID}
+	if err := ev.emitThreadEvents(ctx, db, accountID, nil, labels); err != nil {
+		return err
+	}
+	return ev.flush(ctx, db)
+}

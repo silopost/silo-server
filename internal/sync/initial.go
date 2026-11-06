@@ -443,6 +443,9 @@ WHERE f.id = c.folder_id AND f.account_id = $1 AND c.phase = 'bodies'`, s.acc.id
 		if done.RowsAffected() > 0 {
 			s.acc.initialDone = true
 			s.log.Info("initial sync complete")
+			if err := mail.WriteAccountLabelCounts(ctx, tx, s.acc.id); err != nil {
+				return err
+			}
 		}
 		if tag.RowsAffected() > 0 || done.RowsAffected() > 0 {
 			return s.progress(ctx, tx, true)

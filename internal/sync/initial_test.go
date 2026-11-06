@@ -172,3 +172,35 @@ func TestRestartDuringInitialSync(t *testing.T) {
 		}
 	}
 }
+
+// TestLabelCountsAtLive: going live and completing the initial sync each
+// write one label.counts event with every label of the account (the
+// counters of a newly added account reach clients without a refetch).
+func TestLabelCountsAtLive(t *testing.T) {
+	mb := newMailbox(t, imaptest.Full)
+	mb.populate(spec{"INBOX", 40}, spec{"Sent", 10})
+	a := mb.account(mb.pass)
+	a.start()
+	a.waitInitialDone(2 * time.Minute)
+
+	labels := a.int(`SELECT count(*) FROM labels WHERE account_id = $1`, a.id)
+	inboxTotal := a.int(`SELECT count(*) FROM thread_labels tl JOIN labels l ON l.id = tl.label_id
+WHERE l.account_id = $1 AND l.system_key = 'INBOX' AND NOT tl.hidden`, a.id)
+	live := a.int(`SELECT max(seq) FROM events WHERE user_id = $1 AND type = 'account.status' AND payload->>'state' = 'live'`, a.userID)
+	full := `FROM events WHERE user_id = $1 AND type = 'label.counts' AND (payload->>'accountId')::bigint = $2
+AND jsonb_array_length(payload->'labels') = $3`
+	// The first full event after live (the live one) and the last full event
+	// (the completion one): each with every label.
+	if n := a.int(`SELECT count(*) `+full+` AND seq > $4`, a.userID, a.id, labels, live); n < 2 {
+		t.Fatalf("%d label.counts events with all %d labels after live, want >= 2", n, labels)
+	}
+	var total int
+	must(t, testPool.QueryRow(context.Background(), `
+SELECT (x.v->>'threadsTotal')::int FROM (SELECT payload `+full+` ORDER BY seq DESC LIMIT 1) e,
+     jsonb_array_elements(e.payload->'labels') x(v)
+WHERE (x.v->>'id')::bigint = (SELECT id FROM labels WHERE account_id = $2 AND system_key = 'INBOX')`,
+		a.userID, a.id, labels).Scan(&total))
+	if total != inboxTotal || total == 0 {
+		t.Errorf("last label.counts: INBOX threadsTotal %d, want %d", total, inboxTotal)
+	}
+}

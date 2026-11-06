@@ -163,6 +163,13 @@ func (s *session) goLive(ctx context.Context) error {
 	if err := s.w.setState(ctx, StateLive, "", ""); err != nil {
 		return err
 	}
+	// The counters of every label after account.status live: a client that
+	// just added the account (or waited out a reconnect) needs no refetch.
+	if err := s.tx(ctx, func(tx pgx.Tx) error {
+		return mail.WriteAccountLabelCounts(ctx, tx, s.acc.id)
+	}); err != nil {
+		return err
+	}
 	s.startIdle(ctx)
 	s.startOps(ctx)
 	s.w.request(func(p *pending) { p.all = true })
