@@ -106,6 +106,9 @@ type Config struct {
 	RateLimitAPI   string   `env:"SILO_RATE_LIMIT_API" envDefault:"600/m"`
 	RateLimitAuth  string   `env:"SILO_RATE_LIMIT_AUTH" envDefault:"20/m"`
 	HSTS           bool     `env:"SILO_HSTS" envDefault:"true"`
+
+	// OAuth2 applications for XOAUTH2 accounts (oauth.go).
+	OAuth OAuthConfig
 }
 
 // Load parses the process environment, applies derived defaults and checks the
@@ -205,6 +208,7 @@ func (c Config) ValidateServe() error {
 	}
 
 	c.validateHardening(&errs)
+	c.OAuth.validate(&errs)
 	if c.WorkerConcurrency < 1 {
 		add("SILO_WORKER_CONCURRENCY must be >= 1")
 	}

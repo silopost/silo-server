@@ -260,6 +260,17 @@ type MetadataRestore struct {
 	LastError pgtype.Text
 }
 
+type OauthState struct {
+	State        string
+	UserID       int64
+	Provider     string
+	CodeVerifier string
+	AccountID    pgtype.Int8
+	ReturnTo     string
+	CreatedAt    pgtype.Timestamptz
+	ExpiresAt    pgtype.Timestamptz
+}
+
 type OpMessage struct {
 	JobID          int64
 	MessageID      int64

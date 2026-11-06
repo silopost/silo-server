@@ -10,15 +10,15 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// latestVersion is the number of the newest migration (000051_metadata_restores; phase 4 has 000006..000009).
-const latestVersion = 51
+// latestVersion is the number of the newest migration (000052_oauth; phase 4 has 000006..000009).
+const latestVersion = 52
 
 // appTables is every table created by the migrations (schema_migrations excluded).
 var appTables = []string{
 	"account_rebuilds", "accounts", "attachments", "blobs", "contacts", "drafts", "events", "filters",
 	"jobs", "label_folder_state", "labels", "mailbox_folders", "message_labels", "message_locations",
-	"message_references", "messages", "metadata_restores", "op_messages", "operations", "outbound", "search_history", "sessions",
-	"snooze_items", "snoozes", "sync_cursors", "thread_labels", "threads", "thumbnails", "users",
+	"message_references", "messages", "metadata_restores", "oauth_states", "op_messages", "operations", "outbound",
+	"search_history", "sessions", "snooze_items", "snoozes", "sync_cursors", "thread_labels", "threads", "thumbnails", "users",
 }
 
 func listStrings(t *testing.T, pool *pgxpool.Pool, query string) []string {

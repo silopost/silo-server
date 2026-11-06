@@ -18,6 +18,7 @@ require (
 	github.com/testcontainers/testcontainers-go/modules/postgres v0.44.0
 	golang.org/x/crypto v0.58.0
 	golang.org/x/image v0.47.0
+	golang.org/x/oauth2 v0.36.0
 	golang.org/x/text v0.43.0
 )
 
