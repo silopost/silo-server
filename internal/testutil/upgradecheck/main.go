@@ -5,11 +5,14 @@
 //	upgradecheck seed   -base URL -imap HOST:PORT -state FILE
 //	upgradecheck verify -base URL -state FILE [-expect-version V]
 //
-// seed appends three messages to the INBOX of the test mailbox, signs in
+// seed appends four messages to the INBOX of the test mailbox, signs in
 // (creating the user and account), waits for the sync to be live, creates a
-// user label, puts it on one thread and saves the normalised INBOX listing.
+// user label and puts it on one thread; when the release has the phase 4 API
+// (v0.4.0+) it also creates a filter and snoozes another thread for an hour.
+// It saves the normalised INBOX and SNOOZED listings and the filter.
 // verify signs in with the same password, waits for the sync, and compares the
-// INBOX listing (with the label) and the server version.
+// listings (with the label; the snoozed thread still SNOOZED), the filter and
+// the server version.
 package main
 
 import (
@@ -35,6 +38,7 @@ const (
 	user     = "silo"
 	password = "silopass"
 	domain   = "silo.test"
+	messages = 4 // one thread each; one is snoozed when the release has snooze
 )
 
 func main() {
@@ -73,17 +77,24 @@ type Snapshot struct {
 	ServerVersion string   `json:"serverVersion"`
 	LabelID       string   `json:"labelId"`
 	Inbox         []Thread `json:"inbox"`
+	// Phase 4 data, when the old release has filters and snooze (v0.4.0+).
+	FilterID       string   `json:"filterId,omitempty"`
+	FilterCriteria string   `json:"filterCriteria,omitempty"`
+	Snoozed        []Thread `json:"snoozed,omitempty"`
 }
 
 // Thread is the normalised part of a thread of the list: fields that must not
 // change across an upgrade.
 type Thread struct {
-	ID           string   `json:"id"`
-	Subject      string   `json:"subject"`
-	MessageCount int      `json:"messageCount"`
-	UnreadCount  int      `json:"unreadCount"`
-	LabelIDs     []string `json:"labelIds"`
+	ID           string     `json:"id"`
+	Subject      string     `json:"subject"`
+	MessageCount int        `json:"messageCount"`
+	UnreadCount  int        `json:"unreadCount"`
+	LabelIDs     []string   `json:"labelIds"`
+	SnoozedUntil *time.Time `json:"snoozedUntil,omitempty"`
 }
+
+const filterCriteria = "from:jan@firma.pl subject:upgrade"
 
 func seed(ctx context.Context, c *client, imapAddr, state string) error {
 	if err := appendMessages(ctx, imapAddr); err != nil {
@@ -93,7 +104,7 @@ func seed(ctx context.Context, c *client, imapAddr, state string) error {
 	if err != nil {
 		return err
 	}
-	inbox, err := c.waitInbox(ctx, acc, 3)
+	inbox, err := c.waitList(ctx, acc, "INBOX", messages)
 	if err != nil {
 		return err
 	}
@@ -106,14 +117,43 @@ func seed(ctx context.Context, c *client, imapAddr, state string) error {
 	if err := c.do(ctx, "POST", "/threads/modify", map[string]any{"ids": []string{inbox[0].ID}, "addLabelIds": []string{label.ID}}, nil); err != nil {
 		return fmt.Errorf("label thread: %w", err)
 	}
+	snap := Snapshot{ServerVersion: c.version(ctx), LabelID: label.ID}
+
+	// Phase 4: a filter (new mail only: the listing does not change) and a
+	// thread snoozed for an hour (it leaves the INBOX listing).
+	var filter struct {
+		ID string `json:"id"`
+	}
+	err = c.do(ctx, "POST", "/filters", map[string]any{"name": "Upgrade test", "criteria": filterCriteria,
+		"actions": map[string]any{"star": true}}, &filter)
+	inInbox := messages
+	switch {
+	case errors.Is(err, errNotFound):
+		fmt.Println("no filters and snooze in this release: phase 4 data not seeded")
+	case err != nil:
+		return fmt.Errorf("create filter: %w", err)
+	default:
+		snap.FilterID, snap.FilterCriteria = filter.ID, filterCriteria
+		until := time.Now().Add(time.Hour).UTC().Truncate(time.Second)
+		if err := c.do(ctx, "POST", "/threads/"+inbox[len(inbox)-1].ID+"/snooze", map[string]any{"until": until}, nil); err != nil {
+			return fmt.Errorf("snooze thread: %w", err)
+		}
+		inInbox--
+		// The snooze reaches the mail server after the undo window.
+		if snap.Snoozed, err = c.waitList(ctx, acc, "SNOOZED", 1); err != nil {
+			return err
+		}
+		if s := snap.Snoozed[0]; s.ID != inbox[len(inbox)-1].ID || s.SnoozedUntil == nil || !s.SnoozedUntil.Equal(until) {
+			return fmt.Errorf("snoozed listing: %+v, want %s until %s", snap.Snoozed, inbox[len(inbox)-1].ID, until)
+		}
+	}
 	// Wait for the label to reach the mail server (no pending operation), so
 	// the snapshot does not depend on a job left for the next release.
-	if inbox, err = c.waitInbox(ctx, acc, 3); err != nil {
+	if snap.Inbox, err = c.waitList(ctx, acc, "INBOX", inInbox); err != nil {
 		return err
 	}
-	snap := Snapshot{ServerVersion: c.version(ctx), LabelID: label.ID, Inbox: inbox}
-	if !hasLabel(inbox, label.ID) {
-		return fmt.Errorf("label %s missing from the INBOX listing: %+v", label.ID, inbox)
+	if !hasLabel(snap.Inbox, label.ID) {
+		return fmt.Errorf("label %s missing from the INBOX listing: %+v", label.ID, snap.Inbox)
 	}
 	b, _ := json.MarshalIndent(snap, "", "  ")
 	fmt.Printf("seeded (server %s):\n%s\n", snap.ServerVersion, b)
@@ -140,20 +180,58 @@ func verify(ctx context.Context, c *client, state, expect string) error {
 	if err != nil {
 		return fmt.Errorf("sign in after the upgrade: %w", err)
 	}
-	got, err := c.waitInbox(ctx, acc, len(want.Inbox))
+	got, err := c.waitList(ctx, acc, "INBOX", len(want.Inbox))
 	if err != nil {
 		return err
 	}
-	if !reflect.DeepEqual(got, want.Inbox) {
-		g, _ := json.MarshalIndent(got, "", "  ")
-		w, _ := json.MarshalIndent(want.Inbox, "", "  ")
-		return fmt.Errorf("INBOX changed across the upgrade:\nbefore %s\nafter  %s", w, g)
+	if err := sameList("INBOX", got, want.Inbox); err != nil {
+		return err
 	}
 	if !hasLabel(got, want.LabelID) {
 		return fmt.Errorf("label %s lost", want.LabelID)
 	}
-	fmt.Printf("verified: server %s -> %s, %d INBOX threads and label %s unchanged\n", want.ServerVersion, version, len(got), want.LabelID)
+	extra := ""
+	if want.FilterID != "" {
+		snoozed, err := c.waitList(ctx, acc, "SNOOZED", len(want.Snoozed))
+		if err != nil {
+			return err
+		}
+		if err := sameList("SNOOZED", snoozed, want.Snoozed); err != nil {
+			return err
+		}
+		var filters struct {
+			Filters []struct {
+				ID       string `json:"id"`
+				Criteria string `json:"criteria"`
+				Enabled  bool   `json:"enabled"`
+				Actions  struct {
+					Star bool `json:"star"`
+				} `json:"actions"`
+			} `json:"filters"`
+		}
+		if err := c.do(ctx, "GET", "/filters?accountId="+acc, nil, &filters); err != nil {
+			return fmt.Errorf("list filters: %w", err)
+		}
+		found := false
+		for _, f := range filters.Filters {
+			found = found || (f.ID == want.FilterID && f.Criteria == want.FilterCriteria && f.Enabled && f.Actions.Star)
+		}
+		if !found {
+			return fmt.Errorf("filter %s (%q) lost: %+v", want.FilterID, want.FilterCriteria, filters.Filters)
+		}
+		extra = fmt.Sprintf(", snoozed thread %s and filter %s", want.Snoozed[0].ID, want.FilterID)
+	}
+	fmt.Printf("verified: server %s -> %s, %d INBOX threads and label %s unchanged%s\n", want.ServerVersion, version, len(got), want.LabelID, extra)
 	return nil
+}
+
+func sameList(label string, got, want []Thread) error {
+	if reflect.DeepEqual(got, want) {
+		return nil
+	}
+	g, _ := json.MarshalIndent(got, "", "  ")
+	w, _ := json.MarshalIndent(want, "", "  ")
+	return fmt.Errorf("%s changed across the upgrade:\nbefore %s\nafter  %s", label, w, g)
 }
 
 func hasLabel(threads []Thread, id string) bool {
@@ -165,7 +243,7 @@ func hasLabel(threads []Thread, id string) bool {
 	return false
 }
 
-// appendMessages stores three messages in the INBOX, retrying until Dovecot
+// appendMessages stores the messages in the INBOX, retrying until Dovecot
 // accepts connections.
 func appendMessages(ctx context.Context, addr string) error {
 	var cl *imapclient.Client
@@ -185,7 +263,7 @@ func appendMessages(ctx context.Context, addr string) error {
 	}
 	defer cl.Close()
 	when := time.Date(2026, 1, 2, 10, 0, 0, 0, time.UTC)
-	for i := 1; i <= 3; i++ {
+	for i := 1; i <= messages; i++ {
 		msg := fmt.Sprintf("From: Jan Kowalski <jan@firma.pl>\r\nTo: %s@%s\r\nSubject: Upgrade message %d\r\n"+
 			"Message-ID: <upgrade-%d@silo.test>\r\nDate: %s\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=utf-8\r\n\r\n"+
 			"Body of message %d.\r\n", user, domain, i, i, when.Add(time.Duration(i)*time.Hour).Format(time.RFC1123Z), i)
@@ -202,6 +280,9 @@ func appendMessages(ctx context.Context, addr string) error {
 	}
 	return cl.Logout().Wait()
 }
+
+// errNotFound wraps 404 answers (an endpoint the release does not have).
+var errNotFound = errors.New("404 not found")
 
 type client struct {
 	base string
@@ -236,6 +317,9 @@ func (c *client) do(ctx context.Context, method, path string, body, out any) err
 	}
 	defer res.Body.Close()
 	b, _ := io.ReadAll(res.Body)
+	if res.StatusCode == http.StatusNotFound {
+		return fmt.Errorf("%s %s: %w: %s", method, path, errNotFound, b)
+	}
 	if res.StatusCode >= 300 {
 		return fmt.Errorf("%s %s: %d %s", method, path, res.StatusCode, b)
 	}
@@ -271,9 +355,9 @@ func (c *client) login(ctx context.Context) (string, error) {
 	return s.Accounts[0].ID, nil
 }
 
-// waitInbox waits until the account is live and the INBOX lists n threads with
+// waitList waits until the account is live and the label (INBOX, SNOOZED) lists n threads with
 // no pending operation, and returns them normalised.
-func (c *client) waitInbox(ctx context.Context, acc string, n int) ([]Thread, error) {
+func (c *client) waitList(ctx context.Context, acc, label string, n int) ([]Thread, error) {
 	last := "no answer"
 	for {
 		var st struct {
@@ -287,7 +371,7 @@ func (c *client) waitInbox(ctx context.Context, acc string, n int) ([]Thread, er
 		}
 		err := c.do(ctx, "GET", "/accounts/"+acc+"/sync-status", nil, &st)
 		if err == nil && st.State == "live" {
-			err = c.do(ctx, "GET", "/threads?labelId=INBOX", nil, &list)
+			err = c.do(ctx, "GET", "/threads?labelId="+label, nil, &list)
 		}
 		switch {
 		case err != nil:
@@ -310,7 +394,7 @@ func (c *client) waitInbox(ctx context.Context, acc string, n int) ([]Thread, er
 		}
 		select {
 		case <-ctx.Done():
-			return nil, fmt.Errorf("waiting for the INBOX (%s): %w", last, ctx.Err())
+			return nil, fmt.Errorf("waiting for %s (%s): %w", label, last, ctx.Err())
 		case <-time.After(time.Second):
 		}
 	}

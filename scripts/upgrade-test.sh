@@ -12,10 +12,12 @@
 #   b. build the prod image of the working tree -> silo-upg-new
 #   c. start Postgres 17 (silo-upg-postgres) and Dovecot (silo-upg-dovecot,
 #      the test configuration of internal/testutil/imaptest, profile full)
-#   d. old image: migrate up, serve; sign in, deliver 3 messages, wait for the
-#      sync, label a thread, save the INBOX listing (internal/testutil/upgradecheck)
+#   d. old image: migrate up, serve; sign in, deliver 4 messages, wait for the
+#      sync, label a thread; from v0.4.0 also create a filter and snooze a
+#      thread for 1 h; save the listings (internal/testutil/upgradecheck)
 #   e. new image: migrate up (the version must grow), serve, sign in with the
-#      same password, same INBOX with the label, reconcile without drift,
+#      same password, same INBOX with the label, the thread still SNOOZED,
+#      the filter still there, reconcile without drift,
 #      /meta reports the new version
 #   f. everything silo-upg-* is removed on exit (KEEP=1 keeps it for debugging)
 #
