@@ -80,9 +80,12 @@ func TestInitialSync(t *testing.T) {
 	live := time.Since(t1)
 	rep.LiveSeconds = live.Seconds()
 	// Phase A is the condition of live: the last 30 days of INBOX are there.
+	// "Recent" is relative to when the mailbox was populated (t0), not to
+	// now(): minutes later a message at the edge of the window is older
+	// (one of 12k recent INBOX messages in the 200k run).
 	inbox := a.folderID("INBOX")
 	got := a.int(`SELECT count(*) FROM message_locations l JOIN messages m ON m.id = l.message_id
-WHERE l.folder_id = $1 AND m.internal_date >= now() - interval '30 days' + interval '1 hour'`, inbox)
+WHERE l.folder_id = $1 AND m.internal_date >= $2`, inbox, t0.Add(-30*24*time.Hour+time.Hour-time.Second))
 	if got < recent["INBOX"] {
 		t.Errorf("at live: %d recent INBOX messages, want >= %d", got, recent["INBOX"])
 	}
