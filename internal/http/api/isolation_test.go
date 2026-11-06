@@ -154,7 +154,8 @@ func TestUserIsolation(t *testing.T) {
 		name, method, path string
 		// ref: the foreign id is a reference inside the body of a request on
 		// the attacker's own objects. Those keep their validation answer (400,
-		// or 422 for folders): the same for a foreign and a missing id, so it
+		// or 422 for folders and 422 invalid_setting for the active account of
+		// PATCH /settings): the same for a foreign and a missing id, so it
 		// tells nothing either.
 		ref  bool
 		body func(own owned) any
@@ -188,7 +189,7 @@ func TestUserIsolation(t *testing.T) {
 			{"INBOX of account", "GET", "/threads?labelId=INBOX&accountId=" + v.acc, false, nil},
 			{"draft in account", "POST", "/drafts", false, fixed(map[string]any{"accountId": v.acc})},
 			{"move draft to account", "PUT", "/drafts/{own}", false, saveOwn(map[string]any{"accountId": v.acc})},
-			{"activate account", "PATCH", "/settings", false, fixed(map[string]any{"activeAccountId": v.acc})},
+			{"activate account", "PATCH", "/settings", true, fixed(map[string]any{"activeAccountId": v.acc})},
 			// t_
 			{"get thread", "GET", "/threads/" + v.thread, false, nil},
 			{"modify thread", "POST", "/threads/modify", false, fixed(map[string]any{"ids": []string{v.thread}, "addLabelIds": []string{"STARRED"}})},
@@ -259,7 +260,8 @@ func TestUserIsolation(t *testing.T) {
 				got, want := run(pair.attacker, c), run(pair.attacker, none[i])
 				switch {
 				case c.ref:
-					if got.Code != http.StatusBadRequest && got.Code != http.StatusUnprocessableEntity || got.code() != api.CodeValidation {
+					if got.Code != http.StatusBadRequest && got.Code != http.StatusUnprocessableEntity ||
+						got.code() != api.CodeValidation && got.code() != api.CodeInvalidSetting {
 						t.Errorf("foreign reference: %d %s", got.Code, got.Body)
 					}
 				case got.Code != http.StatusNotFound || got.code() != api.CodeNotFound:

@@ -74,6 +74,33 @@ func TestSettings(t *testing.T) {
 		}
 	})
 
+	// Another user's account is refused like an unknown one (422, not 404 as
+	// the phase 5 draft of this endpoint had it), and nothing of the request
+	// is written, its valid fields included.
+	t.Run("activeAccountId of another user", func(t *testing.T) {
+		var otherUser, otherAcc int64
+		if err := m.pool.QueryRow(ctx, `INSERT INTO users (email) VALUES ('settings-other@silo.test') RETURNING id`).Scan(&otherUser); err != nil {
+			t.Fatal(err)
+		}
+		if err := m.pool.QueryRow(ctx, `
+INSERT INTO accounts (user_id, email, imap_host, imap_port, imap_tls, smtp_host, smtp_port, smtp_tls, username, secret_enc)
+VALUES ($1, 'settings-other@silo.test', 'h', 1, 'none', 'h', 25, 'none', 'other', '\x00') RETURNING id`, otherUser).Scan(&otherAcc); err != nil {
+			t.Fatal(err)
+		}
+		foreign := id36("acc_", otherAcc)
+		r, _ := patch(map[string]any{"activeAccountId": foreign, "density": "compact"}, "")
+		ru, _ := patch(map[string]any{"activeAccountId": "acc_zzzz", "density": "compact"}, "")
+		if r.Code != http.StatusUnprocessableEntity || r.code() != api.CodeInvalidSetting || r.Body.String() != ru.Body.String() {
+			t.Errorf("foreign activeAccountId: %d %s (unknown account: %s)", r.Code, r.Body, ru.Body)
+		}
+		if s := get(); s.Density != "default" || s.ActiveAccountID == nil || *s.ActiveAccountID != m.l.body.Accounts[0].ID {
+			t.Errorf("refused patch changed the settings: %+v", s)
+		}
+		if n := m.count(`SELECT count(*) FROM users WHERE id = $1 AND settings ? 'active_account_id'`, otherUser); n != 0 {
+			t.Error("the other user's settings changed")
+		}
+	})
+
 	t.Run("round trip", func(t *testing.T) {
 		before := time.Now().Add(-time.Second)
 		r, s := patch(map[string]any{
