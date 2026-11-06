@@ -35,8 +35,10 @@ const Version = "1"
 // raises it to the first silo-web release that handles the change; additive
 // changes leave it. It is a compatibility decision of the source, not build
 // metadata, so it is a constant and not set with -ldflags like
-// version.Version. 0.2.0: the first web release on the Phase 5 contract.
-const MinWebVersion = "0.2.0"
+// version.Version. 0.3.0: the web release of phase 4 (server 0.4.0: snooze,
+// schedule send, filters, settings.updated); the phase 5 changes are
+// additive.
+const MinWebVersion = "0.3.0"
 
 // Options carries the instance settings the API exposes.
 type Options struct {

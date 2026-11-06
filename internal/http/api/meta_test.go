@@ -38,7 +38,7 @@ func TestMeta(t *testing.T) {
 	want := map[string]any{
 		"serverVersion":      "0.3.0",
 		"apiVersion":         "1",
-		"minWebVersion":      MinWebVersion,
+		"minWebVersion":      "0.3.0", // silo-web of phase 4; phase 5 is additive
 		"authMode":           "imap",
 		"allowCustomServers": false,
 		"maxAttachmentBytes": float64(25 << 20),
