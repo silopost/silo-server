@@ -36,7 +36,12 @@ func (w *AccountWorker) authenticate(ctx context.Context, cl *imapx.Client, acc 
 		if err != nil {
 			return err
 		}
-		return cl.Authenticate(ctx, oauth.NewXOAuth2Client(acc.username, tok))
+		err = cl.Authenticate(ctx, oauth.NewXOAuth2Client(acc.username, tok))
+		var refused *oauth.XOAuth2Error
+		if f, ok := w.d.OAuth.(interface{ Forget(int64) }); ok && errors.As(err, &refused) {
+			f.Forget(acc.id) // revoked early: the next attempt refreshes
+		}
+		return err
 	}
 	pass, err := w.d.Keys.Decrypt(acc.secret, []byte(strconv.FormatInt(acc.id, 10)))
 	if err != nil {

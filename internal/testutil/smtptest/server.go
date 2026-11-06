@@ -31,6 +31,10 @@ type Server struct {
 	msgs       []Message
 	rcptCode   map[string]int
 	dataCode   int
+	// xoauth2 accepts AUTH XOAUTH2 of xoUser when it returns true for the
+	// bearer token (nil: XOAUTH2 not offered).
+	xoauth2 func(token string) bool
+	xoUser  string
 }
 
 // StartServer listens on 127.0.0.1 and accepts mail until the test ends.
@@ -84,9 +88,19 @@ type session struct {
 	to   []string
 }
 
-func (x *session) AuthMechanisms() []string { return []string{sasl.Plain} }
+func (x *session) AuthMechanisms() []string {
+	x.s.mu.Lock()
+	defer x.s.mu.Unlock()
+	if x.s.xoauth2 != nil {
+		return []string{sasl.Plain, xoauth2Mech}
+	}
+	return []string{sasl.Plain}
+}
 
-func (x *session) Auth(string) (sasl.Server, error) {
+func (x *session) Auth(mech string) (sasl.Server, error) {
+	if mech == xoauth2Mech {
+		return &xoauth2Server{x: x}, nil
+	}
 	return sasl.NewPlainServer(func(_, user, pass string) error {
 		if user != x.s.user || pass != x.s.pass {
 			return smtp.ErrAuthFailed
@@ -135,3 +149,51 @@ func (x *session) Data(r io.Reader) error {
 func (x *session) Reset() { x.from, x.to = "", nil }
 
 func (x *session) Logout() error { return nil }
+
+const xoauth2Mech = "XOAUTH2"
+
+// AcceptXOAuth2 makes the server offer AUTH XOAUTH2 (besides PLAIN) and
+// accept user with any bearer token for which valid returns true.
+func (s *Server) AcceptXOAuth2(user string, valid func(token string) bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.xoUser, s.xoauth2 = user, valid
+}
+
+// xoauth2Server is the server side of XOAUTH2 as Gmail runs it: the initial
+// response is "user=<u>^Aauth=Bearer <token>^A^A"; a refused one gets a
+// 334 challenge with a base64 JSON error, then 535 after the client's
+// (empty) answer.
+type xoauth2Server struct {
+	x      *session
+	failed bool
+}
+
+func (a *xoauth2Server) Next(resp []byte) ([]byte, bool, error) {
+	if a.failed {
+		return nil, false, reply(535, "5.7.8 Username and Password not accepted")
+	}
+	if resp == nil {
+		return []byte{}, false, nil // ask for the initial response
+	}
+	a.x.s.mu.Lock()
+	user, valid := a.x.s.xoUser, a.x.s.xoauth2
+	a.x.s.mu.Unlock()
+	fields := strings.Split(string(resp), "\x01")
+	var u, tok string
+	for _, f := range fields {
+		if v, ok := strings.CutPrefix(f, "user="); ok {
+			u = v
+		}
+		if v, ok := strings.CutPrefix(f, "auth=Bearer "); ok {
+			tok = v
+		}
+	}
+	ok := len(fields) == 4 && fields[2] == "" && fields[3] == "" && u == user && valid(tok)
+	if ok {
+		a.x.auth = true
+		return nil, true, nil
+	}
+	a.failed = true
+	return []byte(`{"status":"400","schemes":"Bearer","scope":"https://mail.google.com/"}`), false, nil
+}

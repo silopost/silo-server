@@ -292,3 +292,21 @@ func (s *Server) introspect(w http.ResponseWriter, r *http.Request) {
 	}
 	_ = json.NewEncoder(w).Encode(map[string]any{"active": true, "email": email})
 }
+
+// IssueAccessToken returns a new access token of email, as if the token
+// endpoint had issued it (for tests that need a token but not the flow).
+func (s *Server) IssueAccessToken(email string) string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	tok := "ya29." + random()
+	s.access[tok] = email
+	return tok
+}
+
+// RevokeAccessTokens makes every access token issued so far invalid (the
+// introspection endpoint reports them inactive).
+func (s *Server) RevokeAccessTokens() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.access = map[string]string{}
+}

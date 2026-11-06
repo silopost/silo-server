@@ -475,3 +475,11 @@ func (s *Service) storeRefreshToken(ctx context.Context, accountID int64, e *cac
 
 // aad binds a sealed secret to its account (as the password of accounts).
 func aad(accountID int64) []byte { return []byte(strconv.FormatInt(accountID, 10)) }
+
+// Forget drops the cached access token of an account (the server refused it
+// before its expiry, e.g. access revoked): the next Token refreshes.
+func (s *Service) Forget(accountID int64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.cache, accountID)
+}

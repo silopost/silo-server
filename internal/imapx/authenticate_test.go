@@ -12,6 +12,8 @@ import (
 
 	"github.com/silopost/silo-server/internal/imapx"
 	"github.com/silopost/silo-server/internal/oauth"
+	"github.com/silopost/silo-server/internal/testutil/imaptest"
+	"github.com/silopost/silo-server/internal/testutil/oauthtest"
 )
 
 // fakeXOAuth2 is a minimal IMAP server that only knows AUTHENTICATE XOAUTH2
@@ -94,5 +96,37 @@ func TestAuthenticateXOAuth2(t *testing.T) {
 	var xe *oauth.XOAuth2Error
 	if !errors.Is(err, imapx.ErrAuthFailed) || !errors.As(err, &xe) || !strings.Contains(xe.Response, `"status":"400"`) {
 		t.Fatalf("refused token: %v", err)
+	}
+}
+
+// TestAuthenticateXOAuth2Dovecot logs in to Dovecot's oauth2 passdb, which
+// checks the token with the fake provider (introspection) on the host.
+func TestAuthenticateXOAuth2Dovecot(t *testing.T) {
+	fake := oauthtest.Start(t)
+	addr := imaptest.StartOAuth2(t, fake.DockerURL()+"/introspect")
+	host, port := hostPort(t, addr)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	tok := fake.IssueAccessToken("oauth@silo.test")
+	c, err := imapx.Dial(ctx, host, port, imapx.TLSNone, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Authenticate(ctx, oauth.NewXOAuth2Client("oauth@silo.test", tok)); err != nil {
+		t.Fatalf("XOAUTH2: %v", err)
+	}
+	if err := c.Await(ctx, func() error { _, err := c.IMAP().Select("INBOX", nil).Wait(); return err }); err != nil {
+		t.Fatal(err)
+	}
+	_ = c.Logout(ctx)
+
+	c, err = imapx.Dial(ctx, host, port, imapx.TLSNone, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	if err := c.Authenticate(ctx, oauth.NewXOAuth2Client("oauth@silo.test", "ya29.unknown")); !errors.Is(err, imapx.ErrAuthFailed) {
+		t.Fatalf("unknown token: %v", err)
 	}
 }
