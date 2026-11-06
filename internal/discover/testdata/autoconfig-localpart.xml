@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<clientConfig version="1.1">
+  <emailProvider id="example.test">
+    <domain>%EMAILDOMAIN%</domain>
+    <displayName>Example Self-Hosted</displayName>
+    <incomingServer type="imap">
+      <hostname>plain.%EMAILDOMAIN%</hostname>
+      <port>143</port>
+      <socketType>plain</socketType>
+      <username>%EMAILLOCALPART%</username>
+      <authentication>password-cleartext</authentication>
+    </incomingServer>
+    <incomingServer type="imap">
+      <hostname>gssapi.%EMAILDOMAIN%</hostname>
+      <port>993</port>
+      <socketType>SSL</socketType>
+      <username>%EMAILLOCALPART%</username>
+      <authentication>GSSAPI</authentication>
+    </incomingServer>
+    <incomingServer type="imap">
+      <hostname>mx.%EMAILDOMAIN%</hostname>
+      <port>143</port>
+      <socketType>STARTTLS</socketType>
+      <username>%EMAILLOCALPART%</username>
+      <authentication>password-encrypted</authentication>
+    </incomingServer>
+    <outgoingServer type="smtp">
+      <hostname>mx.%EMAILDOMAIN%</hostname>
+      <port>587</port>
+      <socketType>STARTTLS</socketType>
+      <username>%EMAILLOCALPART%</username>
+      <authentication>password-cleartext</authentication>
+    </outgoingServer>
+  </emailProvider>
+</clientConfig>

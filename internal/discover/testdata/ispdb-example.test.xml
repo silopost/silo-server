@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Shaped like the ISPDB entry of gmail.com (autoconfig.thunderbird.net/v1.1/gmail.com),
+     with the host names moved to example.test. -->
+<clientConfig version="1.1">
+  <emailProvider id="example.test">
+    <domain>example.test</domain>
+    <domain>mail.example.test</domain>
+    <displayName>Example Mail</displayName>
+    <displayShortName>Example</displayShortName>
+    <incomingServer type="imap">
+      <hostname>imap.example.test</hostname>
+      <port>993</port>
+      <socketType>SSL</socketType>
+      <username>%EMAILADDRESS%</username>
+      <authentication>OAuth2</authentication>
+      <authentication>password-cleartext</authentication>
+    </incomingServer>
+    <incomingServer type="pop3">
+      <hostname>pop.example.test</hostname>
+      <port>995</port>
+      <socketType>SSL</socketType>
+      <username>%EMAILADDRESS%</username>
+      <authentication>OAuth2</authentication>
+      <authentication>password-cleartext</authentication>
+      <pop3>
+        <leaveMessagesOnServer>true</leaveMessagesOnServer>
+      </pop3>
+    </incomingServer>
+    <outgoingServer type="smtp">
+      <hostname>smtp.example.test</hostname>
+      <port>465</port>
+      <socketType>SSL</socketType>
+      <username>%EMAILADDRESS%</username>
+      <authentication>OAuth2</authentication>
+      <authentication>password-cleartext</authentication>
+    </outgoingServer>
+    <documentation url="https://support.example.test/mail/answer/78799">
+      <descr lang="en">How to enable IMAP/POP3 in Example Mail</descr>
+    </documentation>
+  </emailProvider>
+  <oAuth2>
+    <issuer>accounts.example.test</issuer>
+    <scope>https://mail.example.test/</scope>
+    <authURL>https://accounts.example.test/o/oauth2/auth</authURL>
+    <tokenURL>https://accounts.example.test/oauth2/v3/token</tokenURL>
+  </oAuth2>
+</clientConfig>
