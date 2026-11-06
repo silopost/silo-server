@@ -2,10 +2,13 @@ package sync_test
 
 import (
 	"context"
+	"log/slog"
 	"math/rand/v2"
 	"os"
+	"runtime"
 	"strconv"
 	stdsync "sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -15,7 +18,8 @@ import (
 )
 
 // initialSize is the mailbox of TestInitialSync: 2000 messages by default,
-// SILO_SYNC_TEST_MESSAGES overrides it (e.g. 10000 for the large run).
+// SILO_SYNC_TEST_MESSAGES overrides it (e.g. 200000 for the DoD run of
+// phase 5; see TestInitialSync for the memory report).
 func initialSize() int {
 	if n, err := strconv.Atoi(os.Getenv("SILO_SYNC_TEST_MESSAGES")); err == nil && n > 0 {
 		return n
@@ -27,24 +31,46 @@ func splitSpecs(n int) []spec {
 	return []spec{{"INBOX", n * 60 / 100}, {"Sent", n * 25 / 100}, {"Projekty", n - n*60/100 - n*25/100}}
 }
 
+// TestInitialSync syncs a generated mailbox from scratch. It samples the
+// memory of the test process every 2 s while the sync runs and logs the
+// peaks; SILO_SYNC_TEST_REPORT=<file> also writes them as JSON (with the
+// timings and the number of WARN/ERROR log records of the worker), and
+// SILO_SYNC_TEST_PPROF=<file> keeps a heap profile taken at the HeapInuse
+// peak. The RSS includes the test's own IMAP client and Postgres pool:
+// an upper bound for silo-server, whose Dovecot and Postgres are elsewhere.
 func TestInitialSync(t *testing.T) {
 	mb := newMailbox(t, imaptest.Full)
 	mb.create("Projekty")
 	n := initialSize()
+	rep := syncReport{Messages: n, GOOS: runtime.GOOS,
+		Note: "RSS of the go test process (sync worker + test IMAP client + pgx pool); Dovecot and Postgres run in containers"}
+	if path := os.Getenv("SILO_SYNC_TEST_REPORT"); path != "" {
+		t.Cleanup(func() { rep.TestFailed = t.Failed(); writeSyncReport(t, path, rep) })
+	}
 	t0 := time.Now()
 	recent := mb.populateAged(realisticAge, splitSpecs(n)...)
+	rep.PopulateSeconds = time.Since(t0).Seconds()
 	t.Logf("populated %d messages in %s", n, time.Since(t0).Round(time.Millisecond))
 
 	a := mb.account(mb.pass)
+	var warns, errs atomic.Int64
+	a.deps.Logger = slog.New(countingHandler{a.deps.Logger.Handler(), &warns, &errs})
 	var batches stdsync.Map
 	a.deps.Hooks.AfterBatch = func(phase string, k int) {
 		v, _ := batches.LoadOrStore(phase, new(int))
 		*v.(*int) += k
 	}
+	// The default timeouts fit the 2000-message run; large runs scale them.
+	liveTimeout := max(2*time.Minute, time.Duration(n)*3*time.Millisecond)
+	doneTimeout := max(5*time.Minute, time.Duration(n)*30*time.Millisecond)
+	runtime.GC()
+	mem := startMemSampler(2*time.Second, os.Getenv("SILO_SYNC_TEST_PPROF"))
+	defer mem.finish()
 	t1 := time.Now()
 	a.start()
-	a.waitState("live", 2*time.Minute)
+	a.waitState("live", liveTimeout)
 	live := time.Since(t1)
+	rep.LiveSeconds = live.Seconds()
 	// Phase A is the condition of live: the last 30 days of INBOX are there.
 	inbox := a.folderID("INBOX")
 	got := a.int(`SELECT count(*) FROM message_locations l JOIN messages m ON m.id = l.message_id
@@ -56,9 +82,15 @@ WHERE l.folder_id = $1 AND m.internal_date >= now() - interval '30 days' + inter
 WHERE t.account_id = $1 AND l.system_key = 'INBOX'`, a.id) == 0 {
 		t.Error("INBOX thread list empty at live")
 	}
-	done := a.waitInitialDone(5 * time.Minute)
-	t.Logf("initial sync of %d messages: live after %s, complete after %s", n, live.Round(time.Millisecond), (time.Since(t1)).Round(time.Millisecond))
-	_ = done
+	a.waitInitialDone(doneTimeout)
+	complete := time.Since(t1)
+	mem.finish()
+	rep.InitialSeconds = complete.Seconds()
+	rep.MaxRSSBytes, rep.PeakRSSBytes, rep.MaxSysBytes, rep.MaxHeapInuseBytes, rep.Samples = mem.maxRSS, mem.peakRSS, mem.maxSys, mem.maxHeapInuse, mem.samples
+	rep.LogErrors, rep.LogWarnings = errs.Load(), warns.Load()
+	t.Logf("initial sync of %d messages: live after %s, complete after %s", n, live.Round(time.Millisecond), complete.Round(time.Millisecond))
+	t.Logf("memory during sync (%d samples): max RSS %d MiB (OS peak %d MiB, measured=%v), max Go Sys %d MiB, max HeapInuse %d MiB; worker log: %d errors, %d warnings",
+		mem.samples, mem.maxRSS>>20, mem.peakRSS>>20, mem.rssOK, mem.maxSys>>20, mem.maxHeapInuse>>20, rep.LogErrors, rep.LogWarnings)
 
 	// Every folder: locations = STATUS MESSAGES, cursors complete.
 	c := mb.client()
