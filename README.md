@@ -1,17 +1,137 @@
 # silo-server
 
-Backend of SiloPost, a self-hosted web mail client (IMAP/SMTP). IMAP stays the
-source of truth; Silo is a client. License: AGPL-3.0.
+**Backend of Silopost**, the open-source, self-hosted Gmail alternative: a Go service that syncs
+IMAP mailboxes into Postgres, sends mail over SMTP and serves the REST API and real-time events used
+by [silo-web](https://github.com/silopost/silo-web) and [silo-mobile](https://github.com/silopost/silo-mobile).
 
-Architecture and roadmap: see `ARCHITECTURE_AND_PLAN.md` in the
+[![License: AGPL-3.0](https://img.shields.io/badge/license-AGPL--3.0-blue.svg)](LICENSE)
+[![Release](https://img.shields.io/badge/release-v0.5.0-informational.svg)](https://github.com/silopost/silo-server/releases)
+[![Go](https://img.shields.io/badge/go-1.26%2B-00ADD8.svg)](go.mod)
+[![CI](https://github.com/silopost/silo-server/actions/workflows/ci.yml/badge.svg)](https://github.com/silopost/silo-server/actions/workflows/ci.yml)
+
+## Contents
+
+- [What is Silopost?](#what-is-silopost)
+- [Features](#features)
+- [Repositories](#repositories)
+- [Requirements](#requirements)
+- [Quick start](#quick-start)
+- [Commands](#commands)
+- [Configuration](#configuration)
+- [API](#api)
+- [API behaviour](#api-behaviour)
+- [Multiple accounts](#multiple-accounts)
+- [Hardening](#hardening)
+- [Labels and IMAP keywords](#labels-and-imap-keywords)
+- [Cache rebuild](#cache-rebuild)
+- [Account autoconfiguration](#account-autoconfiguration)
+- [OAuth2 (Gmail, Microsoft 365)](#oauth2-gmail-microsoft-365)
+- [Users, mode `local` and the admin panel](#users-mode-local-and-the-admin-panel)
+- [Backup and restore](#backup-and-restore)
+- [S3Store](#s3store)
+- [Running in production](#running-in-production)
+- [Development](#development)
+- [Testing](#testing)
+- [Project structure](#project-structure)
+- [Status and roadmap](#status-and-roadmap)
+- [Contributing](#contributing)
+- [License](#license)
+
+## What is Silopost?
+
+Silopost gives you the Gmail experience – threads, labels, snooze, undo send, Gmail-style search,
+filters, real-time updates – on your own server and **without Gmail's limits**: no 15 GB cap
+shared with Drive and Photos, no ads, several mailboxes from any providers side by side, and nobody who can
+lock you out. It is a **mail client** (like Roundcube or Thunderbird), not a mail server: the IMAP
+server stays the source of truth and storage is bounded only by your mail server's disk. The
+project overview, the comparison with Gmail and the deployment stack are in the
 [`silo`](https://github.com/silopost/silo) repository.
+
+## Features
+
+- **IMAP sync engine** (`internal/sync`): initial sync and backfill with rate limiting,
+  incremental sync with CONDSTORE and IDLE, fallbacks for servers without CONDSTORE or
+  MOVE/UIDPLUS, a Postgres mirror of messages, JWZ threading, deduplication, large-mailbox safe
+  (200,000 messages with a 77 MiB peak RSS).
+- **Write-back with undo**: archive, trash, flags, labels and folder moves are applied locally at
+  once, queued and written to the server after the undo window; undo after the fact queues the
+  inverse operation.
+- **Compose and sending**: drafts with server-side autosave and exactly one copy in the Drafts
+  folder, uploads, inline images (`cid:`), thumbnails, reply/forward with the quoted HTML and the
+  original attachments, SMTP submission with **undo send**, **scheduled send**, Sent append.
+- **Search** with Gmail syntax parsed on the server, suggestions and history; **snooze** through a
+  real `Snoozed` folder; **filters** on new mail and on existing mail; **settings** shared by all
+  clients.
+- **User labels as IMAP keywords** with per-folder state, Thunderbird tag interop and the Dovecot
+  maildir 26-keyword limit handled.
+- **Multiple accounts per user**, isolated users, account autoconfiguration (ISPDB, autoconfig,
+  DNS SRV, guesses), **OAuth2/XOAUTH2** for Gmail and Microsoft 365.
+- **Authentication modes** `imap` (mailbox credentials) and `local` (argon2id passwords, TOTP,
+  admin API), cookie sessions for browsers and **bearer tokens** for native clients.
+- **Real-time events** over SSE with 24 h replay and a polling fallback.
+- **Backup**: metadata export/import (`silo-metadata` v1); blobs on the filesystem or in **S3**.
+- **Hardening**: trusted proxies, per-IP rate limits, security headers and CSP, a security log for
+  fail2ban, anti-SSRF dialing for every outbound connection.
+- OpenAPI 3 contract generated from the code (`api/openapi.yaml`), database migrations embedded in
+  the binary, a single static binary in a distroless image.
+
+## Repositories
+
+| Repository | License | Contents |
+|---|---|---|
+| [`silo`](https://github.com/silopost/silo) | MIT | Orchestration (Docker Compose, Caddy, scripts), documentation, ADRs |
+| [`silo-server`](https://github.com/silopost/silo-server) (this one) | AGPL-3.0 | Go backend: API, SSE, IMAP sync, SMTP, workers |
+| [`silo-web`](https://github.com/silopost/silo-web) | AGPL-3.0 | React/TypeScript web client and PWA |
+| [`silo-mobile`](https://github.com/silopost/silo-mobile) | AGPL-3.0 | React Native/Expo Android client |
 
 ## Requirements
 
 - Go 1.26+
 - Postgres 17 (for `serve` and `migrate`)
+- An IMAP/SMTP server to connect to (the [`silo`](https://github.com/silopost/silo) dev stack
+  provides docker-mailserver)
 - Docker (integration tests via testcontainers, image builds)
-- golangci-lint v2 (optional, for `make lint`)
+- Optional: GNU make, golangci-lint v2 (`make lint`), a C compiler for `go test -race`
+  (`make test`)
+
+## Quick start
+
+The quickest way to get a database and a mail server is the dev stack of the
+[`silo`](https://github.com/silopost/silo) repository, cloned next to this one:
+
+```sh
+../silo/scripts/dev-up.sh postgres mailserver     # Postgres on :5432, IMAP :1143, submission :1587
+../silo/scripts/seed-mail.sh --all                # sample mail for dev1@silo.test
+```
+
+Then run the server on the host against it:
+
+```sh
+export SILO_DATABASE_URL='postgres://silo:silo@localhost:5432/silo?sslmode=disable'
+export SILO_PUBLIC_URL=http://localhost:8080
+export SILO_SECRET_KEY=$(head -c 32 /dev/urandom | base64)   # or: openssl rand -base64 32
+export SILO_DEFAULT_IMAP_HOST=localhost SILO_DEFAULT_IMAP_PORT=1143 SILO_DEFAULT_IMAP_TLS=none
+export SILO_DEFAULT_SMTP_PORT=1587 SILO_DEFAULT_SMTP_TLS=none
+export SILO_ALLOW_INSECURE_TRANSPORT=true                    # dev only: plaintext to the dev mail server
+make run                                                     # or: go run ./cmd/silo-server serve
+curl localhost:8080/healthz        # {"status":"ok"}
+curl localhost:8080/api/v1/meta
+```
+
+`serve` applies pending migrations first. Sign in through silo-web (`VITE_API_PROXY` pointing at
+this server) as `dev1@silo.test` / `devpass1`. Keep the same `SILO_SECRET_KEY` between runs, or
+stored mailbox passwords can no longer be decrypted.
+
+On Windows, run the commands in Git Bash; without `make`, use the `go run` form (`make run` only
+adds `SILO_LOG_FORMAT=text`).
+
+Docker images:
+
+```sh
+docker build --target prod -t silo-server .                       # distroless, nonroot, ENTRYPOINT /silo-server, CMD serve
+docker build --target prod --build-arg VERSION=v0.5.0 -t silo-server .
+docker build --target dev -t silo-server:dev .                    # hot reload with air; mount the repo at /src
+```
 
 ## Commands
 
@@ -20,147 +140,152 @@ silo-server serve [--migrate=false]   # HTTP server; applies migrations first by
 silo-server migrate up                # apply pending migrations
 silo-server migrate down --yes        # revert everything (drops all data)
 silo-server migrate version           # current schema version
-silo-server rotate-secrets           # re-encrypt account secrets after a key change
-silo-server reconcile [--account ID] # report drift of derived mail data (threads, labels)
-silo-server rebuild-cache --account ID|--all [--yes] # drop the cached mail, sync it again
-silo-server user add|passwd|admin|list   # manage Silo users (see below)
+silo-server rotate-secrets            # re-encrypt account secrets after a key change
+silo-server reconcile [--account ID]  # report drift of derived mail data (threads, labels)
+silo-server rebuild-cache --account ID|--all [--yes]   # drop the cached mail, sync it again
+silo-server user add|passwd|admin|list                 # manage Silo users
 silo-server export-metadata [--out FILE|-] [--user EMAIL] [--no-local-blobs]   # metadata backup (JSON)
-silo-server import-metadata --in FILE|- [--merge]   # restore a metadata backup
+silo-server import-metadata --in FILE|- [--merge]      # restore a metadata backup
 silo-server version
 ```
 
-`migrate` needs only `SILO_DATABASE_URL`. Migrations run under a Postgres
-advisory lock, so several instances can start at once.
-
-`rotate-secrets` rotates the key protecting stored mailbox passwords and TOTP secrets: set
-`SILO_SECRET_KEY` to the new key and `SILO_SECRET_KEY_PREVIOUS` to the old one,
-run the command (it needs both plus `SILO_DATABASE_URL`, is safe to repeat and
-reports how many accounts and TOTP secrets were re-encrypted), then drop the previous key.
-
-## Run
-
-```sh
-export SILO_DATABASE_URL=postgres://silo:silo@localhost:5432/silo?sslmode=disable
-export SILO_PUBLIC_URL=http://localhost:8080
-export SILO_SECRET_KEY=$(head -c 32 /dev/urandom | base64)
-export SILO_DEFAULT_IMAP_HOST=imap.example.com
-make run
-curl localhost:8080/healthz        # {"status":"ok"}
-curl localhost:8080/api/v1/meta
-```
-
-Other targets: `make build`, `make test`, `make lint`, `make sqlc`, `make openapi`.
-
-Version: `GET /meta` reports `internal/version.Version`, set at link time. `make build` takes it from `git describe` (tag `v0.2.0` gives `v0.2.0`); a release image needs `--build-arg VERSION=v0.2.0` (CI builds `edge-<sha>`).
-
-Docker: `docker build --target prod -t silo-server .` (or `--target dev` for
-hot reload with air; mount the repo at `/src`).
-
-## Features (Faza 4)
-
-What phase 4 of the plan added; the details are in the sections linked.
-
-- **Search** (`GET /threads?q=`, Gmail syntax parsed on the server, suggestions and
-  history, `indexing`/`approximate`): bullet "Search" in [Configuration](#configuration).
-- **Snooze** (`POST/DELETE /threads/{id}/snooze`, `GET /snooze/presets`, folder of role
-  `snoozed`, job `snooze_wake`): bullet "Snooze" in [Configuration](#configuration).
-- **Schedule send** (`sendAt`, list `SCHEDULED`, `scheduledAt`/`outboundId` on threads):
-  bullet "Schedule send" in [Configuration](#configuration).
-- **Filters** (`/filters` CRUD, `filter_eval` on ingest, `POST /filters/{id}/apply`):
-  bullet "Filters" in [Configuration](#configuration).
-- **Settings** (`GET/PATCH /settings`, `settings.updated`): bullet "Settings" in
-  [Configuration](#configuration).
-- **Compose media** (inline `cid:` uploads, thumbnails, reply/forward with the quoted
-  HTML and the original attachments, `Draft.warnings`): bullet "Compose media" in
-  [Configuration](#configuration).
-- **Labels as IMAP keywords** (`keywordState` `mirrored|local_only|partial`,
-  `localOnlyFolders`, the maildir limit `SILO_SYNC_KEYWORD_FOLDER_LIMIT`, `PATCH
-  /labels/{id}` with `name`/`parentId`/colours): [Labels and IMAP keywords](#labels-and-imap-keywords).
-  `parentId` moves a user label under another user label of the account (`null`: top
-  level; itself, a descendant or anything else is `422 invalid_parent`); the name and
-  the keyword stay, since the keyword is the slug of the leaf name only (`labels.name`
-  holds no path; renaming assigns a new keyword from the new leaf name).
-- **Cache rebuild** (`POST /accounts/{id}/resync {mode: rebuild}`, `silo-server
-  rebuild-cache`): [Cache rebuild](#cache-rebuild).
-- New migrations and background jobs: [Migrations and background jobs](#migrations-and-background-jobs).
-
-Not done in Faza 4: PDF thumbnails (no cgo-free renderer: `415 thumbnail_unsupported`),
-bounce/DSN handling.
-
-## Features (Faza 5)
-
-What phase 5 of the plan added; the details are in the sections linked.
-
-- **Several accounts per user, isolated users** (`SILO_MAX_ACCOUNTS_PER_USER`, default 5;
-  over it `409 account_limit_reached`): [Multiple accounts](#multiple-accounts).
-- **Mode `local`, TOTP, admin panel, `user` command** (`SILO_AUTH_MODE=local`, `POST
-  /session/password`, `/totp/*`, `/admin/users|accounts|jobs`): [Users, mode `local` and
-  the admin panel](#users-mode-local-and-the-admin-panel).
-- **Sessions**: `GET /sessions`, `DELETE /sessions/{id}` and `DELETE /sessions?others=true`
-  (sign out everywhere else, `204`); a stream of a session that ends gets
-  `session.expired`: bullet "Events" in [Configuration](#configuration).
-- **Backup and import of metadata** (`export-metadata`, `import-metadata [--merge]`,
-  format `silo-metadata` v1, job `metadata_restore`): [Backup and restore](#backup-and-restore).
-- **S3Store** (`SILO_BLOB_BACKEND=s3`, `SILO_BLOB_S3_*`): [S3Store](#s3store).
-- **Hardening**: trusted proxies and client IP, rate limits (`429 rate_limited`,
-  `Retry-After`), at most 8 event streams per user (`stream.limit`), security headers and
-  CSP, the security log for fail2ban, anti-SSRF dialing (`internal/netx`): [Hardening](#hardening).
-- **Account autoconfiguration** (`POST /accounts/discover`: ISPDB, autoconfig, SRV,
-  guesses): [Account autoconfiguration](#account-autoconfiguration).
-- **OAuth2 accounts** (Google, Microsoft 365; XOAUTH2 for IMAP and SMTP, `authType`,
-  re-authorization after `auth_failed`) and **Gmail in generic mode** (`\All`, archive as
-  expunge from INBOX): [OAuth2](#oauth2-gmail-microsoft-365).
-- **Upgrade test** (`scripts/upgrade-test.sh`, previous release -> working tree on the
-  same database): [Upgrades](#upgrades).
-- **Large mailboxes**: `TestInitialSync` with `SILO_SYNC_TEST_MESSAGES=200000` reports
-  the memory of the initial sync: [IMAP integration tests](#imap-integration-tests).
-- New migrations (`000050`-`000052`) and the job `metadata_restore`:
-  [Migrations and background jobs](#migrations-and-background-jobs).
-
-### Deferred to 1.1
-
-- **`provider=gmail` mode** (`X-GM-LABELS`, `X-GM-MSGID`, `X-GM-THRID`): Gmail accounts
-  sync in generic mode (folders, `\All` with dedup); Gmail labels are not mapped to Silo
-  labels and threads come from Silo's own threading. No test account and no X-GM
-  simulator (Dovecot does not offer `X-GM-EXT-1`).
-- **ManageSieve**: filters run in Silo only (on new INBOX mail while Silo runs); they are
-  not exported to the mail server as Sieve scripts.
-- **OAuth2 for native clients**: the sign-in is bound to the browser that started it by
-  the `silo_oauth_state` cookie (protection against login CSRF), so a bearer client that
-  opens an external browser gets `oauth_state_invalid`; it needs a variant with the
-  app's redirect URI (silo-mobile, Faza 6).
-
-## Multiple accounts
-
-A user has up to `SILO_MAX_ACCOUNTS_PER_USER` mail accounts (default 5; `POST
-/accounts` over it, or an OAuth2 sign-in adding one, is `409 account_limit_reached`).
-Accounts are ordered by `position`; `settings.activeAccountId` (`PATCH /settings`) is
-the account the client opens (unset: the first one). Every list, label, count and event
-names its account: `label.counts`, `thread.updated` and `account.*` carry `accountId`.
-
-- **From**: `PUT /drafts/{id}` with `accountId` sends a new message from another account
-  of the user. The draft moves there as a new draft (new `id`, `messageId` and
-  `threadId`, `draft.updated` with `previousDraftId`; the copy in the old account's
-  Drafts is deleted); a reply or forward stays with its account (`409
-  draft_account_locked`).
-- **Isolation**: ids of another user's objects in a path answer `404` exactly like ids
-  that do not exist; in a body (`addLabelIds`, `parentId`, attachments, folders) they
-  are `400`/`422` like unknown ids; events and polls only ever carry the user's own
-  data. `internal/http/api` `TestUserIsolation` checks every endpoint both ways.
+- `migrate` needs only `SILO_DATABASE_URL`. Migrations run under a Postgres advisory lock, so
+  several instances can start at once.
+- `rotate-secrets` rotates the key protecting stored mailbox passwords, OAuth2 refresh tokens and
+  TOTP secrets: set `SILO_SECRET_KEY` to the new key and `SILO_SECRET_KEY_PREVIOUS` to the old one,
+  run the command (it needs both plus `SILO_DATABASE_URL`, is safe to repeat and reports how many
+  accounts and TOTP secrets were re-encrypted), then drop the previous key.
+- `user`: see [Users, mode `local` and the admin panel](#users-mode-local-and-the-admin-panel).
+  `rebuild-cache`: see [Cache rebuild](#cache-rebuild). `export-metadata`/`import-metadata`: see
+  [Backup and restore](#backup-and-restore).
+- Version: `GET /meta` reports `internal/version.Version`, set at link time. `make build` takes it
+  from `git describe` (tag `v0.5.0` gives `v0.5.0`); a release image needs
+  `--build-arg VERSION=v0.5.0` (CI builds `edge-<sha>`).
 
 ## Configuration
 
-All settings are `SILO_*` environment variables; the full table (names,
-defaults, meaning) is in section 2.5 of the architecture plan. `serve` checks
-the whole configuration at startup and reports every problem at once. Sizes
-accept `50MB` style values, rates `5MB/s`, durations `5m`. Worth knowing:
+All settings are `SILO_*` environment variables (`internal/config`). `serve` checks the whole
+configuration at start-up and reports every problem at once. Sizes accept values like `50MB`,
+rates `5MB/s`, durations `5m` or `10s`; lists are comma-separated.
 
-- Required for `serve`: `SILO_DATABASE_URL`, `SILO_PUBLIC_URL`, `SILO_SECRET_KEY`
-  (32 random bytes, base64) and, in `SILO_AUTH_MODE=imap` (default),
-  `SILO_DEFAULT_IMAP_HOST`.
-- `*_TLS=none` is only accepted with `SILO_ALLOW_INSECURE_TRANSPORT=true`.
-- Blobs (raw messages, attachments, uploads): `SILO_BLOB_BACKEND=fs` (default) stores under
-  `SILO_BLOB_FS_DIR`, `s3` in a bucket (see [S3Store](#s3store)).
+Required for `serve`: `SILO_DATABASE_URL`, `SILO_PUBLIC_URL`, `SILO_SECRET_KEY` and, in
+`SILO_AUTH_MODE=imap` (the default), `SILO_DEFAULT_IMAP_HOST`.
+
+### Core
+
+| Variable | Default | Description |
+|---|---|---|
+| `SILO_HTTP_ADDR` | `:8080` | Listen address. |
+| `SILO_DATABASE_URL` | – (required) | Postgres URL, for example `postgres://silo:silo@localhost:5432/silo?sslmode=disable`. |
+| `SILO_PUBLIC_URL` | – (required) | Public URL of the instance. `https://` makes the session cookie `Secure` and turns on HSTS; mutating requests need an `Origin` equal to it (or to the served host). |
+| `SILO_SECRET_KEY` | – (required) | 32 random bytes, base64. Encrypts mailbox passwords, OAuth2 refresh tokens and TOTP secrets. |
+| `SILO_SECRET_KEY_PREVIOUS` | empty | The previous key, for `rotate-secrets` and for importing a backup sealed with it. |
+| `SILO_LOG_FORMAT` | `json` | `json` or `text`. |
+| `SILO_LOG_LEVEL` | `info` | `debug`, `info`, `warn`, `error`. |
+| `SILO_WORKER_CONCURRENCY` | `4` | Size of the general background worker pool. |
+
+### Authentication and mail servers
+
+| Variable | Default | Description |
+|---|---|---|
+| `SILO_AUTH_MODE` | `imap` | `imap`: users sign in with mailbox credentials of the default server. `local`: Silo users with their own passwords. |
+| `SILO_DEFAULT_IMAP_HOST` | – | Default IMAP server; required in mode `imap`, optional in `local`. |
+| `SILO_DEFAULT_IMAP_PORT` | `993` | |
+| `SILO_DEFAULT_IMAP_TLS` | `implicit` | `implicit`, `starttls` or `none` (`none` only with `SILO_ALLOW_INSECURE_TRANSPORT=true`). |
+| `SILO_DEFAULT_SMTP_HOST` | `SILO_DEFAULT_IMAP_HOST` | Default SMTP submission server. |
+| `SILO_DEFAULT_SMTP_PORT` | `587` | |
+| `SILO_DEFAULT_SMTP_TLS` | `starttls` | `implicit`, `starttls` or `none` (as above). |
+| `SILO_DEFAULT_LOGIN_FORMAT` | `email` | IMAP user name on the default server: `email` (the full address) or `localpart` (the part before `@`). |
+| `SILO_DEFAULT_DOMAIN` | empty | Mail domain of the default server; required with `localpart` (a sign-in without `@` gets it appended). |
+| `SILO_ALLOW_CUSTOM_SERVERS` | `false` | Mode `imap`: users may add mailboxes on other servers. Always allowed in mode `local`. |
+| `SILO_CUSTOM_SERVER_ALLOWLIST` | empty | Host names, IPs or CIDRs that custom servers may resolve to although they are private. |
+| `SILO_ALLOW_INSECURE_TRANSPORT` | `false` | Allows `*_TLS=none` and SMTP without TLS. Development only. |
+| `SILO_MAX_ACCOUNTS_PER_USER` | `5` | Mail accounts per user. |
+| `SILO_AUTOCONFIG_ISPDB_URL` | `https://autoconfig.thunderbird.net/v1.1/` | ISPDB base URL for account autoconfiguration; `off` disables it. |
+
+### Sync, mirror and limits
+
+| Variable | Default | Description |
+|---|---|---|
+| `SILO_SYNC_MAX_CONNECTIONS_PER_ACCOUNT` | `3` | IMAP connections per account (minimum 2: `sync` + `idle`; the third is reserved for write-back). |
+| `SILO_SYNC_INITIAL_CONCURRENCY` | `2` | Accounts that connect and backfill at the same time. |
+| `SILO_SYNC_POLL_INTERVAL` | `5m` | Folder poll/STATUS sweep. |
+| `SILO_SYNC_BACKFILL_RATE` | `5MB/s` | Pace of the body backfill per account. |
+| `SILO_SYNC_KEYWORD_FOLDER_LIMIT` | `26` | Distinct keywords one folder keeps (Dovecot maildir: 26; `0` = no limit). See [Labels and IMAP keywords](#labels-and-imap-keywords). |
+| `SILO_MIRROR_MAX_MESSAGE_BYTES` | `50MB` | Messages above it keep headers only (`deferred`). |
+| `SILO_MIRROR_QUOTA_PER_ACCOUNT` | `0` | Stops the body backfill of an account at that many mirrored bytes (`0` = no limit). |
+| `SILO_UNDO_WINDOW` | `10s` | Delay of folder moves before write-back (the undo window). |
+| `SILO_MAX_ATTACHMENT_BYTES` | `25MB` | Largest upload and outgoing message (`maxAttachmentBytes` in `GET /meta`). |
+
+### Blob storage
+
+| Variable | Default | Description |
+|---|---|---|
+| `SILO_BLOB_BACKEND` | `fs` | `fs` or `s3` (raw messages, attachments, uploads, thumbnails). |
+| `SILO_BLOB_FS_DIR` | `/data/blobs` | Directory of the `fs` backend. |
+| `SILO_BLOB_S3_*` | | See [S3Store](#s3store). |
+
+### Reverse proxy and rate limits
+
+| Variable | Default | Description |
+|---|---|---|
+| `SILO_TRUSTED_PROXIES` | empty | IPs or CIDRs of proxies whose `X-Forwarded-For`/`X-Real-IP` are honoured. Set it behind any proxy. |
+| `SILO_RATE_LIMIT_API` | `600/m` | Per-IP limit for `/api/v1/*`; `off` disables it. |
+| `SILO_RATE_LIMIT_AUTH` | `20/m` | Per-IP limit for sign-in, password change and TOTP. |
+| `SILO_HSTS` | `true` | `Strict-Transport-Security` when `SILO_PUBLIC_URL` is `https://`. |
+
+Details: [Hardening](#hardening).
+
+### OAuth2
+
+| Variable | Default | Description |
+|---|---|---|
+| `SILO_OAUTH_GOOGLE_CLIENT_ID`, `SILO_OAUTH_GOOGLE_CLIENT_SECRET` | empty | Google OAuth client ("Web application"); set both to enable. |
+| `SILO_OAUTH_MICROSOFT_CLIENT_ID`, `SILO_OAUTH_MICROSOFT_CLIENT_SECRET` | empty | Microsoft Entra ID app registration; set both to enable. |
+| `SILO_OAUTH_MICROSOFT_TENANT` | `common` | `common`, `organizations`, `consumers` or a tenant id/domain. |
+| `SILO_OAUTH_{GOOGLE,MICROSOFT}_{AUTH,TOKEN,USERINFO}_URL` | official endpoints | **Tests only** (a fake provider); leave unset in production. |
+
+Details: [OAuth2](#oauth2-gmail-microsoft-365).
+
+### Test-only variables
+
+These are read by `go test`, never by `serve`; see [Testing](#testing).
+
+| Variable | Effect |
+|---|---|
+| `SILO_REQUIRE_DOCKER=true` | Integration tests fail instead of skipping when Docker is unavailable (CI sets it). |
+| `SILO_SYNC_TEST_MESSAGES` | Mailbox size of `TestInitialSync` (default 2000). |
+| `SILO_SYNC_TEST_REPORT`, `SILO_SYNC_TEST_PPROF`, `SILO_SYNC_TEST_DEBUG` | JSON report, heap profile and debug output of `TestInitialSync`. |
+| `SILO_BENCH_INBOX=true` | Inbox list benchmark (`SILO_BENCH_THREADS` sets the size). |
+| `SILO_BENCH_SEARCH=true` | Search benchmark (`SILO_BENCH_MESSAGES`, `SILO_BENCH_EXPLAIN=true` prints query plans). |
+| `SILO_TEST_MINIO_IMAGE` | MinIO image for the S3Store tests. |
+
+## API
+
+The REST API lives under `/api/v1` and is described by the OpenAPI 3 document
+[`api/openapi.yaml`](api/openapi.yaml), generated from the huma operations in
+`internal/http/api` (`make openapi`). Errors are `application/problem+json` (RFC 9457) with a
+stable `code`. `GET /healthz` is the health check; `GET /api/v1/meta` reports the server version,
+`minWebVersion`, `authMode`, `allowCustomServers`, `oauthProviders` and `maxAttachmentBytes`.
+
+| Area | Endpoints |
+|---|---|
+| Session and sessions | `POST/GET/DELETE /session`, `POST /session/password`, `GET /sessions`, `DELETE /sessions/{id}`, `DELETE /sessions?others=true` |
+| TOTP and admin | `/totp/*`, `/admin/users`, `/admin/accounts`, `/admin/jobs` |
+| Accounts | `GET/POST /accounts`, `POST /accounts/test`, `POST /accounts/discover`, `GET/PATCH/DELETE /accounts/{id}`, `GET/PUT /accounts/{id}/folders`, `POST /accounts/{id}/resync`, `GET /accounts/{id}/sync-status`, `POST /oauth/{provider}/start`, `GET /oauth/{provider}/callback` |
+| Mailbox | `GET/POST /labels`, `PATCH/DELETE /labels/{id}`, `GET /threads`, `GET /threads/{id}`, `POST /threads/modify`, `/threads/trash`, `/threads/untrash`, `/threads/delete`, `POST /messages/modify`, `GET /messages/{id}/html`, `/messages/{id}/raw`, `GET /attachments/{id}`, `/attachments/{id}/thumbnail`, `POST /operations/{id}/undo` |
+| Compose | `POST /uploads`, `POST /drafts`, `GET/PUT/DELETE /drafts/{id}`, `POST /drafts/{id}/send`, `POST /outbound/{id}/cancel`, `GET /contacts/autocomplete` |
+| Search, snooze, filters, settings | `GET /search/suggest`, `DELETE /search/history`, `POST/DELETE /threads/{id}/snooze`, `GET /snooze/presets`, `/filters` CRUD, `POST /filters/{id}/apply`, `GET/PATCH /settings` |
+| Events | `GET /events` (SSE), `GET /events/poll` |
+
+Compatibility rules for API changes and `minWebVersion` are in [CONTRIBUTING.md](CONTRIBUTING.md);
+version pairs are listed in the
+[compatibility matrix](https://github.com/silopost/silo/blob/main/docs/compat-matrix.md).
+
+## API behaviour
+
+How the main parts of the API behave, with the related settings.
+
 - Background jobs: `serve` runs a Postgres-backed job queue; `SILO_WORKER_CONCURRENCY`
   (default 4) sets the size of the general worker pool. Jobs are woken by
   `LISTEN/NOTIFY` with a 5 s polling fallback.
@@ -205,7 +330,7 @@ accept `50MB` style values, rates `5MB/s`, durations `5m`. Worth knowing:
   saved and still empty (version 1, no recipients, subject, body or attachments, no
   server copy) are deleted after 24 h by `blob_gc`. The limit is `maxAttachmentBytes`
   in `GET /meta`; `413 upload_too_large` carries `limit` and `size`.
-- Compose media (plan 5.1/5.6, Faza 4):
+- Compose media:
   - Inline pictures: `POST /uploads` with `inline=true` (a form field before the file,
     or `?inline=true`) stores an `image/*` upload (`422 inline_not_image` otherwise)
     with a server-generated Content-ID; the answer is
@@ -239,7 +364,7 @@ accept `50MB` style values, rates `5MB/s`, durations `5m`. Worth knowing:
     are `415 thumbnail_unsupported` — PDF included, since rendering PDF needs cgo; an
     attachment not downloaded yet is fetched first (`503 content_not_available` as for
     the bytes). Attachments of messages and uploads carry `thumbnail: bool`.
-- Sending (`internal/drafts`, plan 3.9): `POST /drafts/{id}/send` (`{sendAt?}`) builds
+- Sending (`internal/drafts`): `POST /drafts/{id}/send` (`{sendAt?}`) builds
   the message at once (Bcc only in the envelope), stores it and queues it: the message
   is `SCHEDULED`, an `outbound` row (`ob_…`) is `queued` and a `send` job runs at
   `undoUntil` = now + `undo_send_seconds` (5/10/20/30, default 5) or `sendAt`. Errors:
@@ -262,14 +387,14 @@ accept `50MB` style values, rates `5MB/s`, durations `5m`. Worth knowing:
   (default for generic servers), an `imap_op` `append` saves it in Sent with `\Seen`;
   otherwise the server's own copy in Sent is attached by `Message-ID`.
   `GET /contacts/autocomplete?q=` suggests up to 8 recipients.
-- Schedule send (plan 3.9 step 3): `sendAt` beyond the undo-send window schedules the
+- Schedule send: `sendAt` beyond the undo-send window schedules the
   message (at most a year ahead). It stays local until it leaves: its copy in the Drafts
   folder is removed when it is scheduled (no other client can send it from there) and
   saved again if the schedule is cancelled or the send fails. The "Scheduled" list is
   `GET /threads?labelId=SCHEDULED`; threads (list and `GET /threads/{id}`) carry
   `scheduledAt` (the `outbound.send_at` of a queued/sending send still ahead) and
-  `outboundId` for `POST /outbound/{id}/cancel`. Precision: the job poll (±30 s DoD).
-- Snooze (`internal/ops`, plan 3.10): `POST /threads/{id}/snooze` `{until}` (≥ 30 s,
+  `outboundId` for `POST /outbound/{id}/cancel`. Precision: the job poll (target ±30 s).
+- Snooze (`internal/ops`): `POST /threads/{id}/snooze` `{until}` (≥ 30 s,
   ≤ 1 year ahead, else `422 invalid_snooze`; a thread without mail in INBOX is
   `409 not_in_inbox`) answers `{thread, operationId, undoUntil}`: INBOX turns `SNOOZED`
   at once and after `SILO_UNDO_WINDOW` an `imap_op` moves the messages to the folder of
@@ -287,7 +412,7 @@ accept `50MB` style values, rates `5MB/s`, durations `5m`. Worth knowing:
   `thread.updated` carry `snoozedUntil`. Waking needs a running Silo (mail waits safely in
   Snoozed); `snooze_items` point at messages, not UIDs, so a snooze survives a
   UIDVALIDITY change or a re-created Snoozed folder.
-- Filters (`internal/filters`, plan 3.11): `GET /filters?accountId=` (in `position`
+- Filters (`internal/filters`): `GET /filters?accountId=` (in `position`
   order), `GET/PUT/DELETE /filters/{id}`, `POST /filters` → `Filter`
   `{id: f_…, accountId, name, criteria, criteriaNormalized, actions, enabled, position,
   createdAt, updatedAt}`. `criteria` is a query of the search syntax (the same parser,
@@ -323,7 +448,7 @@ accept `50MB` style values, rates `5MB/s`, durations `5m`. Worth knowing:
   `keyboardShortcutsEnabled`, `conversationView`, `activeAccountId` (an account of the
   user), `desktopNotifications` (the preference is shared; each client asks the system
   for its own permission), `language` (UI language of every client: `en` or `pl`, `en`
-  until chosen; ADR 0015 in `silo`); other bad values are `422 invalid_setting`. The answer carries
+  until chosen; [ADR 0015](https://github.com/silopost/silo/blob/main/docs/adr/0015-i18n-typed-dictionaries.md)); other bad values are `422 invalid_setting`. The answer carries
   `updatedAt` (`users.settings.updated_at`); other sessions get `settings.updated
   {updatedAt}` and reload.
 - Sessions and accounts (`internal/auth`, `internal/accounts`): `POST/GET/DELETE /session`, `GET /sessions`, `DELETE /sessions/{id}`, `DELETE /sessions?others=true` (every session but the current one), `GET/POST /accounts`, `POST /accounts/test`, `GET/PATCH/DELETE /accounts/{id}`, `GET /accounts/{id}/folders`, `POST /accounts/{id}/resync`, `GET /accounts/{id}/sync-status`, `GET /meta`. Accounts carry `position` and are listed in that order (`GET /session`, `GET /accounts`). Migration `000005` turns `sent_append` on for generic accounts created before sending existed. The full list is `api/openapi.yaml`.
@@ -335,8 +460,8 @@ accept `50MB` style values, rates `5MB/s`, durations `5m`. Worth knowing:
   `GET /messages/{id}/html` (sanitised, immutable, CSP), `/messages/{id}/raw` and
   `GET /attachments/{id}`. A body that is still `headers`/`deferred` is downloaded
   on demand (up to 10 s, then `503 content_not_available` + `Retry-After`).
-- Search (`internal/search`, plan 3.12): `GET /threads?q=` takes the Gmail syntax, parsed on
-  the server: words (prefix match, case and accents ignored: `lodz` finds `Łódź`),
+- Search (`internal/search`): `GET /threads?q=` takes the Gmail syntax, parsed on
+  the server: words (prefix match, case and accents ignored: `cafe` finds `Café`),
   `"phrases"`, `OR`/`|`, `AND` or juxtaposition, `-`, `( )`, `{a b}` (= `a OR b`), and
   `from: to: cc: bcc: subject: label: in: is: has: filename: list: deliveredto:
   rfc822msgid: before: after: older: newer: older_than: newer_than: larger: smaller:`
@@ -372,18 +497,13 @@ accept `50MB` style values, rates `5MB/s`, durations `5m`. Worth knowing:
   closes (an `EventSource` cannot see a `429`): close the `EventSource` and poll
   `/events/poll` instead. `label.counts` with every label of an account follows
   `account.status` `live` and the end of its initial sync.
-- Benchmark (nightly workflow): `SILO_BENCH_INBOX=true go test ./internal/mailview
-  -run TestInboxListBenchmark -v` loads 100k threads / 300k messages and checks
-  p95 < 50 ms and the `thread_labels_list` plan of the inbox query.
-  `SILO_BENCH_SEARCH=true go test ./internal/mailview -run TestSearchBenchmark -v` loads
-  1M messages (`SILO_BENCH_MESSAGES`) and checks search p95 < 500 ms for one word and `from:`.
 - Sessions: the `silo_session` cookie is `Secure` when `SILO_PUBLIC_URL` is `https://`
   (plain `http://` is for local development only). Mutating requests need the
   `X-Silo-CSRF` header and an `Origin` equal to `SILO_PUBLIC_URL` or the served host.
   Sign-in is throttled per client IP (`SILO_RATE_LIMIT_AUTH`, see [Hardening](#hardening))
   and per login (burst 8, one more every 15 s), and answers after a constant minimum time.
   Browser sessions last 30 days idle / 90 days at most.
-- Bearer sessions (native clients, ADR 0007 in `silo`): `POST /session` with
+- Bearer sessions (native clients, [ADR 0007](https://github.com/silopost/silo/blob/main/docs/adr/0007-bearer-tokens-for-native-clients.md)): `POST /session` with
   `"client": {"kind": "bearer", "name": "Pixel 8"}` returns `token` in the body (shown
   once) and sets no cookie. Send it as `Authorization: Bearer <token>` on every request,
   including `GET /events` and attachment downloads; no `X-Silo-CSRF` or `Origin` check
@@ -400,9 +520,25 @@ accept `50MB` style values, rates `5MB/s`, durations `5m`. Worth knowing:
 - OAuth2 accounts (Gmail, Microsoft 365): `SILO_OAUTH_GOOGLE_CLIENT_ID` /
   `_CLIENT_SECRET`, `SILO_OAUTH_MICROSOFT_CLIENT_ID` / `_CLIENT_SECRET` /
   `_TENANT`; see [OAuth2](#oauth2-gmail-microsoft-365).
-- Logging: `SILO_LOG_FORMAT` (`json`/`text`), `SILO_LOG_LEVEL`; listen address: `SILO_HTTP_ADDR`.
-- Reverse proxy, rate limits, headers: `SILO_TRUSTED_PROXIES`, `SILO_RATE_LIMIT_API`,
-  `SILO_RATE_LIMIT_AUTH`, `SILO_HSTS`; see [Hardening](#hardening).
+
+## Multiple accounts
+
+A user has up to `SILO_MAX_ACCOUNTS_PER_USER` mail accounts (default 5; `POST
+/accounts` over it, or an OAuth2 sign-in adding one, is `409 account_limit_reached`).
+Accounts are ordered by `position`; `settings.activeAccountId` (`PATCH /settings`) is
+the account the client opens (unset: the first one). Every list, label, count and event
+names its account: `label.counts`, `thread.updated` and `account.*` carry `accountId`.
+
+- **From**: `PUT /drafts/{id}` with `accountId` sends a new message from another account
+  of the user. The draft moves there as a new draft (new `id`, `messageId` and
+  `threadId`, `draft.updated` with `previousDraftId`; the copy in the old account's
+  Drafts is deleted); a reply or forward stays with its account (`409
+  draft_account_locked`).
+- **Isolation**: ids of another user's objects in a path answer `404` exactly like ids
+  that do not exist; in a body (`addLabelIds`, `parentId`, attachments, folders) they
+  are `400`/`422` like unknown ids; events and polls only ever carry the user's own
+  data. `internal/http/api` `TestUserIsolation` checks every endpoint both ways.
+
 
 ## Hardening
 
@@ -488,43 +624,29 @@ Point the jail at the container log (e.g. `logpath =
 journald). Add `rate_limited` to the alternatives for a stricter jail; a
 client behind a shared NAT may hit the API limit legitimately.
 
-### Upgrades
-
-`scripts/upgrade-test.sh` checks the upgrade path end to end with Docker:
-the previous release (`PREVIOUS_TAG`, default the last `v*` tag on `main`) is
-built from `git archive`, migrated, started against Postgres 17 and Dovecot,
-seeded through the API (sign-in, four messages, a user label on a thread and,
-from `v0.4.0` on, a filter and a thread snoozed for an hour);
-then the image of the working tree migrates the same database (the schema
-version must grow), starts, signs the same user in, must list the same INBOX
-with the label, still list the snoozed thread under `SNOOZED` with the same wake
-time, still have the filter, report its own version in `/meta` and pass `reconcile`.
-Containers, volume, network and images are named `silo-upg-*` and removed at
-the end (`KEEP=1` keeps them). It runs in CI as `.github/workflows/upgrade.yml`
-(also by hand with a `previous_tag` input).
-
-```sh
-PREVIOUS_TAG=v0.4.0 scripts/upgrade-test.sh
-```
 
 ## Labels and IMAP keywords
 
 User labels live in Postgres (`message_labels`) and, when the server keeps keywords
 (`\*` in the INBOX `PERMANENTFLAGS`, `keywordsSupported` in `sync-status`), are also
 written on the messages as IMAP keywords, so Thunderbird shows them as tags and a
-cache rebuild gets them back (plan 3.7).
+cache rebuild gets them back.
 
-- Keyword = ASCII slug of the name (`Praca/Projekty` -> `Praca_Projekty`, `Zażółć` ->
-  `Zazolc`) with the account's `keyword_prefix` (default empty). A slug already used by
+- Keyword = ASCII slug of the name (`Work/Projects` -> `Work_Projects`, `Café` ->
+  `Cafe`) with the account's `keyword_prefix` (default empty). A slug already used by
   another label or listed by the server in a folder's `PERMANENTFLAGS` (a tag of another
   client) gets `_2`, `_3`, ...: the mapping is explicit in `labels.imap_keyword`.
 - Keywords of other clients become labels named after the keyword (prefix stripped);
-  Thunderbird `$label1`-`$label5` become "Ważne", "Praca", "Osobiste", "Do zrobienia",
-  "Później". `$Forwarded`, `$MDNSent`, `$Junk`, `$NotJunk`, `NonJunk`, `$Important`,
+  Thunderbird `$label1`-`$label5` become labels with fixed names (currently the Polish names of
+  Thunderbird's default tags, see `internal/mail/keywords.go`). `$Forwarded`, `$MDNSent`, `$Junk`, `$NotJunk`, `NonJunk`, `$Important`,
   `$Phishing` and `$SiloSnoozed` never become labels. A tag set elsewhere shows up within
   seconds in INBOX (IDLE) and within `SILO_SYNC_POLL_INTERVAL` in other folders.
 - Rename and delete queue one flags operation over every message of the label in every
   folder (`+new -old`, or `-old`).
+- `PATCH /labels/{id}` changes `name`, colours, visibility and `parentId`. `parentId` moves a user
+  label under another user label of the account (`null`: top level; itself, a descendant or
+  anything else is `422 invalid_parent`); the keyword stays, since it is the slug of the leaf name
+  only (`labels.name` holds no path; renaming assigns a new keyword from the new leaf name).
 - `GET /labels` gives user labels a `keywordState`: `mirrored`; `local_only` (the server
   keeps no keywords or refused them: the label exists only in Silo, `account.error`
   `keywords_unsupported`); `partial` with `localOnlyFolders` (`f_` ids): a keyword
@@ -598,7 +720,7 @@ Sources 1 to 3 run in parallel with 3 s each; the first one (in rank order) that
 has both servers cancels the worse ones. Guesses get another 3 s, the whole call
 at most 8 s. In the autoconfig format POP3 servers, `socketType` `plain` and
 servers without a password or OAuth2 method are skipped (with the reason in
-`sources`); OAuth2 is noted there for the OAuth2 work of phase 5.
+`sources`); OAuth2 methods are noted there.
 
 With `SILO_ALLOW_CUSTOM_SERVERS=false` in mode `imap` users can only add the
 default servers, so the endpoint contacts nothing and answers at once with
@@ -624,7 +746,7 @@ Silo stores the OAuth2 refresh token, encrypted with `SILO_SECRET_KEY` like a
 password (AAD = account id, re-encrypted by `rotate-secrets`), and logs in to
 IMAP and SMTP with `AUTHENTICATE XOAUTH2` / `AUTH XOAUTH2` and a fresh access
 token. The admin registers one OAuth application per provider (instructions:
-`docs/admin/oauth.md` in the `silo` repository) and sets:
+[`docs/admin/oauth.md`](https://github.com/silopost/silo/blob/main/docs/admin/oauth.md) in the `silo` repository) and sets:
 
 | Variable | Meaning |
 |---|---|
@@ -649,7 +771,7 @@ e.g. `https://mail.example.com/api/v1/oauth/google/callback`.
 
 Gmail's SMTP is used on 465 (TLS from the first byte, nothing in clear text to
 strip) rather than 587; Microsoft offers only 587 + STARTTLS. Both providers
-store what is sent through their SMTP in Sent themselves (plan 3.9), so
+store what is sent through their SMTP in Sent themselves, so
 `sentAppend` is off; it can still be turned on with `PATCH /accounts/{id}`.
 `prompt=consent` makes Google return a refresh token on every sign-in, also a
 second one.
@@ -714,7 +836,7 @@ for the mailbox).
 
 The `provider=gmail` mode with Gmail's extensions (`X-GM-LABELS`, `X-GM-MSGID`,
 `X-GM-THRID`, syncing only All Mail, Trash and Spam) is postponed to 1.1. Gmail
-accounts, with OAuth or an app password, use the generic mode of plan 3.4:
+accounts, with OAuth or an app password, use the generic mode:
 
 - Silo syncs INBOX and the special folders (`[Gmail]/All Mail` = `\All`, Sent
   Mail, Drafts, Trash, Spam). A message in INBOX is also in All Mail; dedup
@@ -814,7 +936,7 @@ working at once.
 
 ## Backup and restore
 
-Postgres holds two kinds of data (plan 3.3, 4.1): the **cache** (messages,
+Postgres holds two kinds of data: the **cache** (messages,
 folders, threads, system labels, mirror blobs), which the sync rebuilds from
 the IMAP server, and the **metadata** that exists only in Silo. A metadata
 backup is one JSON document:
@@ -880,22 +1002,71 @@ empty.
 hash), so the server needs temporary disk space for the largest blob.
 Switching backends does not move existing blobs.
 
+## Running in production
+
+Run the published image `ghcr.io/silopost/silo-server` with the production Compose stack of the
+[`silo`](https://github.com/silopost/silo) repository (Caddy with TLS, Postgres 17, silo-web); its
+README and the administrator guide cover installation, the first admin, backups, S3, fail2ban and
+OAuth2. In short:
+
+- The image is distroless and runs as nonroot (65532); `ENTRYPOINT /silo-server`, `CMD serve`,
+  port 8080. The blob directory (`SILO_BLOB_FS_DIR`, default `/data/blobs`) must be a volume
+  writable by that user.
+- Put it behind a TLS-terminating reverse proxy, set `SILO_PUBLIC_URL` to the `https://` address
+  users open and `SILO_TRUSTED_PROXIES` to the proxy's address or network.
+- `/api/v1/events` is a long-lived SSE stream: disable response buffering and compression for it
+  in the proxy.
+- `serve` migrates the database at start-up (under an advisory lock); `--migrate=false` turns that
+  off.
+- Back up `SILO_SECRET_KEY` separately from the database.
+
+### Upgrades
+
+`scripts/upgrade-test.sh` checks the upgrade path end to end with Docker:
+the previous release (`PREVIOUS_TAG`, default the last `v*` tag on `main`) is
+built from `git archive`, migrated, started against Postgres 17 and Dovecot,
+seeded through the API (sign-in, four messages, a user label on a thread and,
+from `v0.4.0` on, a filter and a thread snoozed for an hour);
+then the image of the working tree migrates the same database (the schema
+version must grow), starts, signs the same user in, must list the same INBOX
+with the label, still list the snoozed thread under `SNOOZED` with the same wake
+time, still have the filter, report its own version in `/meta` and pass `reconcile`.
+Containers, volume, network and images are named `silo-upg-*` and removed at
+the end (`KEEP=1` keeps them). It runs in CI as `.github/workflows/upgrade.yml`
+(also by hand with a `previous_tag` input).
+
+```sh
+PREVIOUS_TAG=v0.4.0 scripts/upgrade-test.sh
+```
+
+Migrations are additive within a release. A release that breaks older web clients raises
+`MinWebVersion` (`internal/http/api/api.go`, reported as `minWebVersion` in `GET /meta`); for
+0.5.0 it is `0.3.0`.
+
 ## Development
+
+```sh
+make build      # CGO_ENABLED=0 static binary in bin/silo-server, version from git describe
+make run        # SILO_LOG_FORMAT=text go run ./cmd/silo-server serve
+make test       # go test -race ./... (needs a C compiler for -race)
+make lint       # golangci-lint run ./...
+make sqlc       # regenerate internal/store/sqlcgen
+make openapi    # regenerate api/openapi.yaml (no database needed)
+```
 
 - **Schema**: `migrations/` (golang-migrate, embedded). Queries live in
   `internal/store/queries/*.sql`; every query touching a user-owned table must
   filter on `user_id` (checked by a test). After changing either, run
   `make sqlc` and commit `internal/store/sqlcgen`.
 - **API contract**: huma operations in `internal/http/api`. After changing
-  them, run `make openapi` and commit `api/openapi.yaml`.
-- **Tests**: `go test ./...` runs integration tests against a throwaway
-  Postgres (testcontainers). They are skipped with `-short` or when Docker is
-  unavailable; set `SILO_REQUIRE_DOCKER=true` to make that a failure (CI does).
-  `make test` uses `-race`, which needs a C compiler.
+  them, run `make openapi` and commit `api/openapi.yaml`. CI fails when either generated file is
+  out of date.
+- **Hot reload**: the `dev` Docker target runs [air](https://github.com/air-verse/air) with
+  `.air.toml`; the `silo` dev stack mounts this repository at `/src`.
 
 ### Migrations and background jobs
 
-Migrations of Faza 4 (all additive: new columns, tables and indexes):
+Migrations of phase 4 (all additive: new columns, tables and indexes):
 
 | Migration | Adds |
 |---|---|
@@ -904,7 +1075,7 @@ Migrations of Faza 4 (all additive: new columns, tables and indexes):
 | `000008_thumbnails` | table `thumbnails` (cache of attachment thumbnails per source blob and size) |
 | `000009_label_folders_rebuild` | `label_folder_state` (per-folder keyword state, `keywordState: partial`) and `account_rebuilds` (cache rebuild of an account) |
 
-Migrations of Faza 5 (numbered from `000050`, after the Faza 4 range; additive):
+Migrations of phase 5 (numbered from `000050`, after the phase 4 range; additive):
 
 | Migration | Adds |
 |---|---|
@@ -928,6 +1099,36 @@ cache rebuild run in the sync engine):
 The search re-index (`search_ver`) is not a job: `serve` runs it once in the
 background at start-up until no row has an older tokenizer version.
 
+## Testing
+
+```sh
+go test ./...                                   # unit and integration tests
+go test -short ./...                            # unit tests only (skips Docker-based tests)
+SILO_REQUIRE_DOCKER=true go test -race ./...    # what CI runs: a missing Docker is a failure
+```
+
+Integration tests start throwaway containers with [testcontainers](https://golang.testcontainers.org/):
+Postgres 17 for the store and API tests, Dovecot for IMAP (below) and MinIO for S3Store. They are
+skipped with `-short` or when Docker is unavailable; `SILO_REQUIRE_DOCKER=true` makes that a
+failure. `make test` adds `-race`, which needs a C compiler (cgo). CI (`.github/workflows/ci.yml`)
+runs `go build`, `go vet`, `go test -race` with `SILO_REQUIRE_DOCKER=true`, checks that sqlc and
+OpenAPI output are up to date and builds the image.
+
+### Benchmarks
+
+Gated by environment variables so that they never run by accident:
+
+```sh
+SILO_BENCH_INBOX=true go test ./internal/mailview -run TestInboxListBenchmark -v
+SILO_BENCH_SEARCH=true SILO_BENCH_MESSAGES=1000000 go test ./internal/mailview -run TestSearchBenchmark -v
+```
+
+The inbox benchmark (nightly workflow, `.github/workflows/nightly.yml`) loads 100k threads / 300k
+messages (`SILO_BENCH_THREADS` changes the size) and checks p95 < 50 ms and the
+`thread_labels_list` plan of the inbox query. The search benchmark loads 1M messages
+(`SILO_BENCH_MESSAGES`) and checks search p95 < 500 ms for one word and `from:`;
+`SILO_BENCH_EXPLAIN=true` prints the query plans.
+
 ### IMAP integration tests
 
 `internal/imapx` and the future sync engine are tested against a real Dovecot
@@ -944,7 +1145,7 @@ the server advertises:
 | `gmail-like` | Dovecot defaults, Gmail's folders (`[Gmail]/All Mail` = `\All`, ...) | Gmail in generic mode (`internal/sync`) |
 | `oauth2` | Dovecot defaults plus `AUTH=XOAUTH2`; tokens checked at the fake provider of `testutil/oauthtest` (`imaptest.StartOAuth2`) | XOAUTH2 (`internal/imapx`, `internal/http/api`) |
 
-Large mailbox (DoD of Faza 5: 200k messages, RAM < 512 MB): `TestInitialSync` takes
+Large mailbox (target: 200k messages, RAM < 512 MB): `TestInitialSync` takes
 its size from `SILO_SYNC_TEST_MESSAGES` (default 2000) and samples the memory of the
 test process every 2 s while the initial sync runs (Go `Sys`/`HeapInuse` and the
 resident set: `GetProcessMemoryInfo` on Windows, `/proc/self/status` on Linux).
@@ -965,3 +1166,77 @@ Config files and Dovecot 2.4 notes: `internal/testutil/imaptest/testdata/imap/RE
 Same rules as Postgres tests: skipped with `-short` or without Docker, a failure
 with `SILO_REQUIRE_DOCKER=true`. `internal/imapx/spike_test.go` records what
 go-imap/v2 can and cannot do; run it with `-v` to see the findings.
+
+## Project structure
+
+```text
+silo-server/
+├── cmd/
+│   ├── silo-server/        # main binary: serve, migrate, user, backup and maintenance commands
+│   └── silo-openapi/       # writes api/openapi.yaml from the huma operations
+├── api/openapi.yaml        # generated API contract (committed)
+├── migrations/             # golang-migrate SQL migrations, embedded in the binary
+├── internal/
+│   ├── config/             # SILO_* environment configuration and validation
+│   ├── http/               # HTTP server, middleware and the huma API (http/api)
+│   ├── auth/, totp/        # sessions, bearer tokens, mode local, TOTP
+│   ├── accounts/, discover/, oauth/   # mail accounts, autoconfiguration, OAuth2
+│   ├── imapx/, sync/       # IMAP client layer and the sync engine
+│   ├── mail/, mailview/, search/      # ingest, threading, read model, search parser and matcher
+│   ├── ops/, drafts/, filters/        # write-back and undo, compose and sending, filters
+│   ├── events/, worker/    # SSE events, Postgres job queue
+│   ├── backup/, blob/, secrets/       # metadata backup, fs/S3 blob stores, encryption
+│   ├── admin/, ratelimit/, seclog/, netx/   # admin API, rate limits, security log, anti-SSRF dialer
+│   ├── store/              # Postgres access, sqlc queries (store/queries) and generated code (store/sqlcgen)
+│   ├── testutil/           # test helpers: pgtest, imaptest (Dovecot), smtptest, oauthtest (fake provider)
+│   └── version/
+├── scripts/upgrade-test.sh # upgrade test from the previous release
+├── Dockerfile              # targets dev (air) and prod (distroless)
+└── Makefile
+```
+
+## Status and roadmap
+
+`silo-server` 0.5.0 implements the scope planned for 1.0; the API is additive since 0.2.0 but may
+still change before 1.0 (changes are listed in the
+[compatibility matrix](https://github.com/silopost/silo/blob/main/docs/compat-matrix.md)).
+
+Known limitations:
+
+- **OAuth2 with Gmail and Microsoft 365 has not been tested against live accounts**; it is tested
+  against a fake provider and Dovecot with `AUTH=XOAUTH2`. The manual test is described under
+  [OAuth2](#oauth2-gmail-microsoft-365).
+- No PDF thumbnails (no cgo-free renderer: `415 thumbnail_unsupported`) and no bounce/DSN
+  handling.
+- Rate limits are kept in process memory (one instance).
+- Migrating blobs from `fs` to `s3` is a manual copy and has not been tested end to end.
+
+Deferred to 1.1:
+
+- **`provider=gmail` mode** (`X-GM-LABELS`, `X-GM-MSGID`, `X-GM-THRID`): Gmail accounts
+  sync in generic mode (folders, `\All` with dedup); Gmail labels are not mapped to Silo
+  labels and threads come from Silo's own threading. There is no test account and no X-GM
+  simulator (Dovecot does not offer `X-GM-EXT-1`).
+- **ManageSieve**: filters run in Silo only (on new INBOX mail while Silo runs); they are
+  not exported to the mail server as Sieve scripts.
+- **OAuth2 for native clients**: the sign-in is bound to the browser that started it by
+  the `silo_oauth_state` cookie (protection against login CSRF), so a bearer client that
+  opens an external browser gets `oauth_state_invalid`; it needs a variant with the
+  app's redirect URI (silo-mobile).
+- **Delta API for offline clients**: `GET /changes` and `ETag`/`If-None-Match` on lists (today only
+  immutable contents carry an `ETag`); needed by silo-mobile, not by silo-web.
+- Push notification devices for silo-mobile.
+
+## Contributing
+
+The main contribution guide lives in the
+[`silo` repository](https://github.com/silopost/silo/blob/main/CONTRIBUTING.md); the rules
+specific to this repository (API compatibility, `MinWebVersion`, migrations) are in
+[CONTRIBUTING.md](CONTRIBUTING.md). In short: Conventional Commits, `make lint test` before a pull
+request, regenerate and commit `internal/store/sqlcgen` and `api/openapi.yaml` when you change
+queries or the API, and keep CI green.
+
+## License
+
+[GNU Affero General Public License v3.0](LICENSE). If you run a modified version of `silo-server`
+as a network service, the AGPL requires you to offer its source code to the users of that service.
