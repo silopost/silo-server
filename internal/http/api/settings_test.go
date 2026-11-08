@@ -39,7 +39,7 @@ func TestSettings(t *testing.T) {
 
 	def := get()
 	if def.Density != "default" || def.UndoSendSeconds != 5 || def.Timezone != "UTC" || !def.KeyboardShortcutsEnabled ||
-		!def.ConversationView || def.DesktopNotifications || def.UpdatedAt != nil || def.ActiveAccountID == nil {
+		!def.ConversationView || def.DesktopNotifications || def.UpdatedAt != nil || def.ActiveAccountID == nil || def.Language != "en" {
 		t.Fatalf("defaults: %+v", def)
 	}
 
@@ -58,6 +58,9 @@ func TestSettings(t *testing.T) {
 			{"timezone Local", map[string]any{"timezone": "Local"}, api.CodeInvalidTimezone},
 			{"activeAccountId unknown", map[string]any{"activeAccountId": "acc_zzzz"}, api.CodeInvalidSetting},
 			{"activeAccountId garbage", map[string]any{"activeAccountId": "x"}, api.CodeInvalidSetting},
+			{"language unknown", map[string]any{"language": "de"}, api.CodeInvalidSetting},
+			{"language region", map[string]any{"language": "en-US"}, api.CodeInvalidSetting},
+			{"language empty", map[string]any{"language": ""}, api.CodeInvalidSetting},
 		} {
 			if r, _ := patch(c.body, ""); r.Code != http.StatusUnprocessableEntity || r.code() != c.code {
 				t.Errorf("%s: %d %s", c.name, r.Code, r.Body)
@@ -144,6 +147,34 @@ VALUES ($1, 'settings-other@silo.test', 'h', 1, 'none', 'h', 25, 'none', 'other'
 		// An empty signature is allowed.
 		if r, s := patch(map[string]any{"signature": ""}, ""); r.Code != http.StatusOK || s.Signature != "" {
 			t.Errorf("empty signature: %d %s", r.Code, r.Body)
+		}
+	})
+
+	t.Run("language", func(t *testing.T) {
+		r, s := patch(map[string]any{"language": "pl"}, "")
+		if r.Code != http.StatusOK || s.Language != "pl" {
+			t.Fatalf("patch language: %d %s", r.Code, r.Body)
+		}
+		if g := get(); g.Language != "pl" {
+			t.Errorf("GET /settings language = %q", g.Language)
+		}
+		var sb api.SessionBody
+		serve(m.web, m.as(req{method: "GET", path: "/session"})).json(&sb)
+		if sb.Settings.Language != "pl" {
+			t.Errorf("GET /session language = %q", sb.Settings.Language)
+		}
+		// Other patches keep it; an unknown stored value reads as the default.
+		if r, s := patch(map[string]any{"density": "compact"}, ""); r.Code != http.StatusOK || s.Language != "pl" {
+			t.Errorf("partial patch dropped language: %d %s", r.Code, r.Body)
+		}
+		if _, err := m.pool.Exec(ctx, `UPDATE users SET settings = settings || '{"language":"xx"}'::jsonb`); err != nil {
+			t.Fatal(err)
+		}
+		if g := get(); g.Language != "en" {
+			t.Errorf("unsupported stored language = %q, want en", g.Language)
+		}
+		if r, s := patch(map[string]any{"language": "en"}, ""); r.Code != http.StatusOK || s.Language != "en" {
+			t.Errorf("back to en: %d %s", r.Code, r.Body)
 		}
 	})
 

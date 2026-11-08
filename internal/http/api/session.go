@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"slices"
 	"time"
 
 	"github.com/danielgtaylor/huma/v2"
@@ -32,6 +33,7 @@ type Settings struct {
 	ConversationView         bool       `json:"conversationView"`
 	ActiveAccountID          *string    `json:"activeAccountId" doc:"Account shown by default; the first account when unset."`
 	DesktopNotifications     bool       `json:"desktopNotifications" doc:"Whether the user wants desktop/system notifications of new mail; each client asks the system for its own permission."`
+	Language                 string     `json:"language" enum:"en,pl" doc:"UI language shared by every client of the user (BCP 47 code of a supported language); en until the user chooses one."`
 	UpdatedAt                *time.Time `json:"updatedAt" doc:"Time of the last PATCH /settings; null before the first one."`
 }
 
@@ -286,7 +288,7 @@ func (d *deps) sessionBody(ctx context.Context, user sqlcgen.User, sess sqlcgen.
 func settingsFrom(raw []byte, accs []sqlcgen.Account) Settings {
 	s := Settings{
 		Density: "default", UndoSendSeconds: 5, Timezone: "UTC",
-		KeyboardShortcutsEnabled: true, ConversationView: true,
+		KeyboardShortcutsEnabled: true, ConversationView: true, Language: DefaultLanguage,
 	}
 	var stored struct {
 		Density                  *string `json:"density"`
@@ -297,6 +299,7 @@ func settingsFrom(raw []byte, accs []sqlcgen.Account) Settings {
 		ConversationView         *bool   `json:"conversation_view"`
 		ActiveAccountID          *int64  `json:"active_account_id"`
 		DesktopNotifications     *bool   `json:"desktop_notifications"`
+		Language                 *string `json:"language"`
 		UpdatedAt                *string `json:"updated_at"`
 	}
 	_ = json.Unmarshal(raw, &stored) // malformed settings fall back to defaults
@@ -317,6 +320,9 @@ func settingsFrom(raw []byte, accs []sqlcgen.Account) Settings {
 	}
 	if stored.DesktopNotifications != nil {
 		s.DesktopNotifications = *stored.DesktopNotifications
+	}
+	if stored.Language != nil && slices.Contains(Languages, *stored.Language) {
+		s.Language = *stored.Language
 	}
 	if stored.UpdatedAt != nil {
 		if t, err := time.Parse(time.RFC3339Nano, *stored.UpdatedAt); err == nil {

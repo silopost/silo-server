@@ -27,7 +27,13 @@ const MaxSignatureBytes = 32 << 10
 var (
 	densities          = []string{"default", "comfortable", "compact"}
 	undoSendSecondsSet = []int{5, 10, 20, 30}
+	// Languages are the UI languages the clients ship (BCP 47 codes); keep the
+	// enum of Settings.language in step.
+	Languages = []string{"en", "pl"}
 )
+
+// DefaultLanguage is settings.language of a user who never chose one.
+const DefaultLanguage = "en"
 
 // NullableID is a JSON value that may be absent, null or a string: PATCH
 // tells "clear" (null) from "keep" (absent).
@@ -68,6 +74,7 @@ type SettingsPatch struct {
 	ConversationView         *bool      `json:"conversationView,omitempty"`
 	ActiveAccountID          NullableID `json:"activeAccountId,omitempty"`
 	DesktopNotifications     *bool      `json:"desktopNotifications,omitempty"`
+	Language                 *string    `json:"language,omitempty" example:"pl" doc:"UI language: en or pl; else 422 invalid_setting."`
 }
 
 type settingsOutput struct{ Body Settings }
@@ -113,7 +120,7 @@ func (d *deps) registerSettings(a huma.API) {
 		Description: "JSON merge: only the fields sent change; activeAccountId null clears it. The answer is the whole " +
 			"settings object with updatedAt; the other sessions of the user get settings.updated {updatedAt} and " +
 			"reload GET /settings. 422 invalid_setting (density, undoSendSeconds, signature over 32 KiB, an " +
-			"activeAccountId that is not the user's) or invalid_timezone.",
+			"activeAccountId that is not the user's, an unsupported language) or invalid_timezone.",
 		Errors: []int{http.StatusBadRequest, http.StatusUnauthorized, http.StatusForbidden, http.StatusUnprocessableEntity},
 	}), func(ctx context.Context, in *patchSettingsInput) (*settingsOutput, error) {
 		userID := sessionFrom(ctx).UserID
@@ -157,6 +164,12 @@ func (d *deps) registerSettings(a huma.API) {
 		}
 		if b.DesktopNotifications != nil {
 			set["desktop_notifications"] = *b.DesktopNotifications
+		}
+		if b.Language != nil {
+			if !slices.Contains(Languages, *b.Language) {
+				return nil, invalidSetting("language must be one of en, pl.")
+			}
+			set["language"] = *b.Language
 		}
 		if b.ActiveAccountID.Set {
 			if b.ActiveAccountID.Value == nil {

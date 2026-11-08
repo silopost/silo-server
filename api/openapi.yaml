@@ -2008,6 +2008,12 @@ components:
           type: boolean
         keyboardShortcutsEnabled:
           type: boolean
+        language:
+          description: UI language shared by every client of the user (BCP 47 code of a supported language); en until the user chooses one.
+          enum:
+            - en
+            - pl
+          type: string
         signature:
           type: string
         timezone:
@@ -2034,6 +2040,7 @@ components:
         - conversationView
         - activeAccountId
         - desktopNotifications
+        - language
         - updatedAt
       type: object
     SettingsPatch:
@@ -2055,6 +2062,11 @@ components:
           type: boolean
         keyboardShortcutsEnabled:
           type: boolean
+        language:
+          description: "UI language: en or pl; else 422 invalid_setting."
+          examples:
+            - pl
+          type: string
         signature:
           description: HTML, at most 32 KiB (else 422 invalid_setting); stored sanitized like message HTML.
           type: string
@@ -5884,7 +5896,7 @@ paths:
       tags:
         - session
     patch:
-      description: "JSON merge: only the fields sent change; activeAccountId null clears it. The answer is the whole settings object with updatedAt; the other sessions of the user get settings.updated {updatedAt} and reload GET /settings. 422 invalid_setting (density, undoSendSeconds, signature over 32 KiB, an activeAccountId that is not the user's) or invalid_timezone."
+      description: "JSON merge: only the fields sent change; activeAccountId null clears it. The answer is the whole settings object with updatedAt; the other sessions of the user get settings.updated {updatedAt} and reload GET /settings. 422 invalid_setting (density, undoSendSeconds, signature over 32 KiB, an activeAccountId that is not the user's, an unsupported language) or invalid_timezone."
       operationId: updateSettings
       parameters:
         - description: Client id, echoed as origin in settings.updated.
