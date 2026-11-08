@@ -322,7 +322,8 @@ accept `50MB` style values, rates `5MB/s`, durations `5m`. Worth knowing:
   search and filters, snooze presets; else `422 invalid_timezone`),
   `keyboardShortcutsEnabled`, `conversationView`, `activeAccountId` (an account of the
   user), `desktopNotifications` (the preference is shared; each client asks the system
-  for its own permission); other bad values are `422 invalid_setting`. The answer carries
+  for its own permission), `language` (UI language of every client: `en` or `pl`, `en`
+  until chosen; ADR 0015 in `silo`); other bad values are `422 invalid_setting`. The answer carries
   `updatedAt` (`users.settings.updated_at`); other sessions get `settings.updated
   {updatedAt}` and reload.
 - Sessions and accounts (`internal/auth`, `internal/accounts`): `POST/GET/DELETE /session`, `GET /sessions`, `DELETE /sessions/{id}`, `DELETE /sessions?others=true` (every session but the current one), `GET/POST /accounts`, `POST /accounts/test`, `GET/PATCH/DELETE /accounts/{id}`, `GET /accounts/{id}/folders`, `POST /accounts/{id}/resync`, `GET /accounts/{id}/sync-status`, `GET /meta`. Accounts carry `position` and are listed in that order (`GET /session`, `GET /accounts`). Migration `000005` turns `sent_append` on for generic accounts created before sending existed. The full list is `api/openapi.yaml`.
