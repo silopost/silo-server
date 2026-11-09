@@ -309,7 +309,7 @@ func TestDeferAndPermanent(t *testing.T) {
 	var mu sync.Mutex
 	runs := 0
 	w := New(Options{Pool: pool, PollInterval: 50 * time.Millisecond, Backoff: func(int) time.Duration { return 20 * time.Millisecond }})
-	w.Register("waiting", func(_ context.Context, j Job) error {
+	w.Register("waiting", func(_ context.Context, _ Job) error {
 		mu.Lock()
 		defer mu.Unlock()
 		runs++

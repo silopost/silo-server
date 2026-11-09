@@ -307,11 +307,11 @@ func (w *AccountWorker) connectAndRun(ctx context.Context, attempt *int) error {
 	}
 	s := newSession(w, acc, sc)
 	defer s.close()
-	if st, err := mail.LoadRebuild(ctx, w.d.Pool, w.id); err != nil {
+	st, err := mail.LoadRebuild(ctx, w.d.Pool, w.id)
+	if err != nil {
 		return err
-	} else {
-		s.restoring = st.Restoring
 	}
+	s.restoring = st.Restoring
 	if err := s.saveCapabilities(ctx); err != nil {
 		return err
 	}

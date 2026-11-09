@@ -45,7 +45,7 @@ type fakeDNS struct {
 	hang  bool                  // SRV lookups block until the context ends
 }
 
-func (f *fakeDNS) LookupNetIP(ctx context.Context, _, host string) ([]netip.Addr, error) {
+func (f *fakeDNS) LookupNetIP(_ context.Context, _, host string) ([]netip.Addr, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if ip, ok := f.hosts[host]; ok {
@@ -271,7 +271,7 @@ func TestAutoconfigOfDomain(t *testing.T) {
 
 func TestPlainServerSkipped(t *testing.T) {
 	w := newWorld(t)
-	w.mux["ispdb.test"] = func(rw http.ResponseWriter, r *http.Request) {
+	w.mux["ispdb.test"] = func(rw http.ResponseWriter, _ *http.Request) {
 		_, _ = rw.Write([]byte(`<clientConfig version="1.1"><emailProvider id="example.test">
 			<incomingServer type="imap"><hostname>imap.example.test</hostname><port>143</port><socketType>plain</socketType>
 			<username>%EMAILADDRESS%</username><authentication>password-cleartext</authentication></incomingServer>
@@ -447,7 +447,7 @@ func TestPrivateAddressRefused(t *testing.T) {
 
 func TestResponseLimit(t *testing.T) {
 	w := newWorld(t)
-	w.mux["ispdb.test"] = func(rw http.ResponseWriter, r *http.Request) {
+	w.mux["ispdb.test"] = func(rw http.ResponseWriter, _ *http.Request) {
 		_, _ = rw.Write([]byte("<clientConfig>" + strings.Repeat(" ", MaxResponseBytes) + "</clientConfig>"))
 	}
 	r := run(t, w.discoverer(), "jan@example.test")
@@ -460,7 +460,7 @@ func TestTimeout(t *testing.T) {
 	w := newWorld(t)
 	release := make(chan struct{})
 	t.Cleanup(func() { close(release) })
-	w.mux["ispdb.test"] = func(rw http.ResponseWriter, r *http.Request) {
+	w.mux["ispdb.test"] = func(_ http.ResponseWriter, r *http.Request) {
 		select {
 		case <-r.Context().Done():
 		case <-release:
@@ -521,7 +521,7 @@ func TestBetterSourceCancelsSlowerOnes(t *testing.T) {
 	w.dns.hosts["autoconfig.example.test"] = ipAutoconfig
 	release := make(chan struct{})
 	t.Cleanup(func() { close(release) })
-	w.mux["autoconfig.example.test"] = func(rw http.ResponseWriter, r *http.Request) {
+	w.mux["autoconfig.example.test"] = func(_ http.ResponseWriter, r *http.Request) {
 		select {
 		case <-r.Context().Done():
 		case <-release:

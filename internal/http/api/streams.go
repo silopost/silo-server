@@ -24,11 +24,11 @@ type streamSlots struct {
 	open map[int64]int
 }
 
-func newStreamSlots(max int) *streamSlots {
-	if max <= 0 {
-		max = MaxStreamsPerUser
+func newStreamSlots(limit int) *streamSlots {
+	if limit <= 0 {
+		limit = MaxStreamsPerUser
 	}
-	return &streamSlots{max: max, open: map[int64]int{}}
+	return &streamSlots{max: limit, open: map[int64]int{}}
 }
 
 // acquire takes a slot of userID; release must be called once when ok.

@@ -57,7 +57,7 @@ type resp struct {
 }
 
 func (r resp) json(v any) {
-	r.ResponseRecorder.Result() // flush headers
+	_ = r.Result().Body.Close() // Result flushes the headers; the body is in r.Body
 	if err := json.Unmarshal(r.Body.Bytes(), v); err != nil {
 		panic("decode " + r.Body.String() + ": " + err.Error())
 	}
@@ -764,8 +764,8 @@ func TestSessionAndAccounts(t *testing.T) {
 	})
 
 	t.Run("constant time", func(t *testing.T) {
-		const min = 400 * time.Millisecond
-		slow := e.router(e.cfg, auth.Options{MinLoginDuration: min})
+		const minDur = 400 * time.Millisecond
+		slow := e.router(e.cfg, auth.Options{MinLoginDuration: minDur})
 		for name, body := range map[string]map[string]string{
 			"wrong password":  {"email": user, "password": "wrong"},
 			"malformed login": {"email": "a b", "password": "x"},
@@ -776,8 +776,8 @@ func TestSessionAndAccounts(t *testing.T) {
 			if r.Code != http.StatusUnauthorized {
 				t.Fatalf("%s: status %d", name, r.Code)
 			}
-			if d := time.Since(start); d < min {
-				t.Errorf("%s answered in %v, want >= %v", name, d, min)
+			if d := time.Since(start); d < minDur {
+				t.Errorf("%s answered in %v, want >= %v", name, d, minDur)
 			}
 		}
 	})

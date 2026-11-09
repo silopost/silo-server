@@ -197,7 +197,7 @@ type xmlServer struct {
 // incomingServer and SMTP outgoingServer of the first emailProvider. POP3,
 // unencrypted servers and servers without a password or OAuth2 method are
 // skipped (and noted in the detail).
-func parseConfig(data []byte, email, domain string) found {
+func parseConfig(data []byte, _, domain string) found {
 	var cfg clientConfig
 	if err := xml.Unmarshal(data, &cfg); err != nil {
 		return found{err: fmt.Errorf("invalid autoconfig XML: %w", err)}

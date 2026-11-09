@@ -551,7 +551,7 @@ func (s *session) storeFlags(ctx context.Context, c *conn, f *opFolder, ls []opL
 	}
 	add2, kwA := sys(add)
 	rem2, kwR := sys(remove)
-	kws := append(kwA, kwR...)
+	kws := slices.Concat(kwA, kwR)
 	if len(kws) == 0 {
 		return nil, nil, err
 	}

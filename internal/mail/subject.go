@@ -31,7 +31,7 @@ var genericSubjects = map[string]bool{
 // when the message has a List-Id, whitespace is collapsed, the result is
 // lower-cased and NFC-normalised. hadPrefix reports whether at least one
 // reply/forward prefix was removed.
-func NormalizeSubject(subject string, hasListID bool) (norm_ string, hadPrefix bool) {
+func NormalizeSubject(subject string, hasListID bool) (normalized string, hadPrefix bool) {
 	s := strings.TrimSpace(norm.NFC.String(subject))
 	for {
 		before := s

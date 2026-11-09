@@ -29,7 +29,9 @@ func TestSearchBenchmark(t *testing.T) {
 	}
 	msgs := 1_000_000
 	if v := os.Getenv("SILO_BENCH_MESSAGES"); v != "" {
-		fmt.Sscan(v, &msgs)
+		if _, err := fmt.Sscan(v, &msgs); err != nil {
+			t.Fatalf("SILO_BENCH_MESSAGES: %v", err)
+		}
 	}
 	threads := msgs / 3
 	ctx := context.Background()
@@ -126,7 +128,7 @@ WHERE t.account_id = $1`, acc)
 	}
 	if os.Getenv("SILO_BENCH_EXPLAIN") == "true" {
 		for _, q := range []string{"w3", "w19999", "from:dom7.pl"} {
-			explainSearch(t, ctx, pool, v, uid, acc, q)
+			explainSearch(ctx, t, pool, v, uid, acc, q)
 		}
 	}
 	run("word", []string{"w3", "w1500", "w19999", "w42", "w777"})
@@ -135,7 +137,7 @@ WHERE t.account_id = $1`, acc)
 }
 
 // explainSearch logs the plan of the hits CTE of a query.
-func explainSearch(t *testing.T, ctx context.Context, pool *pgxpool.Pool, v *mailview.View, uid, acc int64, q string) {
+func explainSearch(ctx context.Context, t *testing.T, pool *pgxpool.Pool, v *mailview.View, uid, acc int64, q string) {
 	t.Helper()
 	scope, err := v.SearchScope(ctx, uid, acc)
 	if err != nil {

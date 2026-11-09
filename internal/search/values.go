@@ -148,7 +148,7 @@ func checkTerm(key, value string, phrase bool) Term {
 	if a, ok := keyAlias[key]; ok {
 		key = a
 	}
-	ok := true
+	var ok bool
 	switch key {
 	case "is":
 		value = strings.ToLower(value)

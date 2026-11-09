@@ -70,7 +70,7 @@ const (
 // this long after the last change (plan 3.8: at least 30 s).
 const DefaultSyncDelay = 30 * time.Second
 
-// UploadMaxAge: an upload not pinned to a draft is deleted after it (plan 5.6).
+// UploadMaxAge is the age after which an upload not pinned to a draft is deleted (plan 5.6).
 const UploadMaxAge = 24 * time.Hour
 
 // Options configure a Service.
@@ -456,7 +456,7 @@ func (s *Service) Create(ctx context.Context, p CreateParams) (*Draft, error) {
 		}
 		nd.DraftFields = prefill(p.Mode, self, o, pc.quote)
 		for _, a := range pc.copies {
-			nd.HasAttachments = nd.HasAttachments || !(a.inline && a.cid != "")
+			nd.HasAttachments = nd.HasAttachments || !a.inline || a.cid == ""
 		}
 		inReplyTo = &p.ReplyTo
 		if p.Mode != ModeForward {

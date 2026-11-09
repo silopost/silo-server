@@ -87,7 +87,7 @@ func (s *Service) Untrash(ctx context.Context, userID int64, threadIDs []int64, 
 // good (\Deleted + UID EXPUNGE when the job runs). Threads without such
 // messages are refused.
 func (s *Service) Delete(ctx context.Context, userID int64, threadIDs []int64, origin string) (*Result, error) {
-	return s.run(ctx, userID, threadIDs, nil, origin, func(ctx context.Context, tx pgx.Tx, b *builder) error {
+	return s.run(ctx, userID, threadIDs, nil, origin, func(_ context.Context, _ pgx.Tx, b *builder) error {
 		for _, msg := range b.msgs {
 			for _, l := range msg.locs {
 				if l.role == "trash" || l.role == "junk" {

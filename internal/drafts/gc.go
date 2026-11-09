@@ -144,8 +144,8 @@ INSERT INTO jobs (kind) SELECT $1 WHERE NOT EXISTS (SELECT 1 FROM jobs WHERE kin
 	}
 }
 
-// EmptyDraftMaxAge: a draft never saved and still empty is deleted after it
-// (the compose window was closed without typing; plan 3.8).
+// EmptyDraftMaxAge is the age after which a draft never saved and still empty
+// is deleted (the compose window was closed without typing; plan 3.8).
 const EmptyDraftMaxAge = 24 * time.Hour
 
 // PurgeEmptyDrafts deletes drafts created by POST /drafts more than

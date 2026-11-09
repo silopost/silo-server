@@ -54,18 +54,19 @@ func main() {
 	timeout := fs.Duration("timeout", 3*time.Minute, "overall time limit")
 	_ = fs.Parse(os.Args[2:])
 
-	ctx, cancel := context.WithTimeout(context.Background(), *timeout)
-	defer cancel()
-	c := newClient(*base)
-	var err error
-	switch os.Args[1] {
-	case "seed":
-		err = seed(ctx, c, *imapAddr, *state)
-	case "verify":
-		err = verify(ctx, c, *state, *expect)
-	default:
-		err = fmt.Errorf("unknown command %q", os.Args[1])
-	}
+	err := func() error {
+		ctx, cancel := context.WithTimeout(context.Background(), *timeout)
+		defer cancel()
+		c := newClient(*base)
+		switch os.Args[1] {
+		case "seed":
+			return seed(ctx, c, *imapAddr, *state)
+		case "verify":
+			return verify(ctx, c, *state, *expect)
+		default:
+			return fmt.Errorf("unknown command %q", os.Args[1])
+		}
+	}()
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "upgradecheck:", err)
 		os.Exit(1)
@@ -358,7 +359,7 @@ func (c *client) login(ctx context.Context) (string, error) {
 // waitList waits until the account is live and the label (INBOX, SNOOZED) lists n threads with
 // no pending operation, and returns them normalised.
 func (c *client) waitList(ctx context.Context, acc, label string, n int) ([]Thread, error) {
-	last := "no answer"
+	var last string
 	for {
 		var st struct {
 			State string `json:"state"`

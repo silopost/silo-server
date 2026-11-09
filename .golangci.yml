@@ -7,6 +7,13 @@ linters:
     - gocritic
     - misspell
     - bodyclose
+  settings:
+    misspell:
+      # Polish folder names ("Elementy wysłane", "Nowe") are data that role
+      # detection and the tests match, not English typos.
+      ignore-rules:
+        - elementy
+        - nowe
   exclusions:
     presets:
       - std-error-handling

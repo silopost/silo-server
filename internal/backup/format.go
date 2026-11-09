@@ -49,13 +49,6 @@ const (
 	SectionOutbound         = "outbound"
 )
 
-// knownSections lists the sections this version reads.
-var knownSections = map[string]bool{
-	SectionUsers: true, SectionAccounts: true, SectionLabels: true, SectionLabelAssignments: true,
-	SectionSnoozes: true, SectionFilters: true, SectionSearchHistory: true, SectionContacts: true,
-	SectionBlobs: true, SectionDrafts: true, SectionOutbound: true,
-}
-
 // Header is the part of the document before "sections".
 type Header struct {
 	Format        string    `json:"format"`

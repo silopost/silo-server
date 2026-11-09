@@ -181,12 +181,12 @@ func shortAge(i, count int) time.Duration {
 func realisticAge(i, count int) time.Duration {
 	const month = 30 * 24 * time.Hour
 	recent := count / 10
-	if k := count - i; k <= recent {
+	k := count - i
+	if k <= recent {
 		return time.Duration(float64(month) * float64(k) / float64(recent+1))
-	} else {
-		old := count - recent
-		return month + time.Duration(float64(3*365*24*time.Hour-month)*float64(k-recent)/float64(old+1))
 	}
+	old := count - recent
+	return month + time.Duration(float64(3*365*24*time.Hour-month)*float64(k-recent)/float64(old+1))
 }
 
 // populateAged is populate with a custom age profile (age of message i of count).

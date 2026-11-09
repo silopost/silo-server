@@ -21,7 +21,7 @@ import (
 	"github.com/silopost/silo-server/internal/blob"
 )
 
-// ErrThumbnailUnsupported: the attachment is not an image Silo can make a
+// ErrThumbnailUnsupported means the attachment is not an image Silo can make a
 // thumbnail of (plan 5.1; PDF needs a renderer that Silo, built without cgo,
 // does not have), or the picture cannot be decoded or is too large.
 var ErrThumbnailUnsupported = errors.New("mailview: no thumbnail for this attachment")
@@ -140,9 +140,8 @@ INSERT INTO thumbnails (source_sha256, size, thumb_sha256, content_type, width, 
 	})
 	if err != nil {
 		var pgErr interface{ SQLState() string }
-		if errors.As(err, &pgErr) && pgErr.SQLState() == "23505" { // made by a concurrent request
-			err = nil
-		} else {
+		// 23505: the row was made by a concurrent request; that is not an error.
+		if !errors.As(err, &pgErr) || pgErr.SQLState() != "23505" {
 			return nil, fmt.Errorf("mailview: record thumbnail: %w", err)
 		}
 	}

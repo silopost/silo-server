@@ -45,7 +45,9 @@ func TestInboxListBenchmark(t *testing.T) {
 	}
 	threads := 100_000
 	if v := os.Getenv("SILO_BENCH_THREADS"); v != "" {
-		fmt.Sscan(v, &threads)
+		if _, err := fmt.Sscan(v, &threads); err != nil {
+			t.Fatalf("SILO_BENCH_THREADS: %v", err)
+		}
 	}
 	ctx := context.Background()
 	url := pgtest.New(t)

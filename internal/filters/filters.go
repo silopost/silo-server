@@ -280,7 +280,7 @@ SELECT count(*) FROM labels WHERE id = ANY($1) AND user_id = $2 AND account_id =
 	return nil
 }
 
-// ErrUnsupported: forwardTo without a forwarder (never in silo-server).
+// ErrUnsupported is returned for forwardTo without a forwarder (never in silo-server).
 var ErrUnsupported = errors.New("filters: action not supported")
 
 const filterCols = `id, user_id, account_id, name, criteria, actions, enabled, position, created_at, updated_at`

@@ -176,7 +176,7 @@ func (d *Doc) TSVector() string {
 // quoteLexeme quotes a lexeme for a tsvector/tsquery literal. Tokens are
 // letters and digits only, but quoting keeps the literal safe regardless.
 func quoteLexeme(s string) string {
-	return "'" + strings.ReplaceAll(strings.ReplaceAll(s, `\`, `\`), "'", "''") + "'"
+	return "'" + strings.ReplaceAll(s, "'", "''") + "'"
 }
 
 // positions of the lexeme (or of every lexeme with the prefix), restricted

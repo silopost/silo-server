@@ -23,7 +23,7 @@ import (
 // copy as the local draft instead of creating a duplicate.
 const HeaderSiloDraftID = "X-Silo-Draft-Id"
 
-// ErrNoDraft: the message is not a local draft (no drafts row).
+// ErrNoDraft means the message is not a local draft (no drafts row).
 var ErrNoDraft = errors.New("mail: not a draft")
 
 // DraftFields are the parts of a draft mirrored on its local message, so that

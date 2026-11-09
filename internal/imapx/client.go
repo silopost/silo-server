@@ -19,6 +19,7 @@ import (
 // TLSMode selects how the connection is secured.
 type TLSMode string
 
+// TLS modes of a connection.
 const (
 	TLSImplicit TLSMode = "implicit" // TLS from the first byte (port 993)
 	TLSStartTLS TLSMode = "starttls" // plaintext greeting, then STARTTLS (port 143)

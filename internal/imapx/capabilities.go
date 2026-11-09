@@ -38,22 +38,49 @@ func (c Capabilities) Names() []string {
 	return out
 }
 
-func (c Capabilities) HasIdle() bool       { return c.set.Has(imap.CapIdle) }
-func (c Capabilities) HasMove() bool       { return c.set.Has(imap.CapMove) }
-func (c Capabilities) HasUIDPlus() bool    { return c.set.Has(imap.CapUIDPlus) }
-func (c Capabilities) HasCondstore() bool  { return c.set.Has(imap.CapCondStore) }
-func (c Capabilities) HasQRESYNC() bool    { return c.set.Has(imap.CapQResync) }
+// HasIdle reports whether IDLE is available.
+func (c Capabilities) HasIdle() bool { return c.set.Has(imap.CapIdle) }
+
+// HasMove reports whether MOVE is available.
+func (c Capabilities) HasMove() bool { return c.set.Has(imap.CapMove) }
+
+// HasUIDPlus reports whether UIDPLUS is available.
+func (c Capabilities) HasUIDPlus() bool { return c.set.Has(imap.CapUIDPlus) }
+
+// HasCondstore reports whether CONDSTORE is available.
+func (c Capabilities) HasCondstore() bool { return c.set.Has(imap.CapCondStore) }
+
+// HasQRESYNC reports whether QRESYNC is available.
+func (c Capabilities) HasQRESYNC() bool { return c.set.Has(imap.CapQResync) }
+
+// HasSpecialUse reports whether SPECIAL-USE is available.
 func (c Capabilities) HasSpecialUse() bool { return c.set.Has(imap.CapSpecialUse) }
+
+// HasCreateSpecialUse reports whether CREATE-SPECIAL-USE is available.
 func (c Capabilities) HasCreateSpecialUse() bool {
 	return c.set.Has(imap.CapCreateSpecialUse)
 }
+
+// HasListStatus reports whether LIST-STATUS is available.
 func (c Capabilities) HasListStatus() bool { return c.set.Has(imap.CapListStatus) }
-func (c Capabilities) HasESearch() bool    { return c.set.Has(imap.CapESearch) }
-func (c Capabilities) HasObjectID() bool   { return c.set.Has(imap.CapObjectID) }
-func (c Capabilities) HasNotify() bool     { return c.set.Has(imap.CapNotify) }
-func (c Capabilities) HasBinary() bool     { return c.set.Has(imap.CapBinary) }
+
+// HasESearch reports whether ESEARCH is available.
+func (c Capabilities) HasESearch() bool { return c.set.Has(imap.CapESearch) }
+
+// HasObjectID reports whether OBJECTID is available.
+func (c Capabilities) HasObjectID() bool { return c.set.Has(imap.CapObjectID) }
+
+// HasNotify reports whether NOTIFY is available.
+func (c Capabilities) HasNotify() bool { return c.set.Has(imap.CapNotify) }
+
+// HasBinary reports whether BINARY is available.
+func (c Capabilities) HasBinary() bool { return c.set.Has(imap.CapBinary) }
+
+// HasUTF8Accept reports whether UTF8=ACCEPT is available.
 func (c Capabilities) HasUTF8Accept() bool { return c.set.Has(imap.CapUTF8Accept) }
-func (c Capabilities) HasGmailExt() bool   { return c.set.Has("X-GM-EXT-1") }
+
+// HasGmailExt reports whether X-GM-EXT-1 (Gmail extensions) is available.
+func (c Capabilities) HasGmailExt() bool { return c.set.Has("X-GM-EXT-1") }
 
 // LoginDisabled reports LOGINDISABLED (cleartext LOGIN refused until TLS).
 func (c Capabilities) LoginDisabled() bool { return c.set.Has("LOGINDISABLED") }

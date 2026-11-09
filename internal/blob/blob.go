@@ -13,6 +13,8 @@ import (
 var ErrNotFound = errors.New("blob: not found")
 
 // BlobStore is the storage backend selected by SILO_BLOB_BACKEND.
+//
+//nolint:revive // exported: blob.BlobStore is the established name across the code base.
 type BlobStore interface {
 	// Put stores r and returns its lower-case hex SHA-256 and size. It is
 	// atomic: readers never see a partial blob. Putting content that already

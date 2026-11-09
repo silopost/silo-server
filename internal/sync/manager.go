@@ -64,7 +64,7 @@ func NewManager(d Deps) *Manager {
 // RegisterJobs binds the engine's job kinds and the insert notification.
 func (m *Manager) RegisterJobs(jw *worker.Worker) {
 	m.d.Jobs = jw
-	wake := func(ctx context.Context, j worker.Job) error {
+	wake := func(_ context.Context, j worker.Job) error {
 		if w := m.ensure(j.AccountID.Int64); w != nil {
 			w.Reconnect()
 		}
@@ -72,7 +72,7 @@ func (m *Manager) RegisterJobs(jw *worker.Worker) {
 	}
 	jw.Register(JobInitialSync, wake)
 	jw.Register(JobReconnect, wake)
-	jw.Register(JobResync, func(ctx context.Context, j worker.Job) error {
+	jw.Register(JobResync, func(_ context.Context, j worker.Job) error {
 		var p struct {
 			Mode string `json:"mode"`
 		}

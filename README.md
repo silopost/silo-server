@@ -5,7 +5,7 @@ IMAP mailboxes into Postgres, sends mail over SMTP and serves the REST API and r
 by [silo-web](https://github.com/silopost/silo-web) and [silo-mobile](https://github.com/silopost/silo-mobile).
 
 [![License: AGPL-3.0](https://img.shields.io/badge/license-AGPL--3.0-blue.svg)](LICENSE)
-[![Release](https://img.shields.io/badge/release-v0.5.0-informational.svg)](https://github.com/silopost/silo-server/releases)
+[![Release](https://img.shields.io/badge/release-v0.6.0-informational.svg)](https://github.com/silopost/silo-server/releases)
 [![Go](https://img.shields.io/badge/go-1.26%2B-00ADD8.svg)](go.mod)
 [![CI](https://github.com/silopost/silo-server/actions/workflows/ci.yml/badge.svg)](https://github.com/silopost/silo-server/actions/workflows/ci.yml)
 
@@ -1036,7 +1036,7 @@ built from `git archive`, migrated, started against Postgres 17 and Dovecot,
 seeded through the API (sign-in, four messages, a user label on a thread and,
 from `v0.4.0` on, a filter and a thread snoozed for an hour);
 then the image of the working tree migrates the same database (the schema
-version must grow), starts, signs the same user in, must list the same INBOX
+version must not go backwards), starts, signs the same user in, must list the same INBOX
 with the label, still list the snoozed thread under `SNOOZED` with the same wake
 time, still have the filter, report its own version in `/meta` and pass `reconcile`.
 Containers, volume, network and images are named `silo-upg-*` and removed at

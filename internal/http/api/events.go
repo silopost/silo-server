@@ -115,16 +115,17 @@ func (d *deps) registerEvents(a huma.API) {
 				return true
 			}
 			seen := map[int64]struct{}{}
+			// Write errors of a bufio.Writer are sticky: flush() reports them.
 			send := func(e events.Event) bool {
 				if e.Seq > 0 {
-					w.WriteString("id: " + strconv.FormatInt(e.Seq, 10) + "\n")
+					_, _ = w.WriteString("id: " + strconv.FormatInt(e.Seq, 10) + "\n")
 				}
-				w.WriteString("event: " + e.Type + "\ndata: ")
-				w.Write(e.Data)
-				w.WriteString("\n\n")
+				_, _ = w.WriteString("event: " + e.Type + "\ndata: ")
+				_, _ = w.Write(e.Data)
+				_, _ = w.WriteString("\n\n")
 				return true
 			}
-			w.WriteString(": connected\n\n")
+			_, _ = w.WriteString(": connected\n\n")
 			if resync {
 				send(events.Event{Seq: head, Type: "resync", Data: []byte("{}")})
 			}
@@ -171,7 +172,7 @@ func (d *deps) registerEvents(a huma.API) {
 						flush()
 						return
 					}
-					w.WriteString(": ping\n\n")
+					_, _ = w.WriteString(": ping\n\n")
 					if !flush() {
 						return
 					}

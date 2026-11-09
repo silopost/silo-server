@@ -17,7 +17,7 @@ import (
 // ran (plan 5.2): the inverse is kept in operations for this long.
 const OperationRetention = 24 * time.Hour
 
-// ErrNotUndoable: the operation cannot be undone (a permanent delete).
+// ErrNotUndoable means the operation cannot be undone (a permanent delete).
 var ErrNotUndoable = errors.New("ops: operation cannot be undone")
 
 // invItem is how to undo the change of one message: move it back to MoveTo

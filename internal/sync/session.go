@@ -67,11 +67,11 @@ func newSession(w *AccountWorker, acc *account, sc *conn) *session {
 func (s *session) close() {
 	if s.idleStop != nil {
 		s.idleStop()
-		<-s.idleDone
+		<-s.idleDone //nolint:errcheck // its error is moot once stopped
 	}
 	if s.opsStop != nil {
 		s.opsStop()
-		<-s.opsDone
+		<-s.opsDone //nolint:errcheck // its error is moot once stopped
 	}
 	_ = s.sc.cl.Logout(context.Background())
 }
@@ -192,7 +192,7 @@ func (s *session) startIdle(ctx context.Context) {
 	select {
 	case err := <-ready:
 		if err != nil {
-			<-s.idleDone
+			<-s.idleDone //nolint:errcheck // the error of ready is the one that matters
 			s.idleStop, s.idleDone = nil, nil
 			cancel()
 			if errors.Is(err, imapx.ErrUnavailable) || isCommandError(err) {

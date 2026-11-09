@@ -71,12 +71,17 @@ func main() {
 		os.Exit(2)
 	}
 
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
-	if err := cmd(ctx, os.Args[2:]); err != nil {
+	if err := runCommand(cmd, os.Args[2:]); err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
+}
+
+// runCommand runs cmd with a context that is cancelled on SIGINT or SIGTERM.
+func runCommand(cmd func(ctx context.Context, args []string) error, args []string) error {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	return cmd(ctx, args)
 }
 
 func usage() {

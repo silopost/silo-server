@@ -17,7 +17,7 @@ import (
 	"github.com/silopost/silo-server/internal/worker"
 )
 
-// ErrAccountMismatch: a re-authorization signed in with another address than
+// ErrAccountMismatch means a re-authorization signed in with another address than
 // the account's.
 var ErrAccountMismatch = errors.New("accounts: the signed-in address is not the one of the account")
 

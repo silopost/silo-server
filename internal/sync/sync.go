@@ -101,9 +101,10 @@ const (
 	orphanMinAge     = 24 * time.Hour
 )
 
-// DefaultKeywordFolderLimit: a Dovecot maildir folder keeps 26 keywords (letters
-// a-z in the file names); Dovecot 2.4 accepts more without an error but keeps
-// them only in its index, so they are lost when the index is rebuilt.
+// DefaultKeywordFolderLimit is the default keyword limit of a folder: a Dovecot
+// maildir folder keeps 26 keywords (letters a-z in the file names); Dovecot 2.4
+// accepts more without an error but keeps them only in its index, so they are
+// lost when the index is rebuilt.
 const DefaultKeywordFolderLimit = 26
 
 // DefaultBackoff is the reconnect schedule of plan 3.5.2 (jitter is added).

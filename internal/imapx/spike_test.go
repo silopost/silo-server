@@ -385,7 +385,7 @@ func TestSpikeFull(t *testing.T) {
 			t.Fatal(err)
 		}
 		ex := s.c.UIDExpunge(set)
-		for ex.Next() != 0 {
+		for ex.Next() != 0 { //nolint:revive // empty-block: drains the expunge responses
 		}
 		_ = ex.Close()
 		if _, err := s.c.Store(imap.UIDSetNum(uids[0]), &imap.StoreFlags{Op: imap.StoreFlagsAdd, Silent: true, Flags: []imap.Flag{imap.FlagSeen}}, nil).Collect(); err != nil {

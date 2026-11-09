@@ -161,7 +161,7 @@ func TestRestartDuringInitialSync(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		var mu stdsync.Mutex
 		seen := 0
-		a.deps.Hooks.AfterBatch = func(phase string, k int) {
+		a.deps.Hooks.AfterBatch = func(_ string, _ int) {
 			mu.Lock()
 			defer mu.Unlock()
 			seen++

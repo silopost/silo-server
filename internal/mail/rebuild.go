@@ -36,11 +36,11 @@ const (
 	RebuildBlockedOperations = "operations" // imap_op jobs wait for write-back
 )
 
-// ErrRebuildBlocked: the cache cannot be rebuilt while local changes wait for
+// ErrRebuildBlocked means the cache cannot be rebuilt while local changes wait for
 // the server; they would be lost with the messages they point to.
 var ErrRebuildBlocked = errors.New("mail: rebuild blocked")
 
-// RebuildSendMargin: a queued send due later than this does not block a
+// RebuildSendMargin means a queued send due later than this does not block a
 // rebuild. Scheduled mail (schedule send) stays local until its time and is
 // kept by WipeCache like a draft; only sends in flight or about to start
 // (undo window, a schedule that is due) wait.

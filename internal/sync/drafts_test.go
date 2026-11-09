@@ -115,7 +115,7 @@ func testDraftSync(t *testing.T, p imaptest.Profile) {
 		t.Errorf("draft labels = %v", l)
 	}
 
-	x = save(2, "Second version")
+	save(2, "Second version")
 	waitFor(t, 20*time.Second, "second version in Drafts", func() bool {
 		c := serverCopies()
 		return len(c) == 1 && bytes.Contains(c[0], []byte("Subject: Second version"))

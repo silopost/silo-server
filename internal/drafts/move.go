@@ -11,7 +11,7 @@ import (
 	"github.com/silopost/silo-server/internal/mail"
 )
 
-// ErrAccountLocked: the account ("From") of a reply or forward cannot change;
+// ErrAccountLocked means the account ("From") of a reply or forward cannot change;
 // the draft belongs to the thread of the account that received the original.
 var ErrAccountLocked = errors.New("drafts: the account of a reply or forward cannot change")
 

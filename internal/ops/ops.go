@@ -36,7 +36,7 @@ var (
 	ErrTooLate       = errors.New("ops: operation already sent to the server")
 )
 
-// Pseudo label of the API: is_unread.
+// LabelUnread is the pseudo label of the API for is_unread.
 const LabelUnread = "UNREAD"
 
 // LabelRef names a label in a modify request: a system key (INBOX, STARRED,

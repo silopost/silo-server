@@ -252,7 +252,7 @@ func openSSE(t *testing.T, base string, l login, lastID string) *sseStream {
 	if lastID != "" {
 		rq.Header.Set("Last-Event-ID", lastID)
 	}
-	res, err := http.DefaultClient.Do(rq)
+	res, err := http.DefaultClient.Do(rq) //nolint:bodyclose // closed by the reader goroutine below
 	if err != nil {
 		cancel()
 		t.Fatal(err)

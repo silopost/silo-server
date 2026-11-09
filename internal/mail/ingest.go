@@ -39,15 +39,15 @@ type FetchedMessage struct {
 type Outcome int
 
 const (
-	// OutcomeNew: a new logical message was created.
+	// OutcomeNew means a new logical message was created.
 	OutcomeNew Outcome = iota
-	// OutcomeKnown: the (folder, uid) location already existed; flags refreshed.
+	// OutcomeKnown means the (folder, uid) location already existed; flags refreshed.
 	OutcomeKnown
-	// OutcomeMoved: matched an orphaned message; it is back on the server.
+	// OutcomeMoved means the message matched an orphaned message; it is back on the server.
 	OutcomeMoved
-	// OutcomeDuplicate: matched a message that already had a location elsewhere.
+	// OutcomeDuplicate means the message matched a message that already had a location elsewhere.
 	OutcomeDuplicate
-	// OutcomeAttached: matched a message without any location (e.g. our own
+	// OutcomeAttached means the message matched a message without any location (e.g. our own
 	// appended copy known before sync saw it).
 	OutcomeAttached
 )
@@ -515,7 +515,7 @@ func insertMessage(ctx context.Context, db DB, ts *threadState, acc accountInfo,
 	if len(ph.ReplyTo) > 0 {
 		replyTo = addrJSON(ph.ReplyTo)
 	}
-	var headerDate *time.Time = ph.Date
+	headerDate := ph.Date
 	err = db.QueryRow(ctx, `
 INSERT INTO messages (user_id, account_id, thread_id, message_id_hdr, dedupe_key, email_id, in_reply_to_hdr,
   body_state, size_bytes, internal_date, header_date, from_addr, from_name, from_text, to_addrs, cc_addrs,
@@ -555,7 +555,7 @@ VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
 
 // upsertContacts counts new messages: received_count for the sender of mail
 // from others, sent_count for the recipients of mail from the account itself.
-func upsertContacts(ctx context.Context, db DB, acc accountInfo, folder folderInfo, msgs map[int64]*ParsedHeader) error {
+func upsertContacts(ctx context.Context, db DB, acc accountInfo, _ folderInfo, msgs map[int64]*ParsedHeader) error {
 	type agg struct {
 		name           string
 		sent, received int
@@ -610,7 +610,7 @@ ON CONFLICT (user_id, email) DO UPDATE SET
 }
 
 // emitMessageNew writes message.new for each newly created message.
-func emitMessageNew(ctx context.Context, db DB, ev *eventBuf, accountID int64, newIDs []int64, res *IngestResult) error {
+func emitMessageNew(ctx context.Context, db DB, ev *eventBuf, accountID int64, newIDs []int64, _ *IngestResult) error {
 	rows, err := db.Query(ctx, `
 SELECT m.id, m.thread_id, m.from_addr::text, m.from_name, m.subject, m.snippet,
        COALESCE((SELECT array_agg(ml.label_id ORDER BY ml.label_id) FROM message_labels ml WHERE ml.message_id = m.id), '{}')

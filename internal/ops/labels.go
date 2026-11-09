@@ -234,7 +234,7 @@ type UpdateLabel struct {
 // operation (UID STORE +new -old; plan 3.7 keyword_rename); system labels and
 // folders cannot be renamed.
 func (s *Service) UpdateLabel(ctx context.Context, in UpdateLabel) (*Label, error) {
-	if in.ShowInList != nil && !(*in.ShowInList == "show" || *in.ShowInList == "hide" || *in.ShowInList == "show_if_unread") {
+	if in.ShowInList != nil && *in.ShowInList != "show" && *in.ShowInList != "hide" && *in.ShowInList != "show_if_unread" {
 		return nil, fmt.Errorf("%w: showInList must be show, hide or show_if_unread", ErrInvalid)
 	}
 	err := s.inTx(ctx, func(tx pgx.Tx) error {

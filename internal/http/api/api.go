@@ -123,7 +123,7 @@ func Mount(root chi.Router, o Options) huma.API {
 	root.Route(Prefix, func(r chi.Router) {
 		cfg := huma.DefaultConfig("SiloPost API", Version)
 		cfg.Info.Description = "REST API of silo-server, the SiloPost backend."
-		cfg.OpenAPI.Servers = []*huma.Server{{URL: Prefix}}
+		cfg.Servers = []*huma.Server{{URL: Prefix}}
 		// Keep responses exactly as the contract defines them: no "$schema"
 		// property, no generated schema or docs routes (the docs page loads
 		// assets from a CDN).
