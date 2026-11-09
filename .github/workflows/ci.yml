@@ -55,6 +55,7 @@ jobs:
         with:
           version: v2.1
 
+  # Publishes :edge on main; versioned images come from release.yml (tags v*).
   image:
     needs: [test, lint, generated]
     runs-on: ubuntu-latest

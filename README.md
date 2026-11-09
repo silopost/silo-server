@@ -1020,6 +1020,14 @@ OAuth2. In short:
   off.
 - Back up `SILO_SECRET_KEY` separately from the database.
 
+### Container image
+
+A push to `main` publishes `ghcr.io/silopost/silo-server:edge`; a tag `vX.Y.Z` publishes `X.Y.Z`, `X.Y`
+and `latest` (a prerelease tag only its own version), all for `linux/amd64` and `linux/arm64`
+(`.github/workflows/ci.yml` and `.github/workflows/release.yml`). After the first publication the
+GHCR package has to be switched to public once (Package settings → Change visibility on GitHub),
+otherwise an anonymous `docker pull` fails.
+
 ### Upgrades
 
 `scripts/upgrade-test.sh` checks the upgrade path end to end with Docker:
