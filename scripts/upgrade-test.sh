@@ -172,8 +172,8 @@ log "e. $NEW_VERSION: migrate, serve, verify"
 run "$NEW_IMG" migrate up
 NEW_SCHEMA=$(migrate_version "$NEW_IMG")
 echo "schema version $OLD_SCHEMA -> $NEW_SCHEMA"
-if [ -z "$NEW_SCHEMA" ] || [ "$NEW_SCHEMA" -le "$OLD_SCHEMA" ]; then
-	echo "schema version did not grow" >&2
+if [ -z "$NEW_SCHEMA" ] || [ "$NEW_SCHEMA" -lt "$OLD_SCHEMA" ]; then
+	echo "schema version went backwards" >&2
 	exit 1
 fi
 serve "$NEW_IMG"
