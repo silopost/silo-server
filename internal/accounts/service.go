@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -265,17 +266,41 @@ func (s *Service) Update(ctx context.Context, userID, id int64, in Update) (sqlc
 	return s.Get(ctx, userID, id)
 }
 
+// deleteAttempts bounds the retries of Delete after a deadlock.
+const deleteAttempts = 5
+
 // Delete removes the account and, by cascade, everything cached for it. The
 // mail server is not touched.
+//
+// The cascade locks the account's rows table by table (folders, ...,
+// messages), while a sync transaction of the same account still running
+// locks them in its own order (a message, then a row the cascade already
+// holds), so Postgres may abort the delete with deadlock_detected (40P01).
+// The delete then runs again once that transaction is done: it is one
+// statement, so nothing of the aborted attempt remains.
 func (s *Service) Delete(ctx context.Context, userID, id int64) error {
-	n, err := sqlcgen.New(s.o.Pool).DeleteAccount(ctx, sqlcgen.DeleteAccountParams{ID: id, UserID: userID})
-	if err != nil {
-		return err
+	q := sqlcgen.New(s.o.Pool)
+	for attempt := 1; ; attempt++ {
+		n, err := q.DeleteAccount(ctx, sqlcgen.DeleteAccountParams{ID: id, UserID: userID})
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "40P01" && attempt < deleteAttempts {
+			s.log.Info("accounts: delete deadlocked with a concurrent write, retrying",
+				"account_id", id, "attempt", attempt)
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(time.Duration(attempt) * 50 * time.Millisecond):
+			}
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		if n == 0 {
+			return ErrNotFound
+		}
+		return nil
 	}
-	if n == 0 {
-		return ErrNotFound
-	}
-	return nil
 }
 
 func (s *Service) seal(ctx context.Context, q *sqlcgen.Queries, accountID int64, password string) error {
