@@ -452,9 +452,12 @@ How the main parts of the API behave, with the related settings.
   `trustedImageSenders` (sender addresses whose messages show external images without
   asking; always an array, replaced as a whole by `PATCH`; addresses are trimmed and
   lowercased, empty, invalid and duplicate ones dropped, more than 1000 is
-  `422 invalid_setting`); other bad values are `422 invalid_setting`. The answer carries
-  `updatedAt` (`users.settings.updated_at`); other sessions get `settings.updated
-  {updatedAt}` and reload.
+  `422 invalid_setting`), `theme` (colour theme of the silo-web client: `default`,
+  `dark`, `soft-gray`, `blue`, `lavender`, `rose`, `mint`, `seafoam`; `default` until
+  chosen, an unknown stored value reads as `default`; other clients may ignore it);
+  other bad values are `422 invalid_setting`. The answer carries `updatedAt`
+  (`users.settings.updated_at`); other sessions get `settings.updated {updatedAt}` and
+  reload.
 - Sessions and accounts (`internal/auth`, `internal/accounts`): `POST/GET/DELETE /session`, `GET /sessions`, `DELETE /sessions/{id}`, `DELETE /sessions?others=true` (every session but the current one), `GET/POST /accounts`, `POST /accounts/test`, `GET/PATCH/DELETE /accounts/{id}`, `GET /accounts/{id}/folders`, `POST /accounts/{id}/resync`, `GET /accounts/{id}/sync-status`, `GET /meta`. Accounts carry `position` and are listed in that order (`GET /session`, `GET /accounts`). Migration `000005` turns `sent_append` on for generic accounts created before sending existed. The full list is `api/openapi.yaml`.
 - Reading the mailbox (`internal/mailview`): `GET /labels` (counters, pseudo label
   `UNREAD`), `POST /labels` (user label with an IMAP keyword, or a folder: `CREATE`
