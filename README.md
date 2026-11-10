@@ -5,7 +5,7 @@ IMAP mailboxes into Postgres, sends mail over SMTP and serves the REST API and r
 by [silo-web](https://github.com/silopost/silo-web) and [silo-mobile](https://github.com/silopost/silo-mobile).
 
 [![License: AGPL-3.0](https://img.shields.io/badge/license-AGPL--3.0-blue.svg)](LICENSE)
-[![Release](https://img.shields.io/badge/release-v0.6.0-informational.svg)](https://github.com/silopost/silo-server/releases)
+[![Release](https://img.shields.io/badge/release-v0.7.0-informational.svg)](https://github.com/silopost/silo-server/releases)
 [![Go](https://img.shields.io/badge/go-1.26%2B-00ADD8.svg)](go.mod)
 [![CI](https://github.com/silopost/silo-server/actions/workflows/ci.yml/badge.svg)](https://github.com/silopost/silo-server/actions/workflows/ci.yml)
 
@@ -448,7 +448,11 @@ How the main parts of the API behave, with the related settings.
   `keyboardShortcutsEnabled`, `conversationView`, `activeAccountId` (an account of the
   user), `desktopNotifications` (the preference is shared; each client asks the system
   for its own permission), `language` (UI language of every client: `en` or `pl`, `en`
-  until chosen; [ADR 0015](https://github.com/silopost/silo/blob/main/docs/adr/0015-i18n-typed-dictionaries.md)); other bad values are `422 invalid_setting`. The answer carries
+  until chosen; [ADR 0015](https://github.com/silopost/silo/blob/main/docs/adr/0015-i18n-typed-dictionaries.md)),
+  `trustedImageSenders` (sender addresses whose messages show external images without
+  asking; always an array, replaced as a whole by `PATCH`; addresses are trimmed and
+  lowercased, empty, invalid and duplicate ones dropped, more than 1000 is
+  `422 invalid_setting`); other bad values are `422 invalid_setting`. The answer carries
   `updatedAt` (`users.settings.updated_at`); other sessions get `settings.updated
   {updatedAt}` and reload.
 - Sessions and accounts (`internal/auth`, `internal/accounts`): `POST/GET/DELETE /session`, `GET /sessions`, `DELETE /sessions/{id}`, `DELETE /sessions?others=true` (every session but the current one), `GET/POST /accounts`, `POST /accounts/test`, `GET/PATCH/DELETE /accounts/{id}`, `GET /accounts/{id}/folders`, `POST /accounts/{id}/resync`, `GET /accounts/{id}/sync-status`, `GET /meta`. Accounts carry `position` and are listed in that order (`GET /session`, `GET /accounts`). Migration `000005` turns `sent_append` on for generic accounts created before sending existed. The full list is `api/openapi.yaml`.
