@@ -2021,6 +2021,11 @@ components:
           examples:
             - Europe/Warsaw
           type: string
+        trustedImageSenders:
+          description: Sender addresses (lowercase) whose messages show external images without asking; always an array.
+          items:
+            type: string
+          type: array
         undoSendSeconds:
           description: Delay before a sent message leaves, in seconds.
           format: int64
@@ -2041,6 +2046,7 @@ components:
         - activeAccountId
         - desktopNotifications
         - language
+        - trustedImageSenders
         - updatedAt
       type: object
     SettingsPatch:
@@ -2075,6 +2081,13 @@ components:
           examples:
             - Europe/Warsaw
           type: string
+        trustedImageSenders:
+          description: "Replaces the whole list. Addresses are trimmed and lowercased; empty, invalid and duplicate ones are dropped. More than 1000: 422 invalid_setting."
+          items:
+            type: string
+          type:
+            - array
+            - "null"
         undoSendSeconds:
           description: 5, 10, 20 or 30; else 422 invalid_setting. Sets undoUntil of POST /drafts/{id}/send.
           format: int64
@@ -5896,7 +5909,7 @@ paths:
       tags:
         - session
     patch:
-      description: "JSON merge: only the fields sent change; activeAccountId null clears it. The answer is the whole settings object with updatedAt; the other sessions of the user get settings.updated {updatedAt} and reload GET /settings. 422 invalid_setting (density, undoSendSeconds, signature over 32 KiB, an activeAccountId that is not the user's, an unsupported language) or invalid_timezone."
+      description: "JSON merge: only the fields sent change; activeAccountId null clears it. The answer is the whole settings object with updatedAt; the other sessions of the user get settings.updated {updatedAt} and reload GET /settings. 422 invalid_setting (density, undoSendSeconds, signature over 32 KiB, an activeAccountId that is not the user's, an unsupported language, over 1000 trustedImageSenders) or invalid_timezone."
       operationId: updateSettings
       parameters:
         - description: Client id, echoed as origin in settings.updated.

@@ -34,6 +34,7 @@ type Settings struct {
 	ActiveAccountID          *string    `json:"activeAccountId" doc:"Account shown by default; the first account when unset."`
 	DesktopNotifications     bool       `json:"desktopNotifications" doc:"Whether the user wants desktop/system notifications of new mail; each client asks the system for its own permission."`
 	Language                 string     `json:"language" enum:"en,pl" doc:"UI language shared by every client of the user (BCP 47 code of a supported language); en until the user chooses one."`
+	TrustedImageSenders      []string   `json:"trustedImageSenders" nullable:"false" doc:"Sender addresses (lowercase) whose messages show external images without asking; always an array."`
 	UpdatedAt                *time.Time `json:"updatedAt" doc:"Time of the last PATCH /settings; null before the first one."`
 }
 
@@ -289,18 +290,20 @@ func settingsFrom(raw []byte, accs []sqlcgen.Account) Settings {
 	s := Settings{
 		Density: "default", UndoSendSeconds: 5, Timezone: "UTC",
 		KeyboardShortcutsEnabled: true, ConversationView: true, Language: DefaultLanguage,
+		TrustedImageSenders: []string{},
 	}
 	var stored struct {
-		Density                  *string `json:"density"`
-		UndoSendSeconds          *int    `json:"undo_send_seconds"`
-		Signature                *string `json:"signature"`
-		Timezone                 *string `json:"timezone"`
-		KeyboardShortcutsEnabled *bool   `json:"keyboard_shortcuts_enabled"`
-		ConversationView         *bool   `json:"conversation_view"`
-		ActiveAccountID          *int64  `json:"active_account_id"`
-		DesktopNotifications     *bool   `json:"desktop_notifications"`
-		Language                 *string `json:"language"`
-		UpdatedAt                *string `json:"updated_at"`
+		Density                  *string  `json:"density"`
+		UndoSendSeconds          *int     `json:"undo_send_seconds"`
+		Signature                *string  `json:"signature"`
+		Timezone                 *string  `json:"timezone"`
+		KeyboardShortcutsEnabled *bool    `json:"keyboard_shortcuts_enabled"`
+		ConversationView         *bool    `json:"conversation_view"`
+		ActiveAccountID          *int64   `json:"active_account_id"`
+		DesktopNotifications     *bool    `json:"desktop_notifications"`
+		Language                 *string  `json:"language"`
+		TrustedImageSenders      []string `json:"trusted_image_senders"`
+		UpdatedAt                *string  `json:"updated_at"`
 	}
 	_ = json.Unmarshal(raw, &stored) // malformed settings fall back to defaults
 	if stored.Density != nil {
@@ -323,6 +326,9 @@ func settingsFrom(raw []byte, accs []sqlcgen.Account) Settings {
 	}
 	if stored.Language != nil && slices.Contains(Languages, *stored.Language) {
 		s.Language = *stored.Language
+	}
+	if stored.TrustedImageSenders != nil {
+		s.TrustedImageSenders, _ = NormalizeTrustedSenders(stored.TrustedImageSenders)
 	}
 	if stored.UpdatedAt != nil {
 		if t, err := time.Parse(time.RFC3339Nano, *stored.UpdatedAt); err == nil {

@@ -32,6 +32,40 @@ var (
 	Languages = []string{"en", "pl"}
 )
 
+// MaxTrustedImageSenders is the limit of settings.trustedImageSenders.
+const MaxTrustedImageSenders = 1000
+
+// NormalizeTrustedSenders trims and lowercases the addresses, drops empty and
+// invalid ones and duplicates (keeping the first occurrence). ok is false when
+// more than MaxTrustedImageSenders addresses remain; the list is then cut to
+// the limit.
+func NormalizeTrustedSenders(in []string) (out []string, ok bool) {
+	out = make([]string, 0, len(in))
+	seen := make(map[string]bool, len(in))
+	for _, a := range in {
+		a = strings.ToLower(strings.TrimSpace(a))
+		if !validAddress(a) || seen[a] {
+			continue
+		}
+		seen[a] = true
+		out = append(out, a)
+	}
+	if len(out) > MaxTrustedImageSenders {
+		return out[:MaxTrustedImageSenders], false
+	}
+	return out, true
+}
+
+// validAddress is a plain local@domain check: one @, both parts non-empty, no
+// whitespace or angle brackets, at most 254 bytes (RFC 5321).
+func validAddress(a string) bool {
+	at := strings.IndexByte(a, '@')
+	if len(a) > 254 || at <= 0 || at != strings.LastIndexByte(a, '@') || at == len(a)-1 {
+		return false
+	}
+	return !strings.ContainsAny(a, " \t\r\n<>,;\"")
+}
+
 // DefaultLanguage is settings.language of a user who never chose one.
 const DefaultLanguage = "en"
 
@@ -75,6 +109,7 @@ type SettingsPatch struct {
 	ActiveAccountID          NullableID `json:"activeAccountId,omitempty"`
 	DesktopNotifications     *bool      `json:"desktopNotifications,omitempty"`
 	Language                 *string    `json:"language,omitempty" example:"pl" doc:"UI language: en or pl; else 422 invalid_setting."`
+	TrustedImageSenders      []string   `json:"trustedImageSenders,omitempty" doc:"Replaces the whole list. Addresses are trimmed and lowercased; empty, invalid and duplicate ones are dropped. More than 1000: 422 invalid_setting."`
 }
 
 type settingsOutput struct{ Body Settings }
@@ -120,7 +155,7 @@ func (d *deps) registerSettings(a huma.API) {
 		Description: "JSON merge: only the fields sent change; activeAccountId null clears it. The answer is the whole " +
 			"settings object with updatedAt; the other sessions of the user get settings.updated {updatedAt} and " +
 			"reload GET /settings. 422 invalid_setting (density, undoSendSeconds, signature over 32 KiB, an " +
-			"activeAccountId that is not the user's, an unsupported language) or invalid_timezone.",
+			"activeAccountId that is not the user's, an unsupported language, over 1000 trustedImageSenders) or invalid_timezone.",
 		Errors: []int{http.StatusBadRequest, http.StatusUnauthorized, http.StatusForbidden, http.StatusUnprocessableEntity},
 	}), func(ctx context.Context, in *patchSettingsInput) (*settingsOutput, error) {
 		userID := sessionFrom(ctx).UserID
@@ -170,6 +205,13 @@ func (d *deps) registerSettings(a huma.API) {
 				return nil, invalidSetting("language must be one of en, pl.")
 			}
 			set["language"] = *b.Language
+		}
+		if b.TrustedImageSenders != nil {
+			list, ok := NormalizeTrustedSenders(b.TrustedImageSenders)
+			if !ok {
+				return nil, invalidSetting("trustedImageSenders has more than 1000 addresses.")
+			}
+			set["trusted_image_senders"] = list
 		}
 		if b.ActiveAccountID.Set {
 			if b.ActiveAccountID.Value == nil {

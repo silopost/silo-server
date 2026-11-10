@@ -2,8 +2,10 @@ package api_test
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -39,7 +41,8 @@ func TestSettings(t *testing.T) {
 
 	def := get()
 	if def.Density != "default" || def.UndoSendSeconds != 5 || def.Timezone != "UTC" || !def.KeyboardShortcutsEnabled ||
-		!def.ConversationView || def.DesktopNotifications || def.UpdatedAt != nil || def.ActiveAccountID == nil || def.Language != "en" {
+		!def.ConversationView || def.DesktopNotifications || def.UpdatedAt != nil || def.ActiveAccountID == nil || def.Language != "en" ||
+		def.TrustedImageSenders == nil || len(def.TrustedImageSenders) != 0 {
 		t.Fatalf("defaults: %+v", def)
 	}
 
@@ -61,6 +64,7 @@ func TestSettings(t *testing.T) {
 			{"language unknown", map[string]any{"language": "de"}, api.CodeInvalidSetting},
 			{"language region", map[string]any{"language": "en-US"}, api.CodeInvalidSetting},
 			{"language empty", map[string]any{"language": ""}, api.CodeInvalidSetting},
+			{"trustedImageSenders too many", map[string]any{"trustedImageSenders": manyAddresses(api.MaxTrustedImageSenders + 1)}, api.CodeInvalidSetting},
 		} {
 			if r, _ := patch(c.body, ""); r.Code != http.StatusUnprocessableEntity || r.code() != c.code {
 				t.Errorf("%s: %d %s", c.name, r.Code, r.Body)
@@ -147,6 +151,33 @@ VALUES ($1, 'settings-other@silo.test', 'h', 1, 'none', 'h', 25, 'none', 'other'
 		// An empty signature is allowed.
 		if r, s := patch(map[string]any{"signature": ""}, ""); r.Code != http.StatusOK || s.Signature != "" {
 			t.Errorf("empty signature: %d %s", r.Code, r.Body)
+		}
+	})
+
+	t.Run("trustedImageSenders", func(t *testing.T) {
+		r, s := patch(map[string]any{"trustedImageSenders": []string{" Ann@Example.COM ", "ann@example.com", "", "not-an-address", "bob@example.org"}}, "")
+		if r.Code != http.StatusOK || !slices.Equal(s.TrustedImageSenders, []string{"ann@example.com", "bob@example.org"}) {
+			t.Fatalf("patch: %d %s", r.Code, r.Body)
+		}
+		if g := get(); !slices.Equal(g.TrustedImageSenders, s.TrustedImageSenders) {
+			t.Errorf("GET /settings trustedImageSenders = %q", g.TrustedImageSenders)
+		}
+		// Other patches keep the list; the limit itself is allowed; [] clears it.
+		if r, s := patch(map[string]any{"density": "compact"}, ""); r.Code != http.StatusOK || len(s.TrustedImageSenders) != 2 {
+			t.Errorf("partial patch dropped the list: %d %s", r.Code, r.Body)
+		}
+		if r, s := patch(map[string]any{"trustedImageSenders": manyAddresses(api.MaxTrustedImageSenders)}, ""); r.Code != http.StatusOK || len(s.TrustedImageSenders) != api.MaxTrustedImageSenders {
+			t.Errorf("list at the limit: %d", r.Code)
+		}
+		if r, s := patch(map[string]any{"trustedImageSenders": []string{}}, ""); r.Code != http.StatusOK || s.TrustedImageSenders == nil || len(s.TrustedImageSenders) != 0 {
+			t.Errorf("clear: %d %s", r.Code, r.Body)
+		}
+		// A stored list is normalized on read too.
+		if _, err := m.pool.Exec(ctx, `UPDATE users SET settings = settings || '{"trusted_image_senders":["X@Y.z","x@y.z",""]}'::jsonb`); err != nil {
+			t.Fatal(err)
+		}
+		if g := get(); !slices.Equal(g.TrustedImageSenders, []string{"x@y.z"}) {
+			t.Errorf("stored list read as %q", g.TrustedImageSenders)
 		}
 	})
 
@@ -241,6 +272,14 @@ VALUES ($1, 'settings-other@silo.test', 'h', 1, 'none', 'h', 25, 'none', 'other'
 	})
 }
 
+func manyAddresses(n int) []string {
+	out := make([]string, n)
+	for i := range out {
+		out[i] = fmt.Sprintf("user%d@example.com", i)
+	}
+	return out
+}
+
 func mustLoc(t *testing.T, name string) *time.Location {
 	t.Helper()
 	l, err := time.LoadLocation(name)
@@ -248,4 +287,30 @@ func mustLoc(t *testing.T, name string) *time.Location {
 		t.Fatal(err)
 	}
 	return l
+}
+
+func TestNormalizeTrustedSenders(t *testing.T) {
+	for _, c := range []struct {
+		in   []string
+		want []string
+	}{
+		{nil, []string{}},
+		{[]string{"  Ann@Example.com\t", "ann@example.com", "ANN@EXAMPLE.COM"}, []string{"ann@example.com"}},
+		{[]string{"", "   ", "plain", "@example.com", "ann@", "a@b@c", "a b@c.d", "<a@b.c>", "a@b.c,d@e.f"}, []string{}},
+		{[]string{"b@x.org", "a@x.org"}, []string{"b@x.org", "a@x.org"}},
+		{[]string{strings.Repeat("a", 250) + "@x.org"}, []string{}},
+	} {
+		got, ok := api.NormalizeTrustedSenders(c.in)
+		if !ok || got == nil || !slices.Equal(got, c.want) {
+			t.Errorf("NormalizeTrustedSenders(%q) = %q, %v; want %q", c.in, got, ok, c.want)
+		}
+	}
+	// Duplicates do not count towards the limit; more distinct addresses do.
+	in := append(manyAddresses(api.MaxTrustedImageSenders), manyAddresses(10)...)
+	if got, ok := api.NormalizeTrustedSenders(in); !ok || len(got) != api.MaxTrustedImageSenders {
+		t.Errorf("limit with duplicates: %d, %v", len(got), ok)
+	}
+	if got, ok := api.NormalizeTrustedSenders(manyAddresses(api.MaxTrustedImageSenders + 1)); ok || len(got) != api.MaxTrustedImageSenders {
+		t.Errorf("over the limit: %d, %v", len(got), ok)
+	}
 }
