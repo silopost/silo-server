@@ -35,6 +35,7 @@ type Settings struct {
 	DesktopNotifications     bool       `json:"desktopNotifications" doc:"Whether the user wants desktop/system notifications of new mail; each client asks the system for its own permission."`
 	Language                 string     `json:"language" enum:"en,pl" doc:"UI language shared by every client of the user (BCP 47 code of a supported language); en until the user chooses one."`
 	TrustedImageSenders      []string   `json:"trustedImageSenders" nullable:"false" doc:"Sender addresses (lowercase) whose messages show external images without asking; always an array."`
+	Theme                    string     `json:"theme" enum:"default,dark,soft-gray,blue,lavender,rose,mint,seafoam" doc:"Colour theme of the silo-web client; other clients may ignore it. default until the user chooses one."`
 	UpdatedAt                *time.Time `json:"updatedAt" doc:"Time of the last PATCH /settings; null before the first one."`
 }
 
@@ -290,7 +291,7 @@ func settingsFrom(raw []byte, accs []sqlcgen.Account) Settings {
 	s := Settings{
 		Density: "default", UndoSendSeconds: 5, Timezone: "UTC",
 		KeyboardShortcutsEnabled: true, ConversationView: true, Language: DefaultLanguage,
-		TrustedImageSenders: []string{},
+		TrustedImageSenders: []string{}, Theme: DefaultTheme,
 	}
 	var stored struct {
 		Density                  *string  `json:"density"`
@@ -303,6 +304,7 @@ func settingsFrom(raw []byte, accs []sqlcgen.Account) Settings {
 		DesktopNotifications     *bool    `json:"desktop_notifications"`
 		Language                 *string  `json:"language"`
 		TrustedImageSenders      []string `json:"trusted_image_senders"`
+		Theme                    *string  `json:"theme"`
 		UpdatedAt                *string  `json:"updated_at"`
 	}
 	_ = json.Unmarshal(raw, &stored) // malformed settings fall back to defaults
@@ -326,6 +328,9 @@ func settingsFrom(raw []byte, accs []sqlcgen.Account) Settings {
 	}
 	if stored.Language != nil && slices.Contains(Languages, *stored.Language) {
 		s.Language = *stored.Language
+	}
+	if stored.Theme != nil && slices.Contains(Themes, *stored.Theme) {
+		s.Theme = *stored.Theme
 	}
 	if stored.TrustedImageSenders != nil {
 		s.TrustedImageSenders, _ = NormalizeTrustedSenders(stored.TrustedImageSenders)

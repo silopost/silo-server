@@ -64,6 +64,9 @@ func TestSettings(t *testing.T) {
 			{"language unknown", map[string]any{"language": "de"}, api.CodeInvalidSetting},
 			{"language region", map[string]any{"language": "en-US"}, api.CodeInvalidSetting},
 			{"language empty", map[string]any{"language": ""}, api.CodeInvalidSetting},
+			{"theme unknown", map[string]any{"theme": "solarized"}, api.CodeInvalidSetting},
+			{"theme case", map[string]any{"theme": "Dark"}, api.CodeInvalidSetting},
+			{"theme empty", map[string]any{"theme": ""}, api.CodeInvalidSetting},
 			{"trustedImageSenders too many", map[string]any{"trustedImageSenders": manyAddresses(api.MaxTrustedImageSenders + 1)}, api.CodeInvalidSetting},
 		} {
 			if r, _ := patch(c.body, ""); r.Code != http.StatusUnprocessableEntity || r.code() != c.code {
@@ -206,6 +209,43 @@ VALUES ($1, 'settings-other@silo.test', 'h', 1, 'none', 'h', 25, 'none', 'other'
 		}
 		if r, s := patch(map[string]any{"language": "en"}, ""); r.Code != http.StatusOK || s.Language != "en" {
 			t.Errorf("back to en: %d %s", r.Code, r.Body)
+		}
+	})
+
+	t.Run("theme", func(t *testing.T) {
+		for _, theme := range api.Themes {
+			if r, s := patch(map[string]any{"theme": theme}, ""); r.Code != http.StatusOK || s.Theme != theme {
+				t.Fatalf("patch theme %s: %d %s", theme, r.Code, r.Body)
+			}
+		}
+		r, s := patch(map[string]any{"theme": "dark"}, "")
+		if r.Code != http.StatusOK || s.Theme != "dark" {
+			t.Fatalf("patch theme: %d %s", r.Code, r.Body)
+		}
+		if g := get(); g.Theme != "dark" {
+			t.Errorf("GET /settings theme = %q", g.Theme)
+		}
+		var sb api.SessionBody
+		serve(m.web, m.as(req{method: "GET", path: "/session"})).json(&sb)
+		if sb.Settings.Theme != "dark" {
+			t.Errorf("GET /session theme = %q", sb.Settings.Theme)
+		}
+		// A refused theme keeps the stored one; other patches keep it too.
+		if r, _ := patch(map[string]any{"theme": "neon"}, ""); r.Code != http.StatusUnprocessableEntity {
+			t.Errorf("unknown theme: %d %s", r.Code, r.Body)
+		}
+		if r, s := patch(map[string]any{"density": "compact"}, ""); r.Code != http.StatusOK || s.Theme != "dark" {
+			t.Errorf("partial patch dropped theme: %d %s", r.Code, r.Body)
+		}
+		// An unknown stored value (a theme removed in a later release) reads as the default.
+		if _, err := m.pool.Exec(ctx, `UPDATE users SET settings = settings || '{"theme":"retired"}'::jsonb`); err != nil {
+			t.Fatal(err)
+		}
+		if g := get(); g.Theme != "default" {
+			t.Errorf("unsupported stored theme = %q, want default", g.Theme)
+		}
+		if r, s := patch(map[string]any{"theme": "default"}, ""); r.Code != http.StatusOK || s.Theme != "default" {
+			t.Errorf("back to default: %d %s", r.Code, r.Body)
 		}
 	})
 

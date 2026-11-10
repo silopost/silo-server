@@ -30,6 +30,9 @@ var (
 	// Languages are the UI languages the clients ship (BCP 47 codes); keep the
 	// enum of Settings.language in step.
 	Languages = []string{"en", "pl"}
+	// Themes are the colour themes of silo-web; keep the enum of Settings.theme in
+	// step.
+	Themes = []string{"default", "dark", "soft-gray", "blue", "lavender", "rose", "mint", "seafoam"}
 )
 
 // MaxTrustedImageSenders is the limit of settings.trustedImageSenders.
@@ -68,6 +71,9 @@ func validAddress(a string) bool {
 
 // DefaultLanguage is settings.language of a user who never chose one.
 const DefaultLanguage = "en"
+
+// DefaultTheme is settings.theme of a user who never chose one.
+const DefaultTheme = "default"
 
 // NullableID is a JSON value that may be absent, null or a string: PATCH
 // tells "clear" (null) from "keep" (absent).
@@ -110,6 +116,7 @@ type SettingsPatch struct {
 	DesktopNotifications     *bool      `json:"desktopNotifications,omitempty"`
 	Language                 *string    `json:"language,omitempty" example:"pl" doc:"UI language: en or pl; else 422 invalid_setting."`
 	TrustedImageSenders      []string   `json:"trustedImageSenders,omitempty" doc:"Replaces the whole list. Addresses are trimmed and lowercased; empty, invalid and duplicate ones are dropped. More than 1000: 422 invalid_setting."`
+	Theme                    *string    `json:"theme,omitempty" example:"dark" doc:"Colour theme of silo-web: default, dark, soft-gray, blue, lavender, rose, mint or seafoam; else 422 invalid_setting."`
 }
 
 type settingsOutput struct{ Body Settings }
@@ -155,7 +162,7 @@ func (d *deps) registerSettings(a huma.API) {
 		Description: "JSON merge: only the fields sent change; activeAccountId null clears it. The answer is the whole " +
 			"settings object with updatedAt; the other sessions of the user get settings.updated {updatedAt} and " +
 			"reload GET /settings. 422 invalid_setting (density, undoSendSeconds, signature over 32 KiB, an " +
-			"activeAccountId that is not the user's, an unsupported language, over 1000 trustedImageSenders) or invalid_timezone.",
+			"activeAccountId that is not the user's, an unsupported language or theme, over 1000 trustedImageSenders) or invalid_timezone.",
 		Errors: []int{http.StatusBadRequest, http.StatusUnauthorized, http.StatusForbidden, http.StatusUnprocessableEntity},
 	}), func(ctx context.Context, in *patchSettingsInput) (*settingsOutput, error) {
 		userID := sessionFrom(ctx).UserID
@@ -205,6 +212,12 @@ func (d *deps) registerSettings(a huma.API) {
 				return nil, invalidSetting("language must be one of en, pl.")
 			}
 			set["language"] = *b.Language
+		}
+		if b.Theme != nil {
+			if !slices.Contains(Themes, *b.Theme) {
+				return nil, invalidSetting("theme must be one of " + strings.Join(Themes, ", ") + ".")
+			}
+			set["theme"] = *b.Theme
 		}
 		if b.TrustedImageSenders != nil {
 			list, ok := NormalizeTrustedSenders(b.TrustedImageSenders)
