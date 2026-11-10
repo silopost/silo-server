@@ -326,7 +326,9 @@ How the main parts of the API behave, with the related settings.
   due at once. A `409 draft_version_conflict` carries `currentVersion` and `current`
   (the draft as saved meanwhile); an invalid address is `400 validation_failed` with
   `address` and `field` (`to`/`cc`/`bcc`). Messages and threads carry `draftId`
-  (`d_…`, the newest draft of a thread) for opening them in compose. Drafts never
+  (`d_…`, the newest draft of a thread) for opening them in compose; threads also carry
+  `draftCount` (drafts in the thread, 0 without one; a queued send is `SCHEDULED`, not a
+  draft), and `thread.updated` carries both, so lists can show "Draft" / "Drafts (n)". Drafts never
   saved and still empty (version 1, no recipients, subject, body or attachments, no
   server copy) are deleted after 24 h by `blob_gc`. The limit is `maxAttachmentBytes`
   in `GET /meta`; `413 upload_too_large` carries `limit` and `size`.
