@@ -34,6 +34,7 @@ type Thread struct {
 	SnoozedUntil   *time.Time    `json:"snoozedUntil" doc:"Wake time of a snoozed thread (POST /threads/{id}/snooze); null when not snoozed."`
 	PendingSync    bool          `json:"pendingSync" doc:"Local changes still waiting for the mail server."`
 	DraftID        *string       `json:"draftId" example:"d_4k2" doc:"d_ id of the newest draft in the thread (a message with the DRAFT label), for opening it in compose; null without one."`
+	DraftCount     int           `json:"draftCount" minimum:"0" doc:"Number of drafts in the thread (messages with the DRAFT label; a queued or sending message is SCHEDULED, not a draft); 0 without one. The list shows it as Draft / Drafts (n)."`
 	ScheduledAt    *time.Time    `json:"scheduledAt" doc:"When the queued send of the thread leaves (a scheduled send, or the undo-send window): outbound send_at while the send is queued or sending and still ahead; null otherwise. The Scheduled list is GET /threads?labelId=SCHEDULED."`
 	OutboundID     *string       `json:"outboundId" example:"ob_3k" doc:"ob_ id of that send, for POST /outbound/{id}/cancel; null when scheduledAt is null."`
 }
@@ -44,7 +45,7 @@ func threadOf(t ops.Thread) Thread {
 	out := Thread{
 		ID: formatID("t_", t.ID), AccountID: formatID("acc_", t.AccountID), Subject: t.Subject, Snippet: t.Snippet,
 		LastMessageAt: t.LastMessageAt, MessageCount: t.MessageCount, UnreadCount: t.UnreadCount,
-		HasAttachments: t.HasAttachments, SnoozedUntil: t.SnoozedUntil, PendingSync: t.PendingSync,
+		HasAttachments: t.HasAttachments, SnoozedUntil: t.SnoozedUntil, PendingSync: t.PendingSync, DraftCount: t.DraftCount,
 		LabelIDs: append([]string{}, t.SystemLabels...), Participants: make([]Participant, 0, len(t.Participants)),
 	}
 	for _, id := range t.LabelIDs {

@@ -67,6 +67,10 @@ type threadUpdatedPayload struct {
 	Snippet       string     `json:"snippet"`
 	PendingSync   bool       `json:"pendingSync"`
 	SnoozedUntil  *time.Time `json:"snoozedUntil"`
+	// DraftID and DraftCount as in the thread list (ops.FillDraftIDs): the
+	// newest draft of the thread (null without one) and the number of drafts.
+	DraftID    *int64 `json:"draftId"`
+	DraftCount int    `json:"draftCount"`
 }
 
 type labelCount struct {
@@ -83,15 +87,23 @@ func (b *eventBuf) emitThreadEvents(ctx context.Context, db DB, accountID int64,
 		rows, err := db.Query(ctx, `
 SELECT t.id, t.unread_count, t.message_count, t.last_message_at, t.snippet, t.pending_ops > 0, t.snoozed_until,
        COALESCE((SELECT array_agg(tl.label_id ORDER BY tl.label_id) FROM thread_labels tl
-                 WHERE tl.thread_id = t.id AND NOT tl.hidden), '{}')
-FROM threads t WHERE t.id = ANY($1) ORDER BY t.id`, threadIDs)
+                 WHERE tl.thread_id = t.id AND NOT tl.hidden), '{}'),
+       d.newest, COALESCE(d.n, 0)
+FROM threads t
+LEFT JOIN LATERAL (
+  SELECT (array_agg(m.id ORDER BY m.internal_date DESC, m.id DESC))[1] AS newest, count(DISTINCT m.id) AS n
+  FROM messages m
+  JOIN message_labels ml ON ml.message_id = m.id
+  JOIN labels l ON l.id = ml.label_id AND l.system_key = 'DRAFT'
+  WHERE m.thread_id = t.id AND m.orphaned_at IS NULL) d ON true
+WHERE t.id = ANY($1) ORDER BY t.id`, threadIDs)
 		if err != nil {
 			return fmt.Errorf("mail: load thread events: %w", err)
 		}
 		found := map[int64]bool{}
 		for rows.Next() {
 			p := threadUpdatedPayload{AccountID: accountID}
-			if err := rows.Scan(&p.ThreadID, &p.UnreadCount, &p.MessageCount, &p.LastMessageAt, &p.Snippet, &p.PendingSync, &p.SnoozedUntil, &p.LabelIDs); err != nil {
+			if err := rows.Scan(&p.ThreadID, &p.UnreadCount, &p.MessageCount, &p.LastMessageAt, &p.Snippet, &p.PendingSync, &p.SnoozedUntil, &p.LabelIDs, &p.DraftID, &p.DraftCount); err != nil {
 				rows.Close()
 				return err
 			}

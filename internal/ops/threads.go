@@ -34,8 +34,10 @@ type Thread struct {
 	SnoozedUntil   *time.Time
 	PendingSync    bool
 	// DraftID is the newest message of the thread with the DRAFT label (0: none);
-	// its d_ id opens it in compose.
-	DraftID int64
+	// its d_ id opens it in compose. DraftCount counts the messages of the
+	// thread with that label (0: none).
+	DraftID    int64
+	DraftCount int
 	// ScheduledAt and OutboundID: the send of the thread waiting for its time
 	// (outbound queued or sending with send_at ahead; a scheduled send or the
 	// undo-send window), the earliest one; nil and 0 without one.
@@ -92,8 +94,9 @@ func FillThreadExtras(ctx context.Context, db mail.DB, ts []Thread) error {
 	return fillScheduled(ctx, db, ts)
 }
 
-// FillDraftIDs sets DraftID of the threads that have the DRAFT label: the
-// newest message of the thread with that label (one query for all).
+// FillDraftIDs sets DraftID and DraftCount of the threads that have the DRAFT
+// label: the newest message of the thread with that label and the number of
+// such messages (one query for all).
 func FillDraftIDs(ctx context.Context, db mail.DB, ts []Thread) error {
 	idx := map[int64]int{}
 	var ids []int64
@@ -107,21 +110,22 @@ func FillDraftIDs(ctx context.Context, db mail.DB, ts []Thread) error {
 		return nil
 	}
 	rows, err := db.Query(ctx, `
-SELECT DISTINCT ON (m.thread_id) m.thread_id, m.id FROM messages m
+SELECT m.thread_id, (array_agg(m.id ORDER BY m.internal_date DESC, m.id DESC))[1], count(DISTINCT m.id) FROM messages m
 JOIN message_labels ml ON ml.message_id = m.id
 JOIN labels l ON l.id = ml.label_id AND l.system_key = 'DRAFT'
 WHERE m.thread_id = ANY($1) AND m.orphaned_at IS NULL
-ORDER BY m.thread_id, m.internal_date DESC, m.id DESC`, ids)
+GROUP BY m.thread_id`, ids)
 	if err != nil {
 		return err
 	}
 	defer rows.Close()
 	for rows.Next() {
 		var tid, mid int64
-		if err := rows.Scan(&tid, &mid); err != nil {
+		var n int
+		if err := rows.Scan(&tid, &mid, &n); err != nil {
 			return err
 		}
-		ts[idx[tid]].DraftID = mid
+		ts[idx[tid]].DraftID, ts[idx[tid]].DraftCount = mid, n
 	}
 	return rows.Err()
 }

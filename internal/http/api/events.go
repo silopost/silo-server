@@ -40,7 +40,7 @@ type pollOutput struct{ Body PollResult }
 
 var eventStreamDoc = map[string]*huma.Response{"200": {
 	Description: "A Server-Sent Events stream. Each event has id (sequence number), event (type) and data (JSON); " +
-		"types: message.new, thread.updated, thread.deleted, thread.merged, label.counts, label.changed, operation.failed, " +
+		"types: message.new, thread.updated (draftId and draftCount as in the thread list), thread.deleted, thread.merged, label.counts, label.changed, operation.failed, " +
 		"filter.applied ({filterId, accountId, messages, threads}: POST /filters/{id}/apply is done), settings.updated " +
 		"({updatedAt}: reload GET /settings), account.status, account.sync_progress, account.error, resync, session.expired " +
 		"(the session was signed out, revoked, expired or its user disabled: the stream ends; sign in again), stream.limit " +
