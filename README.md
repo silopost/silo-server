@@ -5,7 +5,7 @@ IMAP mailboxes into Postgres, sends mail over SMTP and serves the REST API and r
 by [silo-web](https://github.com/silopost/silo-web) and [silo-mobile](https://github.com/silopost/silo-mobile).
 
 [![License: AGPL-3.0](https://img.shields.io/badge/license-AGPL--3.0-blue.svg)](LICENSE)
-[![Release](https://img.shields.io/badge/release-v0.8.0-informational.svg)](https://github.com/silopost/silo-server/releases)
+[![Release](https://img.shields.io/badge/release-v0.9.0-informational.svg)](https://github.com/silopost/silo-server/releases)
 [![Go](https://img.shields.io/badge/go-1.26%2B-00ADD8.svg)](go.mod)
 [![CI](https://github.com/silopost/silo-server/actions/workflows/ci.yml/badge.svg)](https://github.com/silopost/silo-server/actions/workflows/ci.yml)
 
