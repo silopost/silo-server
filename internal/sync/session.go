@@ -319,13 +319,6 @@ func (s *session) run(ctx context.Context) error {
 		if did {
 			continue
 		}
-		var wait <-chan time.Time
-		if s.bodyWork && time.Now().Before(s.backfillAt) {
-			wait = time.After(time.Until(s.backfillAt))
-		}
-		if s.restoring && wait == nil {
-			wait = time.After(time.Second)
-		}
 		select {
 		case <-ctx.Done():
 			return nil
@@ -344,9 +337,24 @@ func (s *session) run(ctx context.Context) error {
 			s.w.request(func(p *pending) { p.sweep = true })
 		case <-inboxTick:
 			s.w.request(func(p *pending) { p.inbox = true })
-		case <-wait:
+		case <-s.idleWait():
 		}
 	}
+}
+
+// idleWait is the timer of the scheduler's idle select. Body work left over
+// (backfillStep only waits for the pacing deadline then) always gets one, even
+// when the deadline has passed since backfillStep looked at the clock: a nil
+// channel there would park the backfill, and with it the initial-sync-done
+// marker, until the next poll or IDLE event.
+func (s *session) idleWait() <-chan time.Time {
+	if s.bodyWork {
+		return time.After(time.Until(s.backfillAt)) // fires at once when overdue
+	}
+	if s.restoring {
+		return time.After(time.Second)
+	}
+	return nil
 }
 
 // incremental runs the requested incremental work (plan 3.5.4).
