@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/emersion/go-imap/v2"
 	"github.com/emersion/go-imap/v2/imapclient"
 	"github.com/emersion/go-sasl"
 )
@@ -162,13 +163,18 @@ func (c *Client) Authenticate(ctx context.Context, sc sasl.Client) error {
 func (c *Client) Capabilities(ctx context.Context) (Capabilities, error) {
 	ctx, cancel := context.WithTimeout(ctx, DefaultCommandTimeout)
 	defer cancel()
-	var caps Capabilities
+	var set imap.CapSet
 	err := c.await(ctx, func() error {
-		set, err := c.c.Capability().Wait()
-		caps = NewCapabilities(set)
+		var err error
+		set, err = c.c.Capability().Wait()
 		return err
 	})
-	return caps, wrapNetError(err)
+	if err != nil {
+		// set is not read: after ctx expiry the command may still be
+		// finishing on its goroutine (await does not wait for it).
+		return Capabilities{}, wrapNetError(err)
+	}
+	return NewCapabilities(set), nil
 }
 
 // Close drops the connection immediately.
@@ -186,6 +192,11 @@ func (c *Client) Logout(ctx context.Context) error {
 // Await waits for a command with a deadline from ctx. go-imap commands have no
 // timeouts of their own, so on expiry the connection is closed (it is not
 // reusable afterwards). Transport errors wrap ErrUnavailable.
+//
+// On expiry Await returns without waiting for wait, which may still be
+// running: a variable that wait writes may only be read when Await returned
+// nil or an error that came from wait itself (e.g. a NO or BAD response),
+// never after a context error.
 //
 //	err := cl.Await(ctx, cl.IMAP().Noop().Wait)
 func (c *Client) Await(ctx context.Context, wait func() error) error {

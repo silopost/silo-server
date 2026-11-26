@@ -3,6 +3,7 @@ package imapx_test
 import (
 	"context"
 	"errors"
+	"io"
 	"net"
 	"net/netip"
 	"strconv"
@@ -94,6 +95,40 @@ func TestDialGreetingTimeout(t *testing.T) {
 	if !errors.Is(err, imapx.ErrUnavailable) || time.Since(start) > 3*time.Second {
 		t.Fatalf("want fast ErrUnavailable, got %v after %v", err, time.Since(start))
 	}
+}
+
+// A Capabilities call cut off by its context returns an error and does not
+// read the result the command goroutine is still writing (run with -race:
+// the server never answers CAPABILITY, so the command fails only after the
+// connection is closed, after Capabilities returned).
+func TestCapabilitiesCancelled(t *testing.T) {
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer l.Close()
+	go func() {
+		c, err := l.Accept()
+		if err != nil {
+			return
+		}
+		defer c.Close()
+		_, _ = c.Write([]byte("* OK ready\r\n"))
+		_, _ = io.Copy(io.Discard, c) // reads commands, answers none
+	}()
+	host, port := hostPort(t, l.Addr().String())
+	c, err := imapx.Dial(context.Background(), host, port, imapx.TLSNone, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	if _, err := c.Capabilities(ctx); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("want DeadlineExceeded, got %v", err)
+	}
+	<-c.IMAP().Closed()
+	time.Sleep(100 * time.Millisecond) // let the command goroutine finish
 }
 
 type staticResolver map[string]string
