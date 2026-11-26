@@ -302,6 +302,18 @@ type Outbound struct {
 	UpdatedAt         pgtype.Timestamptz
 }
 
+type PushDevice struct {
+	ID         int64
+	UserID     int64
+	SessionID  int64
+	Provider   string
+	PushToken  string
+	AccountIds []int64
+	CreatedAt  pgtype.Timestamptz
+	LastUsedAt pgtype.Timestamptz
+	LastError  pgtype.Text
+}
+
 type SearchHistory struct {
 	ID        int64
 	UserID    int64

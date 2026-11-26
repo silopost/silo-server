@@ -166,6 +166,20 @@ func joinAddrs(lists ...[]Address) string {
 // queues filter_eval for new INBOX messages (the filters package applies the
 // actions as operations without undo, plan 3.11).
 func IngestBatch(ctx context.Context, db DB, accountID, folderID int64, msgs []FetchedMessage) (*IngestResult, error) {
+	return IngestBatchWith(ctx, db, accountID, folderID, msgs, IngestOptions{})
+}
+
+// IngestOptions tune IngestBatchWith.
+type IngestOptions struct {
+	// Notify marks the batch as mail that just arrived (the incremental
+	// sync, UID >= uidnext; not the initial sync or a gap refill): new
+	// messages of the INBOX queue push.notify (EnqueuePushNotify), at once or,
+	// when they are handed to filters, after filter_eval for those that stay.
+	Notify bool
+}
+
+// IngestBatchWith is IngestBatch with options.
+func IngestBatchWith(ctx context.Context, db DB, accountID, folderID int64, msgs []FetchedMessage, opts IngestOptions) (*IngestResult, error) {
 	res := &IngestResult{}
 	if len(msgs) == 0 {
 		return res, nil
@@ -321,12 +335,17 @@ ON CONFLICT (folder_id, uid) DO UPDATE SET
 
 	// Step 7 before step 6: messages handed to filters wake a snoozed thread
 	// only if the filters leave them in INBOX (filter_eval does it).
-	filtered, err := filterIngest(ctx, db, accountID, folder.role, newIDs)
+	filtered, err := filterIngest(ctx, db, accountID, folder.role, newIDs, opts.Notify)
 	if err != nil {
 		return nil, err
 	}
 	if err := snoozeIngest(ctx, db, folder.role, withoutIDs(newIDs, filtered), threads); err != nil {
 		return nil, err
+	}
+	if opts.Notify && folder.role == "inbox" {
+		if err := EnqueuePushNotify(ctx, db, accountID, withoutIDs(newIDs, filtered)); err != nil {
+			return nil, err
+		}
 	}
 	if len(newIDs) > 0 {
 		if err := emitMessageNew(ctx, db, ev, accountID, newIDs, res); err != nil {

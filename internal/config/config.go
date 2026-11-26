@@ -109,6 +109,9 @@ type Config struct {
 
 	// OAuth2 applications for XOAUTH2 accounts (oauth.go).
 	OAuth OAuthConfig
+
+	// Push notifications of native clients (push.go).
+	Push PushConfig
 }
 
 // Load parses the process environment, applies derived defaults and checks the

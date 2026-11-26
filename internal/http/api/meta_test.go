@@ -46,8 +46,11 @@ func TestMeta(t *testing.T) {
 	if p, ok := got["oauthProviders"].([]any); !ok || len(p) != 0 {
 		t.Fatalf("oauthProviders = %#v, want []", got["oauthProviders"])
 	}
-	if len(got) != len(want)+1 {
-		t.Fatalf("got %v, want %v and oauthProviders", got, want)
+	if p, ok := got["push"].(map[string]any); !ok || len(p) != 1 || p["providers"] == nil || len(p["providers"].([]any)) != 0 {
+		t.Fatalf("push = %#v, want {providers: []} without a push service", got["push"])
+	}
+	if len(got) != len(want)+2 {
+		t.Fatalf("got %v, want %v, oauthProviders and push", got, want)
 	}
 	for k, v := range want {
 		if got[k] != v {

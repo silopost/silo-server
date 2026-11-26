@@ -18,6 +18,13 @@ type Meta struct {
 	MaxAttachmentBytes int64  `json:"maxAttachmentBytes" doc:"Limit in bytes of one upload and of a sent message with its attachments (SILO_MAX_ATTACHMENT_BYTES); larger ones are 413 upload_too_large / message_too_large." example:"26214400"`
 
 	OAuthProviders []string `json:"oauthProviders" doc:"OAuth2 providers configured on the instance (google, microsoft): silo-web offers \"Sign in with ...\" for them (POST /oauth/{provider}/start). Empty when none."`
+
+	Push PushMeta `json:"push" doc:"Push notifications for native clients."`
+}
+
+// PushMeta tells native clients whether they can register for push.
+type PushMeta struct {
+	Providers []string `json:"providers" doc:"Push providers accepted by POST /devices (expo); empty when push is switched off (SILO_PUSH_ENABLED=false): clients hide the feature."`
 }
 
 // MetaOutput is the response of GET /meta.
@@ -37,6 +44,7 @@ func registerMeta(a huma.API, o Options) {
 		AllowCustomServers: o.AllowCustomServers,
 		MaxAttachmentBytes: o.MaxAttachmentBytes,
 		OAuthProviders:     o.OAuth.Configured(),
+		Push:               PushMeta{Providers: o.Push.Providers()},
 	}
 	huma.Register(a, huma.Operation{
 		OperationID: "getMeta",

@@ -10,14 +10,14 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// latestVersion is the number of the newest migration (000052_oauth; phase 4 has 000006..000009).
-const latestVersion = 52
+// latestVersion is the number of the newest migration (000053_push_devices; phase 4 has 000006..000009).
+const latestVersion = 53
 
 // appTables is every table created by the migrations (schema_migrations excluded).
 var appTables = []string{
 	"account_rebuilds", "accounts", "attachments", "blobs", "contacts", "drafts", "events", "filters",
 	"jobs", "label_folder_state", "labels", "mailbox_folders", "message_labels", "message_locations",
-	"message_references", "messages", "metadata_restores", "oauth_states", "op_messages", "operations", "outbound",
+	"message_references", "messages", "metadata_restores", "oauth_states", "op_messages", "operations", "outbound", "push_devices",
 	"search_history", "sessions", "snooze_items", "snoozes", "sync_cursors", "thread_labels", "threads", "thumbnails", "users",
 }
 

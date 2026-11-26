@@ -82,7 +82,8 @@ func (s *Service) liveLabels(ctx context.Context, accountID int64, a Actions) (A
 // there. The actions of all matching filters are applied together, one
 // operation per set of actions, without the undo window. Messages the
 // filters leave in INBOX wake their snoozed thread (step 6, deferred to here
-// so that a filtered-out message does not wake it).
+// so that a filtered-out message does not wake it) and, when they just
+// arrived (Notify), queue push.notify.
 func (s *Service) runEval(ctx context.Context, job worker.Job) error {
 	var p mail.FilterEvalPayload
 	if err := json.Unmarshal(job.Payload, &p); err != nil {
@@ -178,6 +179,11 @@ func (s *Service) runEval(ctx context.Context, job worker.Job) error {
 	}
 	if err := mail.WakeSnoozedBy(ctx, s.o.Pool, stay); err != nil {
 		return err
+	}
+	if p.Notify { // new mail the filters left in INBOX: push (phase 6)
+		if err := mail.EnqueuePushNotify(ctx, s.o.Pool, p.AccountID, stay); err != nil {
+			return err
+		}
 	}
 	// Forwards last and never retried: a copy that left must not leave twice.
 	for _, f := range forwards {

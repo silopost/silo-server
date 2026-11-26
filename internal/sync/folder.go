@@ -162,7 +162,8 @@ func (s *session) syncFolder(ctx context.Context, f *folder, force bool, st *ima
 	oldNext := f.uidNext
 	top := uint32(sel.UIDNext)
 
-	// 1. New messages (UID >= uidnext).
+	// 1. New messages (UID >= uidnext). New INBOX mail queues push (phase 6):
+	// only here, not in the initial sync or the gap refill of step 2.
 	var newInbox []mail.IngestedMessage
 	if top > oldNext {
 		uids, err := s.sc.searchUIDs(ctx, uidRange(oldNext, 0))
@@ -170,7 +171,7 @@ func (s *session) syncFolder(ctx context.Context, f *folder, force bool, st *ima
 			return err
 		}
 		uids = slices.DeleteFunc(uids, func(u uint32) bool { return u < oldNext })
-		got, err := s.ingestUIDs(ctx, f, uids)
+		got, err := s.ingestUIDs(ctx, f, uids, f.role == RoleInbox && s.d.Settings.Push)
 		if err != nil {
 			return err
 		}
@@ -196,7 +197,7 @@ func (s *session) syncFolder(ctx context.Context, f *folder, force bool, st *ima
 		}
 	}
 	if len(missing) > 0 {
-		got, err := s.ingestUIDs(ctx, f, missing)
+		got, err := s.ingestUIDs(ctx, f, missing, false)
 		if err != nil {
 			return err
 		}
@@ -311,8 +312,9 @@ func (s *session) touchFolder(ctx context.Context, f *folder) error {
 }
 
 // ingestUIDs fetches and ingests UIDs of the selected folder in batches and
-// returns the messages that are new to the account.
-func (s *session) ingestUIDs(ctx context.Context, f *folder, uids []uint32) ([]mail.IngestedMessage, error) {
+// returns the messages that are new to the account. notify marks mail that
+// just arrived (mail.IngestOptions.Notify: push of new INBOX messages).
+func (s *session) ingestUIDs(ctx context.Context, f *folder, uids []uint32, notify bool) ([]mail.IngestedMessage, error) {
 	var created []mail.IngestedMessage
 	for len(uids) > 0 {
 		n := min(len(uids), headerBatch)
@@ -327,7 +329,7 @@ func (s *session) ingestUIDs(ctx context.Context, f *folder, uids []uint32) ([]m
 		var res *mail.IngestResult
 		if err := s.tx(ctx, func(tx pgx.Tx) error {
 			var err error
-			res, err = mail.IngestBatch(ctx, tx, s.acc.id, f.id, msgs)
+			res, err = mail.IngestBatchWith(ctx, tx, s.acc.id, f.id, msgs, mail.IngestOptions{Notify: notify})
 			return err
 		}); err != nil {
 			return nil, err

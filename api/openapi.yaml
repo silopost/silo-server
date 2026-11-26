@@ -622,6 +622,48 @@ components:
         - name
         - type
       type: object
+    Device:
+      additionalProperties: false
+      properties:
+        accountIds:
+          description: "Accounts whose new mail is pushed; null: every account of the user."
+          items:
+            type: string
+          type:
+            - array
+            - "null"
+        createdAt:
+          format: date-time
+          type: string
+        id:
+          examples:
+            - dev_1
+          type: string
+        lastError:
+          description: Last delivery error reported by the push service (e.g. MessageRateExceeded), null after a successful push. A token the service reports as not registered removes the device instead.
+          type:
+            - string
+            - "null"
+        lastUsedAt:
+          description: Last registration or accepted push.
+          format: date-time
+          type: string
+        provider:
+          enum:
+            - expo
+          type: string
+        pushToken:
+          description: The token registered by this session.
+          type: string
+      required:
+        - id
+        - provider
+        - pushToken
+        - accountIds
+        - createdAt
+        - lastUsedAt
+        - lastError
+      type: object
     DiscoverRequest:
       additionalProperties: false
       properties:
@@ -1533,6 +1575,9 @@ components:
           type:
             - array
             - "null"
+        push:
+          $ref: "#/components/schemas/PushMeta"
+          description: Push notifications for native clients.
         serverVersion:
           description: Version of silo-server.
           examples:
@@ -1546,6 +1591,7 @@ components:
         - allowCustomServers
         - maxAttachmentBytes
         - oauthProviders
+        - push
       type: object
     ModifyBody:
       additionalProperties: false
@@ -1783,6 +1829,19 @@ components:
         - ok
         - steps
       type: object
+    PushMeta:
+      additionalProperties: false
+      properties:
+        providers:
+          description: "Push providers accepted by POST /devices (expo); empty when push is switched off (SILO_PUSH_ENABLED=false): clients hide the feature."
+          items:
+            type: string
+          type:
+            - array
+            - "null"
+      required:
+        - providers
+      type: object
     PutFoldersInputBody:
       additionalProperties: false
       properties:
@@ -1808,6 +1867,31 @@ components:
           type: string
       required:
         - email
+      type: object
+    RegisterDevice:
+      additionalProperties: false
+      properties:
+        accountIds:
+          description: "Accounts of the user (acc_ ids) to push; omitted or null: every account (also accounts added later)."
+          items:
+            type: string
+          maxItems: 100
+          type:
+            - array
+            - "null"
+        provider:
+          description: Push provider; one of GET /meta push.providers.
+          enum:
+            - expo
+          type: string
+        pushToken:
+          description: Expo push token (ExponentPushToken[...] or ExpoPushToken[...]).
+          maxLength: 255
+          pattern: ^Expo(nent)?PushToken\[[^\[\]\s]{1,200}\]$
+          type: string
+      required:
+        - provider
+        - pushToken
       type: object
     Resync:
       additionalProperties: false
@@ -3912,6 +3996,153 @@ paths:
       summary: Suggest recipients
       tags:
         - drafts
+  /devices:
+    post:
+      description: "Bearer sessions only (403 bearer_session_required for the cookie session). A session has one device: registering again updates it (another token replaces it). The same token registered by another session moves to this one. Signing out (DELETE /session) or the expiry of the session removes the device. 403 push_disabled when the instance has push switched off (GET /meta push.providers is empty); 422 invalid_account when accountIds names an account the user does not have. Notifications carry no message content: a generic title and data `{v: 1, type: \"mail\", accountId, threadId, count}` (Android channel `mail`)."
+      operationId: registerDevice
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RegisterDevice"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Device"
+          description: OK
+        "400":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Bad Request
+        "401":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Unauthorized
+        "403":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Forbidden
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Unprocessable Entity
+        "500":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Internal Server Error
+      security:
+        - cookieAuth: []
+          csrfHeader: []
+        - bearerAuth: []
+      summary: Register the push device of this session
+      tags:
+        - devices
+  /devices/current:
+    get:
+      description: Bearer sessions only (403 bearer_session_required). 404 when the session has no device (never registered, or removed after the push service reported the token as not registered).
+      operationId: getCurrentDevice
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Device"
+          description: OK
+        "401":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Unauthorized
+        "403":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Forbidden
+        "404":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Not Found
+        "500":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Internal Server Error
+      security:
+        - cookieAuth: []
+        - bearerAuth: []
+      summary: Get the push device of this session
+      tags:
+        - devices
+  /devices/{id}:
+    delete:
+      description: Removes a device of the user (any of their sessions); push to it stops. Works with push switched off too.
+      operationId: deleteDevice
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            examples:
+              - dev_1
+            type: string
+      responses:
+        "204":
+          description: No Content
+        "401":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Unauthorized
+        "403":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Forbidden
+        "404":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Not Found
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Unprocessable Entity
+        "500":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Internal Server Error
+      security:
+        - cookieAuth: []
+          csrfHeader: []
+        - bearerAuth: []
+      summary: Unregister a push device
+      tags:
+        - devices
   /drafts:
     post:
       description: "Creates a draft with the DRAFT label: a new message, or with replyToMessageId a reply (reply: the sender or Reply-To; replyAll: also the other recipients without the account) in the thread of that message, or a forward (new thread). Subject (Re:/Fwd:) and quoted body are prefilled. Nothing reaches the mail server before the first PUT. The quote is the sanitised HTML of the original (its text when it has no HTML); a body not downloaded yet is fetched first (up to 10 s), else the quote is the snippet and warnings has quote_unavailable. Inline pictures shown by the quote are copied to the draft (inline, same cid). A forward also carries the attachments of the original (attachments, ids for attachmentIds); parts that cannot be downloaded are left out (attachments_unavailable), as are those over the attachment limit together (attachments_too_large)."

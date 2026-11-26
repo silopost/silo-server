@@ -30,6 +30,7 @@ import (
 	"github.com/silopost/silo-server/internal/netx"
 	"github.com/silopost/silo-server/internal/oauth"
 	"github.com/silopost/silo-server/internal/ops"
+	"github.com/silopost/silo-server/internal/push"
 	"github.com/silopost/silo-server/internal/secrets"
 	"github.com/silopost/silo-server/internal/store"
 	silosync "github.com/silopost/silo-server/internal/sync"
@@ -171,9 +172,13 @@ func serve(ctx context.Context, args []string) error {
 			InsecureTLS:        cfg.AllowInsecureTransport,
 			KeywordFolderLimit: keywordLimit(cfg.SyncKeywordFolderLimit),
 			DialContext:        accountDialer.DialContext,
+			Push:               cfg.Push.Enabled,
 		},
 	})
 	syncMgr.RegisterJobs(jobs)
+	// Push of new mail to native clients (phase 6): push.notify, push.receipts.
+	pushSvc := push.New(push.Options{Pool: pool, Config: cfg.Push, Logger: logger})
+	pushSvc.RegisterJobs(jobs)
 	backup.RegisterJobs(jobs, backup.RestoreOptions{Pool: pool, Logger: logger})
 	view := mailview.New(pool, blobs, syncMgr)
 	draftSvc := drafts.New(drafts.Options{
@@ -239,6 +244,7 @@ func serve(ctx context.Context, args []string) error {
 				Admin:              admin.New(pool, authSvc),
 				Discovery:          discoveryOptions(cfg, logger),
 				OAuth:              oauthSvc,
+				Push:               pushSvc,
 				PublicURL:          cfg.PublicURL,
 				Logger:             logger,
 			},

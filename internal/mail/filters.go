@@ -20,6 +20,9 @@ type FilterEvalPayload struct {
 	AccountID  int64     `json:"accountId"`
 	MessageIDs []int64   `json:"messageIds"`
 	QueuedAt   time.Time `json:"queuedAt"`
+	// Notify: the messages just arrived (IngestOptions.Notify); those the
+	// filters leave in INBOX queue push.notify.
+	Notify bool `json:"notify,omitempty"`
 }
 
 // filterIngest is step 7 of plan 3.5.7: new messages of the INBOX received
@@ -29,7 +32,7 @@ type FilterEvalPayload struct {
 // (newIDs: a message moved into INBOX by another client is not filtered).
 // It returns the messages handed over: they do not wake a snoozed thread
 // here, filter_eval does it for those that stay in INBOX.
-func filterIngest(ctx context.Context, db DB, accountID int64, folderRole string, newIDs []int64) ([]int64, error) {
+func filterIngest(ctx context.Context, db DB, accountID int64, folderRole string, newIDs []int64, notify bool) ([]int64, error) {
 	if folderRole != "inbox" || len(newIDs) == 0 {
 		return nil, nil
 	}
@@ -44,7 +47,7 @@ WHERE m.id = ANY($2) AND a.id = $1 AND a.filters_since IS NOT NULL AND m.interna
 	if len(ids) == 0 {
 		return nil, nil
 	}
-	payload, _ := json.Marshal(FilterEvalPayload{AccountID: accountID, MessageIDs: ids, QueuedAt: time.Now().UTC()})
+	payload, _ := json.Marshal(FilterEvalPayload{AccountID: accountID, MessageIDs: ids, QueuedAt: time.Now().UTC(), Notify: notify})
 	if _, err := db.Exec(ctx, `INSERT INTO jobs (kind, payload) VALUES ($1, $2)`, JobFilterEval, payload); err != nil {
 		return nil, fmt.Errorf("mail: enqueue %s: %w", JobFilterEval, err)
 	}

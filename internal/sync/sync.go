@@ -127,6 +127,9 @@ type Settings struct {
 	// DialContext opens the IMAP connections (the anti-SSRF dialer of netx);
 	// net.Dialer when nil.
 	DialContext func(ctx context.Context, network, addr string) (net.Conn, error)
+	// Push (SILO_PUSH_ENABLED): new INBOX messages found by the incremental
+	// sync queue push.notify (mail.IngestOptions.Notify).
+	Push bool
 }
 
 func (s Settings) withDefaults() Settings {

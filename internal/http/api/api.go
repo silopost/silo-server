@@ -20,6 +20,7 @@ import (
 	"github.com/silopost/silo-server/internal/mailview"
 	"github.com/silopost/silo-server/internal/oauth"
 	"github.com/silopost/silo-server/internal/ops"
+	"github.com/silopost/silo-server/internal/push"
 	silosync "github.com/silopost/silo-server/internal/sync"
 )
 
@@ -70,6 +71,8 @@ type Options struct {
 	// OAuth backs /oauth/{provider}/... and GET /meta oauthProviders; nil:
 	// no provider configured.
 	OAuth *oauth.Service
+	// Push backs /devices and GET /meta push; nil: push off.
+	Push *push.Service
 	// Discovery configures POST /accounts/discover.
 	Discovery DiscoveryOptions
 	// SSEHeartbeat is the interval of the ": ping" comment on /events (25 s when 0).
@@ -93,6 +96,7 @@ type deps struct {
 	events       *events.Hub
 	filters      *filters.Service
 	admin        *admin.Service
+	push         *push.Service
 	heartbeat    time.Duration
 	log          *slog.Logger
 	publicOrigin string
@@ -101,7 +105,7 @@ type deps struct {
 }
 
 func newDeps(o Options) *deps {
-	d := &deps{auth: o.Auth, accts: o.Accounts, sync: o.Sync, ops: o.Ops, view: o.View, drafts: o.Drafts, events: o.Events, filters: o.Filters, admin: o.Admin, heartbeat: o.SSEHeartbeat, log: o.Logger}
+	d := &deps{auth: o.Auth, accts: o.Accounts, sync: o.Sync, ops: o.Ops, view: o.View, drafts: o.Drafts, events: o.Events, filters: o.Filters, admin: o.Admin, push: o.Push, heartbeat: o.SSEHeartbeat, log: o.Logger}
 	d.streams = newStreamSlots(o.MaxStreamsPerUser)
 	if d.heartbeat <= 0 {
 		d.heartbeat = 25 * time.Second
@@ -162,6 +166,7 @@ func Mount(root chi.Router, o Options) huma.API {
 		d.registerEvents(a)
 		d.registerLocalAuth(a)
 		d.registerAdmin(a)
+		d.registerDevices(a)
 	})
 	return a
 }
