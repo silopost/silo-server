@@ -6,8 +6,10 @@
 // push. New INBOX messages queue push.notify (mail.EnqueuePushNotify, from
 // the incremental sync and from filter_eval); the job checks again what is
 // still worth a notification and sends one message per device and account,
-// without content: a generic, localized title and the ids the app needs to
-// open the mail. push.receipts reads the delivery receipts 15 minutes later.
+// without content: the ids the app needs to open the mail, with a generic,
+// localized title, or with no title at all to a device that presents the
+// notification itself (data-only: the app fetches sender, subject and
+// snippet from this server). push.receipts reads the delivery receipts 15 minutes later.
 package push
 
 import (
@@ -107,6 +109,9 @@ type Registration struct {
 	Token    string
 	// AccountIDs limits push to these accounts of the user; nil: all.
 	AccountIDs []int64
+	// DataOnly: the app presents the notification itself, so the push
+	// carries no title (a data message that wakes the app).
+	DataOnly bool
 }
 
 // Register registers (or updates) the device of a bearer session. The same
@@ -148,6 +153,7 @@ func (s *Service) Register(ctx context.Context, sess sqlcgen.Session, r Registra
 		var err error
 		dev, err = q.UpsertPushDevice(ctx, sqlcgen.UpsertPushDeviceParams{
 			UserID: sess.UserID, SessionID: sess.ID, Provider: r.Provider, PushToken: r.Token, AccountIds: ids,
+			DataOnly: r.DataOnly,
 		})
 		return err
 	})

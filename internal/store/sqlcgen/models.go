@@ -312,6 +312,7 @@ type PushDevice struct {
 	CreatedAt  pgtype.Timestamptz
 	LastUsedAt pgtype.Timestamptz
 	LastError  pgtype.Text
+	DataOnly   bool
 }
 
 type SearchHistory struct {

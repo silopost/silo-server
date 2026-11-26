@@ -635,6 +635,9 @@ components:
         createdAt:
           format: date-time
           type: string
+        dataOnly:
+          description: The app presents the notifications itself (see RegisterDevice.dataOnly).
+          type: boolean
         id:
           examples:
             - dev_1
@@ -663,6 +666,7 @@ components:
         - createdAt
         - lastUsedAt
         - lastError
+        - dataOnly
       type: object
     DiscoverRequest:
       additionalProperties: false
@@ -1540,6 +1544,52 @@ components:
       type:
         - object
         - "null"
+    MessageSummaries:
+      additionalProperties: false
+      properties:
+        messages:
+          items:
+            $ref: "#/components/schemas/MessageSummary"
+          type:
+            - array
+            - "null"
+      required:
+        - messages
+      type: object
+    MessageSummary:
+      additionalProperties: false
+      properties:
+        accountId:
+          examples:
+            - acc_1
+          type: string
+        date:
+          format: date-time
+          type: string
+        from:
+          $ref: "#/components/schemas/Address"
+        id:
+          examples:
+            - m_1x9
+          type: string
+        snippet:
+          description: Plain text from the start of the body; empty while only the headers are in the mirror.
+          type: string
+        subject:
+          type: string
+        threadId:
+          examples:
+            - t_8f3k2
+          type: string
+      required:
+        - id
+        - threadId
+        - accountId
+        - from
+        - date
+        - subject
+        - snippet
+      type: object
     Meta:
       additionalProperties: false
       properties:
@@ -1879,6 +1929,9 @@ components:
           type:
             - array
             - "null"
+        dataOnly:
+          description: "true: the app presents new-mail notifications itself. The push then has no title (Expo sends a data message that wakes the app), and the app fetches sender, subject and snippet with GET /messages?ids= (data.messageIds). Omitted or false: a generic title the system shows. Re-registering without it switches back."
+          type: boolean
         provider:
           description: Push provider; one of GET /meta push.providers.
           enum:
@@ -3998,7 +4051,7 @@ paths:
         - drafts
   /devices:
     post:
-      description: "Bearer sessions only (403 bearer_session_required for the cookie session). A session has one device: registering again updates it (another token replaces it). The same token registered by another session moves to this one. Signing out (DELETE /session) or the expiry of the session removes the device. 403 push_disabled when the instance has push switched off (GET /meta push.providers is empty); 422 invalid_account when accountIds names an account the user does not have. Notifications carry no message content: a generic title and data `{v: 1, type: \"mail\", accountId, threadId, count}` (Android channel `mail`)."
+      description: "Bearer sessions only (403 bearer_session_required for the cookie session). A session has one device: registering again updates it (another token replaces it). The same token registered by another session moves to this one. Signing out (DELETE /session) or the expiry of the session removes the device. 403 push_disabled when the instance has push switched off (GET /meta push.providers is empty); 422 invalid_account when accountIds names an account the user does not have. Notifications carry no message content: data `{v: 1, type: \"mail\", accountId, threadId, count, messageIds}` (messageIds, newest first, only for bursts of at most 5 messages) with a generic title, or for dataOnly devices without a title or channel (Android channel `mail` for the titled form)."
       operationId: registerDevice
       requestBody:
         content:
@@ -5212,6 +5265,62 @@ paths:
       summary: Rename, move, recolour or hide a label
       tags:
         - labels
+  /messages:
+    get:
+      description: "What a new-mail notification shows: a native client woken by a data-only push (POST /devices with dataOnly) asks for the messages named in its data (messageIds) and presents them. Newest first; unknown ids and messages of other users are left out (no 404)."
+      operationId: listMessageSummaries
+      parameters:
+        - description: m_ ids, comma-separated.
+          explode: false
+          in: query
+          name: ids
+          required: true
+          schema:
+            description: m_ ids, comma-separated.
+            items:
+              type: string
+            maxItems: 50
+            minItems: 1
+            type:
+              - array
+              - "null"
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MessageSummaries"
+          description: OK
+        "400":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Bad Request
+        "401":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Unauthorized
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Unprocessable Entity
+        "500":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+          description: Internal Server Error
+      security:
+        - cookieAuth: []
+        - bearerAuth: []
+      summary: Get the sender, subject and snippet of messages
+      tags:
+        - messages
   /messages/modify:
     post:
       description: "Changes labels in the Gmail model: the change is visible at once (pendingSync: true) and written back to the mail server by a queued operation. Folder changes (INBOX, TRASH, SPAM, folder labels) wait for the undo window; flags (UNREAD, STARRED, IMPORTANT, user labels as keywords) are sent at once. SENT, DRAFT, SNOOZED, SCHEDULED and ARCHIVE cannot be changed directly (400)."

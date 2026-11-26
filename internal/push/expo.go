@@ -22,27 +22,36 @@ const (
 const expoErrDeviceNotRegistered = "DeviceNotRegistered"
 
 // expoMessage is one push message (https://docs.expo.dev/push-notifications/sending-notifications/).
-// It carries no message content: the title is generic, data holds ids only.
+// It carries no message content: the title is generic (none at all in a
+// data-only message), data holds ids only.
 type expoMessage struct {
-	To        string   `json:"to"`
-	Title     string   `json:"title"`
+	To string `json:"to"`
+	// Title is empty for a device that presents the notification itself:
+	// without a title, body or channelId Expo sends an FCM data message,
+	// which wakes the app instead of being shown by the system.
+	Title     string   `json:"title,omitempty"`
 	Data      mailData `json:"data"`
-	ChannelID string   `json:"channelId"` // Android notification channel
+	ChannelID string   `json:"channelId,omitempty"` // Android notification channel (titled messages only)
 	Priority  string   `json:"priority"`
-	Sound     string   `json:"sound"` // iOS
+	Sound     string   `json:"sound,omitempty"` // iOS
 	// Tag (Android) and CollapseID (iOS) replace the notification shown
-	// for the same account.
-	Tag        string `json:"tag"`
-	CollapseID string `json:"collapseId"`
+	// for the same account (titled messages only: data messages must not
+	// collapse, each one may name other messages).
+	Tag        string `json:"tag,omitempty"`
+	CollapseID string `json:"collapseId,omitempty"`
 }
 
 // mailData is the data of a new-mail notification; ids are API ids.
+// MessageIDs (added in version 1 without a bump: older apps ignore it) lists
+// the messages newest first when there are at most MaxNotifiedMessages of
+// them; with more it is omitted and the app shows one "N new messages".
 type mailData struct {
-	V         int    `json:"v"`
-	Type      string `json:"type"`
-	AccountID string `json:"accountId"`
-	ThreadID  string `json:"threadId"`
-	Count     int    `json:"count"`
+	V          int      `json:"v"`
+	Type       string   `json:"type"`
+	AccountID  string   `json:"accountId"`
+	ThreadID   string   `json:"threadId"`
+	Count      int      `json:"count"`
+	MessageIDs []string `json:"messageIds,omitempty"`
 }
 
 // expoResult is a push ticket or receipt.

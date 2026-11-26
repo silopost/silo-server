@@ -37,6 +37,10 @@ func (s *Service) RegisterJobs(w *worker.Worker) {
 	w.Register(JobReceipts, s.runReceipts)
 }
 
+// MaxNotifiedMessages is the largest burst whose messages the push names
+// (mailData.MessageIDs), so that the app shows one notification for each.
+const MaxNotifiedMessages = 5
+
 // runNotify is push.notify: one message per device of the user that wants
 // the account, about the messages of the job that are still unread in INBOX
 // and not from the user. Tickets: DeviceNotRegistered deletes the device,
@@ -67,14 +71,24 @@ func (s *Service) runNotify(ctx context.Context, job worker.Job) error {
 		return nil
 	}
 	data := mailData{V: 1, Type: "mail", AccountID: apiID("acc_", p.AccountID), ThreadID: apiID("t_", msgs[0].ThreadID), Count: len(msgs)}
+	if len(msgs) <= MaxNotifiedMessages {
+		data.MessageIDs = make([]string, len(msgs))
+		for i, m := range msgs {
+			data.MessageIDs[i] = apiID("m_", m.ID)
+		}
+	}
 	out := make([]expoMessage, len(targets))
 	devices := make([]int64, len(targets))
 	for i, t := range targets {
 		devices[i] = t.ID
-		out[i] = expoMessage{
-			To: t.PushToken, Title: Title(t.Language, len(msgs)), Data: data,
-			ChannelID: "mail", Priority: "high", Sound: "default",
-			Tag: "mail-" + data.AccountID, CollapseID: "mail-" + data.AccountID,
+		out[i] = expoMessage{To: t.PushToken, Data: data, Priority: "high"}
+		// A data-only message has nothing but data and priority: Expo turns a
+		// message with a channelId (or a title) into an FCM notification
+		// message, which the system shows by itself instead of waking the app.
+		if !t.DataOnly {
+			out[i].ChannelID = "mail"
+			out[i].Title, out[i].Sound = Title(t.Language, len(msgs)), "default"
+			out[i].Tag, out[i].CollapseID = "mail-"+data.AccountID, "mail-"+data.AccountID
 		}
 	}
 	var tickets []ticketRef

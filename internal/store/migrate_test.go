@@ -10,8 +10,8 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// latestVersion is the number of the newest migration (000053_push_devices; phase 4 has 000006..000009).
-const latestVersion = 53
+// latestVersion is the number of the newest migration (000054_push_devices_data_only; phase 4 has 000006..000009).
+const latestVersion = 54
 
 // appTables is every table created by the migrations (schema_migrations excluded).
 var appTables = []string{

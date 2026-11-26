@@ -71,7 +71,7 @@ func (q *Queries) DeleteSessionPushDeviceExcept(ctx context.Context, arg DeleteS
 }
 
 const getSessionPushDevice = `-- name: GetSessionPushDevice :one
-SELECT id, user_id, session_id, provider, push_token, account_ids, created_at, last_used_at, last_error FROM push_devices WHERE session_id = $1
+SELECT id, user_id, session_id, provider, push_token, account_ids, created_at, last_used_at, last_error, data_only FROM push_devices WHERE session_id = $1
 `
 
 func (q *Queries) GetSessionPushDevice(ctx context.Context, sessionID int64) (PushDevice, error) {
@@ -87,6 +87,7 @@ func (q *Queries) GetSessionPushDevice(ctx context.Context, sessionID int64) (Pu
 		&i.CreatedAt,
 		&i.LastUsedAt,
 		&i.LastError,
+		&i.DataOnly,
 	)
 	return i, err
 }
@@ -135,7 +136,7 @@ func (q *Queries) ListPushMessages(ctx context.Context, arg ListPushMessagesPara
 }
 
 const listPushTargets = `-- name: ListPushTargets :many
-SELECT d.id, d.provider, d.push_token, COALESCE(u.settings->>'language', '')::text AS language
+SELECT d.id, d.provider, d.push_token, d.data_only, COALESCE(u.settings->>'language', '')::text AS language
 FROM push_devices d
 JOIN accounts a ON a.user_id = d.user_id
 JOIN sessions s ON s.id = d.session_id
@@ -149,12 +150,14 @@ type ListPushTargetsRow struct {
 	ID        int64
 	Provider  string
 	PushToken string
+	DataOnly  bool
 	Language  string
 }
 
 // Devices that get the push of new mail of an account: live session, user
 // not disabled, the account among account_ids (NULL: all). language is
-// users.settings.language (” when unset).
+// users.settings.language (” when unset); data_only: the app presents
+// the notification itself (no title in the push).
 func (q *Queries) ListPushTargets(ctx context.Context, accountID int64) ([]ListPushTargetsRow, error) {
 	rows, err := q.db.Query(ctx, listPushTargets, accountID)
 	if err != nil {
@@ -168,6 +171,7 @@ func (q *Queries) ListPushTargets(ctx context.Context, accountID int64) ([]ListP
 			&i.ID,
 			&i.Provider,
 			&i.PushToken,
+			&i.DataOnly,
 			&i.Language,
 		); err != nil {
 			return nil, err
@@ -204,12 +208,12 @@ func (q *Queries) PushDeviceSent(ctx context.Context, id int64) error {
 }
 
 const upsertPushDevice = `-- name: UpsertPushDevice :one
-INSERT INTO push_devices (user_id, session_id, provider, push_token, account_ids)
-VALUES ($1, $2, $3, $4, $5)
+INSERT INTO push_devices (user_id, session_id, provider, push_token, account_ids, data_only)
+VALUES ($1, $2, $3, $4, $5, $6)
 ON CONFLICT (provider, push_token) DO UPDATE SET
   user_id = EXCLUDED.user_id, session_id = EXCLUDED.session_id, account_ids = EXCLUDED.account_ids,
-  last_used_at = now(), last_error = NULL
-RETURNING id, user_id, session_id, provider, push_token, account_ids, created_at, last_used_at, last_error
+  data_only = EXCLUDED.data_only, last_used_at = now(), last_error = NULL
+RETURNING id, user_id, session_id, provider, push_token, account_ids, created_at, last_used_at, last_error, data_only
 `
 
 type UpsertPushDeviceParams struct {
@@ -218,6 +222,7 @@ type UpsertPushDeviceParams struct {
 	Provider   string
 	PushToken  string
 	AccountIds []int64
+	DataOnly   bool
 }
 
 // Registers the device of a session. The same token registered before (by
@@ -230,6 +235,7 @@ func (q *Queries) UpsertPushDevice(ctx context.Context, arg UpsertPushDevicePara
 		arg.Provider,
 		arg.PushToken,
 		arg.AccountIds,
+		arg.DataOnly,
 	)
 	var i PushDevice
 	err := row.Scan(
@@ -242,6 +248,7 @@ func (q *Queries) UpsertPushDevice(ctx context.Context, arg UpsertPushDevicePara
 		&i.CreatedAt,
 		&i.LastUsedAt,
 		&i.LastError,
+		&i.DataOnly,
 	)
 	return i, err
 }

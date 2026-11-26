@@ -337,7 +337,8 @@ func TestNotifyNewInboxMessage(t *testing.T) {
 	want := map[string]any{
 		"to": e.token, "title": "New message", "channelId": "mail", "priority": "high", "sound": "default",
 		"tag": "mail-" + acc, "collapseId": "mail-" + acc,
-		"data": map[string]any{"v": float64(1), "type": "mail", "accountId": acc, "threadId": apiID("t_", thread), "count": float64(1)},
+		"data": map[string]any{"v": float64(1), "type": "mail", "accountId": acc, "threadId": apiID("t_", thread), "count": float64(1),
+			"messageIds": []any{apiID("m_", msg)}},
 	}
 	wantJSON, _ := json.Marshal(want)
 	gotJSON, _ := json.Marshal(got)
@@ -364,6 +365,76 @@ func TestNotifyNewInboxMessage(t *testing.T) {
 	}
 	if le := e.lastError(e.device.ID); le != "" {
 		t.Errorf("last_error = %q", le)
+	}
+}
+
+// A device that presents notifications itself gets a data message: no
+// title, channel, sound or tag (Expo then sends an FCM data message, which wakes the
+// app), and still no content; the app fetches it from this server.
+func TestNotifyDataOnly(t *testing.T) {
+	e := newEnv(t)
+	d, err := e.svc.Register(e.ctx, e.session, Registration{Provider: "expo", Token: e.token, DataOnly: true})
+	must(t, err)
+	if !d.DataOnly || d.ID != e.device.ID {
+		t.Fatalf("re-registration with dataOnly: %+v", d)
+	}
+	// A second device of the user registered without it keeps the titled push.
+	titled := e.register(e.newSession(), "ExpoPushToken[titled]", nil)
+	if titled.DataOnly {
+		t.Fatalf("device registered without dataOnly: %+v", titled)
+	}
+	older := e.deliver(e.account, e.inbox, "alice@example.org", true)
+	newer := e.deliver(e.account, e.inbox, "alice@example.org", true)
+	_, err = testPool.Exec(e.ctx, `UPDATE messages SET internal_date = internal_date - interval '1 minute' WHERE id = $1`, older)
+	must(t, err)
+	must(t, e.runNotify())
+	sends := e.expo.sent()
+	if len(sends) != 1 || len(sends[0]) != 2 {
+		t.Fatalf("send requests = %v, want one with a message per device", sends)
+	}
+	var thread int64
+	must(t, testPool.QueryRow(e.ctx, `SELECT thread_id FROM messages WHERE id = $1`, newer).Scan(&thread))
+	acc := apiID("acc_", e.account)
+	want := map[string]any{
+		"to": e.token, "priority": "high",
+		"data": map[string]any{"v": float64(1), "type": "mail", "accountId": acc, "threadId": apiID("t_", thread), "count": float64(2),
+			"messageIds": []any{apiID("m_", newer), apiID("m_", older)}},
+	}
+	byToken := map[string]map[string]any{}
+	for _, m := range sends[0] {
+		byToken[m["to"].(string)] = m
+	}
+	wantJSON, _ := json.Marshal(want)
+	gotJSON, _ := json.Marshal(byToken[e.token])
+	if string(wantJSON) != string(gotJSON) {
+		t.Errorf("data-only message\n got %s\nwant %s", gotJSON, wantJSON)
+	}
+	if m := byToken["ExpoPushToken[titled]"]; m["title"] != "2 new messages" || m["tag"] != "mail-"+acc {
+		t.Errorf("titled message = %v", m)
+	}
+	raw := e.expo.raw[0]
+	for _, secret := range []string{"Alice", "alice@example.org", "Secret subject", "Confidential", "@silo.test"} {
+		if strings.Contains(raw, secret) {
+			t.Errorf("push request contains %q: %s", secret, raw)
+		}
+	}
+}
+
+// Beyond MaxNotifiedMessages the push names no messages: the app shows one
+// "N new messages" for the account.
+func TestNotifyBurstOverCap(t *testing.T) {
+	e := newEnv(t)
+	for range MaxNotifiedMessages + 1 {
+		e.deliver(e.account, e.inbox, "alice@example.org", true)
+	}
+	must(t, e.runNotify())
+	sends := e.expo.sent()
+	if len(sends) != 1 || len(sends[0]) != 1 {
+		t.Fatalf("send requests = %v, want one with one message", sends)
+	}
+	data := sends[0][0]["data"].(map[string]any)
+	if _, ok := data["messageIds"]; ok || data["count"] != float64(MaxNotifiedMessages+1) {
+		t.Errorf("data = %v, want count %d without messageIds", data, MaxNotifiedMessages+1)
 	}
 }
 

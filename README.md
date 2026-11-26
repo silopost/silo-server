@@ -892,9 +892,10 @@ device registered never contacts Expo.
 
 | Endpoint | Does |
 |---|---|
-| `POST /devices` `{provider: "expo", pushToken, accountIds?}` | registers the device of the current session (`200` with the device). `pushToken` is an `ExponentPushToken[...]`/`ExpoPushToken[...]` (at most 255 characters, else `400 validation_failed`); `accountIds` limits push to these accounts of the user (`acc_` ids; omitted or `null`: all, also accounts added later; another user's account: `422 invalid_account`). A session has one device: registering again updates it. The same token registered by another session moves to this one (signing in again on the same phone leaves no duplicate). |
+| `POST /devices` `{provider: "expo", pushToken, accountIds?, dataOnly?}` | registers the device of the current session (`200` with the device). `pushToken` is an `ExponentPushToken[...]`/`ExpoPushToken[...]` (at most 255 characters, else `400 validation_failed`); `accountIds` limits push to these accounts of the user (`acc_` ids; omitted or `null`: all, also accounts added later; another user's account: `422 invalid_account`). A session has one device: registering again updates it. The same token registered by another session moves to this one (signing in again on the same phone leaves no duplicate). `dataOnly: true`: the app presents the notification itself (see below); omitted: the titled push. |
 | `GET /devices/current` | the device of the current session with `lastError` (`404` when none) |
 | `DELETE /devices/{id}` | removes a device of the user (`204`, `404` for other users' devices) |
+| `GET /messages?ids=m_1,m_2` | sender, subject, snippet, date, thread and account of up to 50 messages of the user, newest first; ids of other users or unknown ones are left out (what a `dataOnly` app shows in its notification) |
 
 Signing out (`DELETE /session`, `DELETE /sessions/{id}`) or the expiry of the
 session deletes the device (`ON DELETE CASCADE`); a disabled user gets no
@@ -911,19 +912,37 @@ becomes one notification per device and account, and checks again that each
 message is still unread in INBOX and not from one of the user's own
 addresses, and that the device still wants the account.
 
-**What leaves the server.** Per device one message to Expo:
+**What leaves the server.** Per device one message to Expo. To a device
+registered with `dataOnly` (silo-mobile on a server with this feature):
+
+```json
+{"to": "ExponentPushToken[...]", "priority": "high",
+ "data": {"v": 1, "type": "mail", "accountId": "acc_1", "threadId": "t_2s", "count": 2,
+          "messageIds": ["m_3a", "m_39"]}}
+```
+
+Without a title and a `channelId` Expo sends an FCM data message: the system shows nothing, the
+app is woken (also when its process was killed), fetches sender, subject and
+snippet with `GET /messages?ids=` from this server over its bearer session
+and presents one notification per message itself (a generic one when it
+cannot reach the server in time). To any other device (an older app):
 
 ```json
 {"to": "ExponentPushToken[...]", "title": "2 new messages", "channelId": "mail", "priority": "high",
  "sound": "default", "tag": "mail-acc_1", "collapseId": "mail-acc_1",
- "data": {"v": 1, "type": "mail", "accountId": "acc_1", "threadId": "t_2s", "count": 2}}
+ "data": {"v": 1, "type": "mail", "accountId": "acc_1", "threadId": "t_2s", "count": 2,
+          "messageIds": ["m_3a", "m_39"]}}
 ```
 
 The title is generic and follows the user's `language` setting (`New message`
-/ `Nowa wiadomość`); no sender, subject, snippet or address is sent.
-`threadId` is the thread of the newest message; `tag` (Android) and
-`collapseId` (iOS) replace the previous notification of the same account.
-Expo and the push provider see the device token, these ids and the time.
+/ `Nowa wiadomość`); no sender, subject, snippet or address is sent in
+either form. `threadId` is the thread of the newest message; `messageIds`
+(an addition to version 1 that older apps ignore) lists the messages newest
+first when there are at most 5 of them, and is omitted for a larger burst,
+which the app shows as one "N new messages"; `tag` (Android) and
+`collapseId` (iOS) replace the previous notification of the same account
+(titled form only: data messages must not collapse). Expo and the push
+provider see the device token, these ids and the time.
 
 **Errors.** A ticket or receipt `DeviceNotRegistered` deletes the device;
 other per-message errors are stored in `lastError` without a retry; HTTP 429,
@@ -1172,6 +1191,7 @@ Migrations of phase 6:
 | Migration | Adds |
 |---|---|
 | `000053_push_devices` | `push_devices` (push device of a bearer session, see [Push notifications](#push-notifications)) |
+| `000054_push_devices_data_only` | `push_devices.data_only` (the app presents the notification itself) |
 
 General jobs (table `jobs`, run by the worker of `serve`; per-account sync work and the
 cache rebuild run in the sync engine):

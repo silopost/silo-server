@@ -163,6 +163,24 @@ func TestDevices(t *testing.T) {
 		}
 	})
 
+	t.Run("dataOnly is kept per registration", func(t *testing.T) {
+		if dev.DataOnly {
+			t.Fatalf("registered without dataOnly: %+v", dev)
+		}
+		r := call(h, phone, req{method: "POST", path: "/devices", body: map[string]any{"provider": "expo", "pushToken": token, "dataOnly": true}})
+		var d api.Device
+		r.json(&d)
+		if r.Code != http.StatusOK || d.ID != dev.ID || !d.DataOnly {
+			t.Fatalf("dataOnly: %d %+v", r.Code, d)
+		}
+		// An app that no longer asks for it (older version) gets the titled push again.
+		r = call(h, phone, req{method: "POST", path: "/devices", body: map[string]any{"provider": "expo", "pushToken": token}})
+		r.json(&d)
+		if r.Code != http.StatusOK || d.DataOnly {
+			t.Fatalf("without dataOnly: %d %+v", r.Code, d)
+		}
+	})
+
 	t.Run("cookie session refused", func(t *testing.T) {
 		web := e.session(alice, "cookie")
 		r := call(h, web, req{method: "POST", path: "/devices", body: map[string]any{"provider": "expo", "pushToken": "ExpoPushToken[web]"}})

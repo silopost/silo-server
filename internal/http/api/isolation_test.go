@@ -309,6 +309,21 @@ func TestUserIsolation(t *testing.T) {
 		do("POST", "/outbound/"+o.outbound+"/cancel", http.StatusOK)
 	}
 
+	// GET /messages (what a notification shows) answers only the caller's
+	// messages: the other user's id is left out exactly like a missing one.
+	for _, pair := range []struct{ me, other owned }{{ua, ub}, {ub, ua}} {
+		var got api.MessageSummaries
+		r := serve(s.h, as(pair.me.l, req{method: "GET", path: "/messages?ids=" + pair.me.msg + "," + pair.other.msg + "," + missing.msg + ",x_1"}))
+		if r.Code != http.StatusOK {
+			t.Fatalf("%s: GET /messages: %d %s", pair.me.name, r.Code, r.Body)
+		}
+		r.json(&got)
+		if len(got.Messages) != 1 || got.Messages[0].ID != pair.me.msg || got.Messages[0].ThreadID != pair.me.thread ||
+			got.Messages[0].AccountID != pair.me.acc || !strings.HasPrefix(got.Messages[0].Subject, "Z załącznikiem") {
+			t.Errorf("%s: GET /messages = %+v", pair.me.name, got.Messages)
+		}
+	}
+
 	// Search is per account too: A finds nothing of B's subjects.
 	for _, c := range []struct {
 		l    login

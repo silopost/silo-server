@@ -28,12 +28,13 @@ type Device struct {
 	CreatedAt  time.Time `json:"createdAt"`
 	LastUsedAt time.Time `json:"lastUsedAt" doc:"Last registration or accepted push."`
 	LastError  *string   `json:"lastError" doc:"Last delivery error reported by the push service (e.g. MessageRateExceeded), null after a successful push. A token the service reports as not registered removes the device instead."`
+	DataOnly   bool      `json:"dataOnly" doc:"The app presents the notifications itself (see RegisterDevice.dataOnly)."`
 }
 
 func deviceOf(d sqlcgen.PushDevice) Device {
 	out := Device{
 		ID: formatID("dev_", d.ID), Provider: d.Provider, PushToken: d.PushToken,
-		CreatedAt: d.CreatedAt.Time, LastUsedAt: d.LastUsedAt.Time,
+		CreatedAt: d.CreatedAt.Time, LastUsedAt: d.LastUsedAt.Time, DataOnly: d.DataOnly,
 	}
 	if d.AccountIds != nil {
 		out.AccountIDs = make([]string, 0, len(d.AccountIds))
@@ -52,6 +53,7 @@ type RegisterDevice struct {
 	Provider   string    `json:"provider" enum:"expo" doc:"Push provider; one of GET /meta push.providers."`
 	PushToken  string    `json:"pushToken" maxLength:"255" pattern:"^Expo(nent)?PushToken\\[[^\\[\\]\\s]{1,200}\\]$" doc:"Expo push token (ExponentPushToken[...] or ExpoPushToken[...])."`
 	AccountIDs *[]string `json:"accountIds,omitempty" maxItems:"100" nullable:"true" doc:"Accounts of the user (acc_ ids) to push; omitted or null: every account (also accounts added later)."`
+	DataOnly   bool      `json:"dataOnly,omitempty" doc:"true: the app presents new-mail notifications itself. The push then has no title (Expo sends a data message that wakes the app), and the app fetches sender, subject and snippet with GET /messages?ids= (data.messageIds). Omitted or false: a generic title the system shows. Re-registering without it switches back."`
 }
 
 type deviceOutput struct{ Body Device }
@@ -69,11 +71,12 @@ func (d *deps) registerDevices(a huma.API) {
 			"to this one. Signing out (DELETE /session) or the expiry of the session removes the device. " +
 			"403 push_disabled when the instance has push switched off (GET /meta push.providers is empty); " +
 			"422 invalid_account when accountIds names an account the user does not have. " +
-			"Notifications carry no message content: a generic title and data " +
-			"`{v: 1, type: \"mail\", accountId, threadId, count}` (Android channel `mail`).",
+			"Notifications carry no message content: data " +
+			"`{v: 1, type: \"mail\", accountId, threadId, count, messageIds}` (messageIds, newest first, only for bursts of " +
+			"at most 5 messages) with a generic title, or for dataOnly devices without a title or channel (Android channel `mail` for the titled form).",
 		Errors: []int{http.StatusBadRequest, http.StatusUnauthorized, http.StatusForbidden, http.StatusUnprocessableEntity},
 	}), func(ctx context.Context, in *struct{ Body RegisterDevice }) (*deviceOutput, error) {
-		reg := push.Registration{Provider: in.Body.Provider, Token: in.Body.PushToken}
+		reg := push.Registration{Provider: in.Body.Provider, Token: in.Body.PushToken, DataOnly: in.Body.DataOnly}
 		if in.Body.AccountIDs != nil {
 			reg.AccountIDs = make([]int64, 0, len(*in.Body.AccountIDs))
 			for _, s := range *in.Body.AccountIDs {

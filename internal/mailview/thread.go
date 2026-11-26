@@ -174,3 +174,42 @@ func addrs(raw []byte) []Address {
 	}
 	return out
 }
+
+// MessageSummary is what a new-mail notification shows of a message.
+type MessageSummary struct {
+	ID        int64
+	ThreadID  int64
+	AccountID int64
+	From      Address
+	Date      time.Time
+	Subject   string
+	Snippet   string
+}
+
+// MessageSummaries returns the messages of the user among ids, newest
+// first; unknown ids, messages of other users and orphaned messages are
+// left out.
+func (v *View) MessageSummaries(ctx context.Context, userID int64, ids []int64) ([]MessageSummary, error) {
+	out := []MessageSummary{}
+	if len(ids) == 0 {
+		return out, nil
+	}
+	rows, err := v.pool.Query(ctx, `
+SELECT m.id, m.thread_id, m.account_id, m.from_addr::text, m.from_name,
+       COALESCE(m.header_date, m.internal_date), m.subject, m.snippet
+FROM messages m
+WHERE m.user_id = $1 AND m.id = ANY($2) AND m.orphaned_at IS NULL
+ORDER BY m.internal_date DESC, m.id DESC`, userID, ids)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var m MessageSummary
+		if err := rows.Scan(&m.ID, &m.ThreadID, &m.AccountID, &m.From.Email, &m.From.Name, &m.Date, &m.Subject, &m.Snippet); err != nil {
+			return nil, err
+		}
+		out = append(out, m)
+	}
+	return out, rows.Err()
+}

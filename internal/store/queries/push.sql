@@ -7,11 +7,11 @@ DELETE FROM push_devices WHERE session_id = $1 AND NOT (provider = $2 AND push_t
 -- Registers the device of a session. The same token registered before (by
 -- this or another session, also of another user: the phone changed hands)
 -- moves to this session.
-INSERT INTO push_devices (user_id, session_id, provider, push_token, account_ids)
-VALUES ($1, $2, $3, $4, $5)
+INSERT INTO push_devices (user_id, session_id, provider, push_token, account_ids, data_only)
+VALUES ($1, $2, $3, $4, $5, $6)
 ON CONFLICT (provider, push_token) DO UPDATE SET
   user_id = EXCLUDED.user_id, session_id = EXCLUDED.session_id, account_ids = EXCLUDED.account_ids,
-  last_used_at = now(), last_error = NULL
+  data_only = EXCLUDED.data_only, last_used_at = now(), last_error = NULL
 RETURNING *;
 
 -- name: GetSessionPushDevice :one
@@ -26,8 +26,9 @@ SELECT count(*) FROM accounts WHERE user_id = $1 AND id = ANY(sqlc.arg(ids)::big
 -- name: ListPushTargets :many
 -- Devices that get the push of new mail of an account: live session, user
 -- not disabled, the account among account_ids (NULL: all). language is
--- users.settings.language ('' when unset).
-SELECT d.id, d.provider, d.push_token, COALESCE(u.settings->>'language', '')::text AS language
+-- users.settings.language ('' when unset); data_only: the app presents
+-- the notification itself (no title in the push).
+SELECT d.id, d.provider, d.push_token, d.data_only, COALESCE(u.settings->>'language', '')::text AS language
 FROM push_devices d
 JOIN accounts a ON a.user_id = d.user_id
 JOIN sessions s ON s.id = d.session_id

@@ -98,6 +98,28 @@ type ThreadDetail struct {
 	Messages     []Message  `json:"messages"`
 }
 
+// MessageSummary is a message as a new-mail notification shows it.
+type MessageSummary struct {
+	ID        string    `json:"id" example:"m_1x9"`
+	ThreadID  string    `json:"threadId" example:"t_8f3k2"`
+	AccountID string    `json:"accountId" example:"acc_1"`
+	From      Address   `json:"from"`
+	Date      time.Time `json:"date"`
+	Subject   string    `json:"subject"`
+	Snippet   string    `json:"snippet" doc:"Plain text from the start of the body; empty while only the headers are in the mirror."`
+}
+
+// MessageSummaries is the answer of GET /messages.
+type MessageSummaries struct {
+	Messages []MessageSummary `json:"messages"`
+}
+
+type messageSummariesInput struct {
+	IDs []string `query:"ids" required:"true" minItems:"1" maxItems:"50" doc:"m_ ids, comma-separated."`
+}
+
+type messageSummariesOutput struct{ Body MessageSummaries }
+
 type threadIDInput struct {
 	ID string `path:"id"`
 }
@@ -203,6 +225,34 @@ func (d *deps) registerThreadViews(a huma.API) {
 		out.Body.Approximate = page.Approximate
 		if page.IndexingDone != nil {
 			out.Body.Indexing = &Indexing{Done: *page.IndexingDone}
+		}
+		return out, nil
+	})
+
+	huma.Register(a, d.secured(huma.Operation{
+		OperationID: "listMessageSummaries", Method: http.MethodGet, Path: "/messages", Tags: []string{"messages"},
+		Summary: "Get the sender, subject and snippet of messages",
+		Description: "What a new-mail notification shows: a native client woken by a data-only push " +
+			"(POST /devices with dataOnly) asks for the messages named in its data (messageIds) and presents them. " +
+			"Newest first; unknown ids and messages of other users are left out (no 404).",
+		Errors: []int{http.StatusBadRequest, http.StatusUnauthorized, http.StatusUnprocessableEntity},
+	}), func(ctx context.Context, in *messageSummariesInput) (*messageSummariesOutput, error) {
+		ids := make([]int64, 0, len(in.IDs))
+		for _, s := range in.IDs {
+			if id, ok := parseID("m_", s); ok {
+				ids = append(ids, id)
+			}
+		}
+		list, err := d.view.MessageSummaries(ctx, sessionFrom(ctx).UserID, ids)
+		if err != nil {
+			return nil, viewError(err)
+		}
+		out := &messageSummariesOutput{Body: MessageSummaries{Messages: make([]MessageSummary, 0, len(list))}}
+		for _, m := range list {
+			out.Body.Messages = append(out.Body.Messages, MessageSummary{
+				ID: formatID("m_", m.ID), ThreadID: formatID("t_", m.ThreadID), AccountID: formatID("acc_", m.AccountID),
+				From: Address(m.From), Date: m.Date, Subject: m.Subject, Snippet: m.Snippet,
+			})
 		}
 		return out, nil
 	})
