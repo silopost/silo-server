@@ -313,13 +313,17 @@ func (e *env) lastError(id int64) string {
 
 func TestNotifyNewInboxMessage(t *testing.T) {
 	e := newEnv(t)
+	before := time.Now()
 	msg := e.deliver(e.account, e.inbox, "alice@example.org", true)
+	after := time.Now()
 	jobs := e.notifyJobs()
 	if len(jobs) != 1 {
 		t.Fatalf("push.notify jobs = %d, want 1", len(jobs))
 	}
-	if d := time.Until(jobs[0].RunAt.Time); d < time.Second || d > 3*time.Second {
-		t.Errorf("job runs in %v, want ~%v", d, mail.PushDelay)
+	// run_at is PushDelay after the delivery, whenever this check runs (a slow
+	// runner must not fail it); one second of slack for the database clock.
+	if at := jobs[0].RunAt.Time; at.Before(before.Add(mail.PushDelay-time.Second)) || at.After(after.Add(mail.PushDelay+time.Second)) {
+		t.Errorf("job runs %v after the delivery started, want ~%v", at.Sub(before), mail.PushDelay)
 	}
 	must(t, e.runNotify())
 	sends := e.expo.sent()
