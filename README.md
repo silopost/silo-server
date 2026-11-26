@@ -26,6 +26,7 @@ by [silo-web](https://github.com/silopost/silo-web) and [silo-mobile](https://gi
 - [Cache rebuild](#cache-rebuild)
 - [Account autoconfiguration](#account-autoconfiguration)
 - [OAuth2 (Gmail, Microsoft 365)](#oauth2-gmail-microsoft-365)
+- [Push notifications](#push-notifications)
 - [Users, mode `local` and the admin panel](#users-mode-local-and-the-admin-panel)
 - [Backup and restore](#backup-and-restore)
 - [S3Store](#s3store)
@@ -247,6 +248,15 @@ Details: [Hardening](#hardening).
 
 Details: [OAuth2](#oauth2-gmail-microsoft-365).
 
+### Push notifications
+
+| Variable | Default | Description |
+|---|---|---|
+| `SILO_PUSH_ENABLED` | `true` | Push of new mail to silo-mobile through the Expo Push Service. No keys needed; the server only connects to Expo once a device has registered. `false`: `GET /meta` reports no push providers, `POST /devices` answers `403 push_disabled`, nothing is sent. |
+| `SILO_PUSH_EXPO_SEND_URL`, `SILO_PUSH_EXPO_RECEIPTS_URL` | official endpoints | **Tests only** (a fake Expo service); leave unset in production. |
+
+Details: [Push notifications](#push-notifications).
+
 ### Test-only variables
 
 These are read by `go test`, never by `serve`; see [Testing](#testing).
@@ -266,7 +276,8 @@ The REST API lives under `/api/v1` and is described by the OpenAPI 3 document
 [`api/openapi.yaml`](api/openapi.yaml), generated from the huma operations in
 `internal/http/api` (`make openapi`). Errors are `application/problem+json` (RFC 9457) with a
 stable `code`. `GET /healthz` is the health check; `GET /api/v1/meta` reports the server version,
-`minWebVersion`, `authMode`, `allowCustomServers`, `oauthProviders` and `maxAttachmentBytes`.
+`minWebVersion`, `authMode`, `allowCustomServers`, `oauthProviders`, `maxAttachmentBytes` and
+`push.providers` (`["expo"]`, empty when push is off).
 
 | Area | Endpoints |
 |---|---|
@@ -277,6 +288,7 @@ stable `code`. `GET /healthz` is the health check; `GET /api/v1/meta` reports th
 | Compose | `POST /uploads`, `POST /drafts`, `GET/PUT/DELETE /drafts/{id}`, `POST /drafts/{id}/send`, `POST /outbound/{id}/cancel`, `GET /contacts/autocomplete` |
 | Search, snooze, filters, settings | `GET /search/suggest`, `DELETE /search/history`, `POST/DELETE /threads/{id}/snooze`, `GET /snooze/presets`, `/filters` CRUD, `POST /filters/{id}/apply`, `GET/PATCH /settings` |
 | Events | `GET /events` (SSE), `GET /events/poll` |
+| Push devices | `POST /devices`, `GET /devices/current`, `DELETE /devices/{id}` |
 
 Compatibility rules for API changes and `minWebVersion` are in [CONTRIBUTING.md](CONTRIBUTING.md);
 version pairs are listed in the
@@ -864,6 +876,61 @@ accounts, with OAuth or an app password, use the generic mode:
   be grouped differently than in the Gmail web client. Silo's own labels are
   IMAP keywords, which Gmail does not show as labels.
 
+## Push notifications
+
+silo-mobile gets a notification when new mail arrives in an INBOX while the
+app is in the background. The server sends it through the
+[Expo Push Service](https://docs.expo.dev/push-notifications/sending-notifications/)
+(`https://exp.host/--/api/v2/push/send`), which forwards it to FCM or APNs
+with the app publisher's credentials, so the instance needs no Firebase or
+Apple keys. Push is on by default (`SILO_PUSH_ENABLED`); an instance where no
+device registered never contacts Expo.
+
+**Devices.** A device belongs to one bearer session (`client.kind=bearer` of
+`POST /session`); the web client's cookie session cannot register one
+(`403 bearer_session_required`).
+
+| Endpoint | Does |
+|---|---|
+| `POST /devices` `{provider: "expo", pushToken, accountIds?}` | registers the device of the current session (`200` with the device). `pushToken` is an `ExponentPushToken[...]`/`ExpoPushToken[...]` (at most 255 characters, else `400 validation_failed`); `accountIds` limits push to these accounts of the user (`acc_` ids; omitted or `null`: all, also accounts added later; another user's account: `422 invalid_account`). A session has one device: registering again updates it. The same token registered by another session moves to this one (signing in again on the same phone leaves no duplicate). |
+| `GET /devices/current` | the device of the current session with `lastError` (`404` when none) |
+| `DELETE /devices/{id}` | removes a device of the user (`204`, `404` for other users' devices) |
+
+Signing out (`DELETE /session`, `DELETE /sessions/{id}`) or the expiry of the
+session deletes the device (`ON DELETE CASCADE`); a disabled user gets no
+push. The server does not skip sessions with an open SSE stream: the app
+silences notifications while it is in the foreground.
+
+**When.** Only mail that just arrived: new messages of the INBOX found by the
+incremental sync (UID >= the stored `uidnext`), not the initial sync, not a
+refill of gaps, not mail moved into INBOX by another client. When the
+account has filters, the push waits for `filter_eval` and covers only the
+messages the filters leave in INBOX. The job `push.notify` (a general job,
+never behind the IMAP operations of an account) runs 2 s later, so a burst
+becomes one notification per device and account, and checks again that each
+message is still unread in INBOX and not from one of the user's own
+addresses, and that the device still wants the account.
+
+**What leaves the server.** Per device one message to Expo:
+
+```json
+{"to": "ExponentPushToken[...]", "title": "2 new messages", "channelId": "mail", "priority": "high",
+ "sound": "default", "tag": "mail-acc_1", "collapseId": "mail-acc_1",
+ "data": {"v": 1, "type": "mail", "accountId": "acc_1", "threadId": "t_2s", "count": 2}}
+```
+
+The title is generic and follows the user's `language` setting (`New message`
+/ `Nowa wiadomość`); no sender, subject, snippet or address is sent.
+`threadId` is the thread of the newest message; `tag` (Android) and
+`collapseId` (iOS) replace the previous notification of the same account.
+Expo and the push provider see the device token, these ids and the time.
+
+**Errors.** A ticket or receipt `DeviceNotRegistered` deletes the device;
+other per-message errors are stored in `lastError` without a retry; HTTP 429,
+5xx and network errors retry the job with the queue's backoff. The job
+`push.receipts` reads the receipts 15 minutes after a send. Push tokens are
+never written to the log in full.
+
 ## Users, mode `local` and the admin panel
 
 ### Mode `local`
@@ -1100,6 +1167,12 @@ Migrations of phase 5 (numbered from `000050`, after the phase 4 range; additive
 | `000051_metadata_restores` | `metadata_restores` (label assignments and snoozes of an `import-metadata` waiting for their messages) |
 | `000052_oauth` | `oauth_states` (OAuth2 sign-in in progress, 10 min) |
 
+Migrations of phase 6:
+
+| Migration | Adds |
+|---|---|
+| `000053_push_devices` | `push_devices` (push device of a bearer session, see [Push notifications](#push-notifications)) |
+
 General jobs (table `jobs`, run by the worker of `serve`; per-account sync work and the
 cache rebuild run in the sync engine):
 
@@ -1111,6 +1184,8 @@ cache rebuild run in the sync engine):
 | `snooze_wake` | every 30 s and ingest | wakes due snoozes, drops snoozes taken out of Snoozed elsewhere |
 | `filter_eval` | ingest (new INBOX mail of accounts with filters) | runs the enabled filters on new messages |
 | `filter_apply` | `POST /filters/{id}/apply` | applies a filter to existing mail, then `filter.applied` |
+| `push.notify` | incremental sync (new INBOX mail), `filter_eval` (new mail left in INBOX) | push notification to the user's devices, 2 s later |
+| `push.receipts` | `push.notify` | reads the Expo delivery receipts 15 min after a send |
 | `metadata_restore` | `import-metadata` | applies staged label assignments and snoozes as the sync ingests their messages (every minute, gives up after 24 h) |
 
 The search re-index (`search_ver`) is not a job: `serve` runs it once in the
@@ -1202,6 +1277,7 @@ silo-server/
 │   ├── mail/, mailview/, search/      # ingest, threading, read model, search parser and matcher
 │   ├── ops/, drafts/, filters/        # write-back and undo, compose and sending, filters
 │   ├── events/, worker/    # SSE events, Postgres job queue
+│   ├── push/               # push devices and notifications through the Expo Push Service
 │   ├── backup/, blob/, secrets/       # metadata backup, fs/S3 blob stores, encryption
 │   ├── admin/, ratelimit/, seclog/, netx/   # admin API, rate limits, security log, anti-SSRF dialer
 │   ├── store/              # Postgres access, sqlc queries (store/queries) and generated code (store/sqlcgen)
