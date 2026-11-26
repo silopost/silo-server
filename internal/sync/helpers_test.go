@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net"
 	"os"
+	"runtime"
 	"strconv"
 	"strings"
 	stdsync "sync"
@@ -329,18 +330,26 @@ func (a *account) folderID(name string) int64 {
 	return id
 }
 
-// waitFor polls cond until it holds or the timeout expires.
-func waitFor(t testing.TB, timeout time.Duration, what string, cond func() bool) time.Duration {
-	t.Helper()
+// poll polls cond until it holds (ok) or the timeout expires.
+func poll(timeout time.Duration, cond func() bool) (elapsed time.Duration, ok bool) {
 	start := time.Now()
 	for time.Since(start) < timeout {
 		if cond() {
-			return time.Since(start)
+			return time.Since(start), true
 		}
 		time.Sleep(25 * time.Millisecond)
 	}
-	t.Fatalf("timeout after %s waiting for %s", timeout, what)
-	return 0
+	return time.Since(start), false
+}
+
+// waitFor polls cond until it holds or the timeout expires.
+func waitFor(t testing.TB, timeout time.Duration, what string, cond func() bool) time.Duration {
+	t.Helper()
+	elapsed, ok := poll(timeout, cond)
+	if !ok {
+		t.Fatalf("timeout after %s waiting for %s", timeout, what)
+	}
+	return elapsed
 }
 
 func (a *account) waitState(state string, timeout time.Duration) {
@@ -348,11 +357,54 @@ func (a *account) waitState(state string, timeout time.Duration) {
 	waitFor(a.t, timeout, "state "+state, func() bool { return a.state() == state })
 }
 
+// waitInitialDone waits for the initial sync; on a timeout it fails with the
+// account state, the pool statistics and a dump of all goroutines, so a hang
+// shows where the sync stands.
 func (a *account) waitInitialDone(timeout time.Duration) time.Duration {
 	a.t.Helper()
-	return waitFor(a.t, timeout, "initial sync done", func() bool {
+	elapsed, ok := poll(timeout, func() bool {
 		return a.int(`SELECT count(*) FROM accounts WHERE id = $1 AND initial_sync_done_at IS NOT NULL`, a.id) == 1
 	})
+	if !ok {
+		a.t.Fatalf("timeout after %s waiting for initial sync done\n%s", timeout, a.syncDiagnostics())
+	}
+	return elapsed
+}
+
+// syncDiagnostics describes where an account stands: its row, the pgx pool and
+// every goroutine.
+func (a *account) syncDiagnostics() string {
+	var sb strings.Builder
+	var state string
+	var syncErr *string
+	var lastSync *time.Time
+	if err := testPool.QueryRow(context.Background(),
+		`SELECT sync_state, sync_error, last_sync_at FROM accounts WHERE id = $1`, a.id).
+		Scan(&state, &syncErr, &lastSync); err != nil {
+		fmt.Fprintf(&sb, "account %d: cannot read the row: %v\n", a.id, err)
+	} else {
+		fmt.Fprintf(&sb, "account %d: sync_state=%s sync_error=%s last_sync_at=%s\n",
+			a.id, state, ptrOr(syncErr, "<null>"), timeOr(lastSync, "<null>"))
+	}
+	st := testPool.Stat()
+	fmt.Fprintf(&sb, "pgx pool: acquired=%d idle=%d max=%d\n", st.AcquiredConns(), st.IdleConns(), st.MaxConns())
+	buf := make([]byte, 1<<20)
+	fmt.Fprintf(&sb, "goroutines:\n%s", buf[:runtime.Stack(buf, true)])
+	return sb.String()
+}
+
+func ptrOr(s *string, def string) string {
+	if s == nil {
+		return def
+	}
+	return *s
+}
+
+func timeOr(t *time.Time, def string) string {
+	if t == nil {
+		return def
+	}
+	return t.Format(time.RFC3339Nano)
 }
 
 // counts summarises the mirror of an account for comparisons.
@@ -432,6 +484,12 @@ func newProxy(t *testing.T, target string) *proxy {
 	must(t, err)
 	p := &proxy{t: t, target: target, ln: ln, addr: ln.Addr().String(), up: true}
 	t.Cleanup(func() { ln.Close(); p.setUp(false) })
+	// Runs before the cleanup above (LIFO).
+	t.Cleanup(func() {
+		if t.Failed() {
+			t.Logf("last IMAP commands through the proxy (credentials masked):\n%s", p.lastCommands(20))
+		}
+	})
 	go p.serve()
 	return p
 }
@@ -489,4 +547,45 @@ func testLogLevel() slog.Level {
 		return slog.LevelDebug
 	}
 	return slog.LevelInfo
+}
+
+// lastCommands returns the last n recorded commands, one per line, with the
+// credentials of LOGIN and AUTHENTICATE (and the SASL / literal data lines that
+// follow them) masked and long lines cut.
+func (p *proxy) lastCommands(n int) string {
+	p.mu.Lock()
+	lines := append([]string(nil), p.lines...)
+	p.mu.Unlock()
+	masked := make([]string, len(lines))
+	maskNext := false
+	for i, l := range lines {
+		if maskNext {
+			masked[i] = "***"
+			// A LOGIN literal continues on the next line.
+			maskNext = strings.HasSuffix(strings.TrimSpace(l), "}")
+			continue
+		}
+		f := strings.Fields(l)
+		switch {
+		case len(f) >= 2 && strings.EqualFold(f[1], "LOGIN"):
+			masked[i] = f[0] + " LOGIN ***"
+			maskNext = strings.HasSuffix(l, "}")
+		case len(f) >= 2 && strings.EqualFold(f[1], "AUTHENTICATE"):
+			mech := ""
+			if len(f) >= 3 {
+				mech = " " + f[2]
+			}
+			masked[i] = f[0] + " AUTHENTICATE" + mech + " ***"
+			maskNext = true
+		default:
+			masked[i] = l
+			if len(l) > 200 {
+				masked[i] = l[:200] + "..."
+			}
+		}
+	}
+	if len(masked) > n {
+		masked = masked[len(masked)-n:]
+	}
+	return strings.Join(masked, "\n")
 }
